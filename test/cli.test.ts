@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { readFile, stat, symlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
 import { CLI, item, runCli, sandbox, writeAuth } from "./helpers.ts";
@@ -96,6 +96,29 @@ test("values from env files used by run stay covered by the hook index", async (
   await runCli(box, ["hook", "claude", "session-start"], "{}");
   const post = await runCli(box, ["hook", "claude", "post-tool-use"], JSON.stringify({ tool_response: { stdout: "org=acme-org" } }));
   assert.equal(JSON.parse(post.stdout).hookSpecificOutput.updatedToolOutput.stdout, "org=<redacted:ORG>");
+});
+
+test("children never receive the vault session or unlock credentials", async () => {
+  const box = await wired();
+  const result = await runCli(box, ["run", "--no-mask", "--", "/bin/sh", "-c", "echo s=${BW_SESSION:-none} p=${BW_PASSWORD:-none}"], "", { BW_SESSION: "fake-session", BW_PASSWORD: "master" });
+  assert.equal(result.stdout, "s=none p=none\n");
+});
+
+test("auth.json writes respect pi's directory lock and symlinks", async () => {
+  const box = await wired();
+  const dir = join(box.env.HOME, ".pi", "agent");
+  const real = join(box.dir, "real-auth.json");
+  await writeFile(real, JSON.stringify({ anthropic: { type: "oauth" } }));
+  const { unlink } = await import("node:fs/promises");
+  await unlink(join(dir, "auth.json"));
+  await symlink(real, join(dir, "auth.json"));
+  await mkdir(join(dir, "auth.json.lock"));
+  const old = new Date(Date.now() - 60_000);
+  await utimes(join(dir, "auth.json.lock"), old, old);
+  const result = await runCli(box, ["wire", "--env", "NEW", "--item", "npm publish", "--target", "pi"]);
+  assert.equal(result.code, 0, result.stderr);
+  assert.ok((await import("node:fs")).lstatSync(join(dir, "auth.json")).isSymbolicLink());
+  assert.deepEqual(Object.keys(JSON.parse(await readFile(real, "utf8"))), ["anthropic", "NEW"]);
 });
 
 test("run --no-mask passes values through and --only limits injection", async () => {
@@ -199,6 +222,7 @@ test("MCP server lists tools and runs commands with masked output", async () => 
   send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "secrets_list", arguments: {} } });
   send({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "secrets_request", arguments: { env_name: "STRIPE_KEY", item_name: "Stripe" } } });
   send({ jsonrpc: "2.0", id: 6, method: "nope" });
+  send({ jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "secrets_run", arguments: { command: "echo s=${BW_SESSION:-none}" } } });
   child.stdin.end();
   await new Promise((resolve) => child.on("close", resolve));
   const byId = new Map(responses.map((response) => [response.id, response]));
@@ -211,5 +235,6 @@ test("MCP server lists tools and runs commands with masked output", async () => 
   assert.match(byId.get(4)!.result.content[0].text, /GH_TOKEN/);
   assert.match(byId.get(5)!.result.content[0].text, /add --env STRIPE_KEY --item 'Stripe'/);
   assert.equal(byId.get(6)!.error.code, -32601);
-  assert.equal(responses.length, 6);
+  assert.match(byId.get(7)!.result.content[0].text, /s=none/);
+  assert.equal(responses.length, 7);
 });

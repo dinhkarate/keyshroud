@@ -233,7 +233,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     const secret = await inputInBorderedPopup(ctx, { title: `Paste secret for ${envName}`, prompt: "Value is not shown", mask: true }); if (!secret) return;
     if (!ENV_NAME_RE.test(envName)) { ctx.ui.notify("Invalid env var name; use UPPER_SNAKE_CASE.", "error"); return; }
     if (!await confirmInBorderedPopup(ctx, { title: "Create and wire secret?", message: `"${envName}": "${core.referenceFor(itemName)}"` })) return;
-    try { await core.ensureSession(); await core.createSecretItem({ itemName, secret, envName, notes: purpose }); await writeBoth(envName, itemName); await refreshEnv(); ctx.ui.notify(`Created item=${itemName} env=${envName} verified=yes`, "info"); } catch (error) { ctx.ui.notify(mappedError(error), "error"); }
+    try { await core.ensureSession(); await core.createSecretItem({ itemName, secret, envName, notes: purpose }); await writeBoth(envName, itemName); await refreshEnv(); const verified = (await core.resolveShellValue(core.referenceFor(itemName))) !== null; ctx.ui.notify(`Created item=${itemName} env=${envName} verified=${verified ? "yes" : "no"}`, verified ? "info" : "warning"); } catch (error) { ctx.ui.notify(mappedError(error), "error"); }
   } });
   pi.registerCommand("vault_wire", { description: "Wire an existing vault item to both agent auth stores.", handler: async (_args, ctx) => {
     try {

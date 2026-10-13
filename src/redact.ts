@@ -16,6 +16,25 @@ export interface Redactor {
 
 export function placeholder(name: string): string { return `<redacted:${name}>`; }
 
+interface Hit { start: number; end: number; name: string }
+
+// Overlapping matches merge into one placeholder, so no fragment of any secret
+// survives between two replacements.
+function applyHits(text: string, hits: Hit[]): string {
+  if (!hits.length) return text;
+  hits.sort((a, b) => a.start - b.start || b.end - a.end);
+  let out = "";
+  let cursor = 0;
+  let current: Hit | null = null;
+  for (const hit of hits) {
+    if (current && hit.start < current.end) { current.end = Math.max(current.end, hit.end); continue; }
+    if (current) { out += text.slice(cursor, current.start) + placeholder(current.name); cursor = current.end; }
+    current = { ...hit };
+  }
+  if (current) { out += text.slice(cursor, current.start) + placeholder(current.name); cursor = current.end; }
+  return out + text.slice(cursor);
+}
+
 export function createRedactor(values: Record<string, string>): Redactor {
   const byValue = new Map<string, string>();
   for (const [name, value] of Object.entries(values)) {
@@ -27,9 +46,11 @@ export function createRedactor(values: Record<string, string>): Redactor {
   return {
     size: secrets.length,
     redact(text) {
-      let out = text;
-      for (const [value, name] of secrets) if (out.includes(value)) out = out.split(value).join(placeholder(name));
-      return out;
+      const hits: Hit[] = [];
+      for (const [value, name] of secrets) {
+        for (let at = text.indexOf(value); at !== -1; at = text.indexOf(value, at + 1)) hits.push({ start: at, end: at + value.length, name });
+      }
+      return applyHits(text, hits);
     },
     safeCut(text) {
       let cut = text.length;
@@ -37,11 +58,13 @@ export function createRedactor(values: Record<string, string>): Redactor {
         const tail = text.slice(i);
         if (secrets.some(([value]) => value.length > tail.length && value.startsWith(tail))) { cut = i; break; }
       }
+      // Hold back any complete secret that straddles the cut too: it may merge
+      // with the unfinished one once the next chunk arrives.
       for (let moved = true; moved;) {
         moved = false;
         for (const [value] of secrets) {
           for (let at = text.indexOf(value, Math.max(0, cut - value.length + 1)); at !== -1 && at < cut; at = text.indexOf(value, at + 1)) {
-            if (at + value.length > cut) { cut = at + value.length; moved = true; }
+            if (at + value.length > cut) { cut = at; moved = true; break; }
           }
         }
       }
@@ -111,6 +134,10 @@ export function buildRedactIndex(values: Record<string, string>, previous?: Reda
 }
 
 export function redactWithIndex(text: string, index: RedactIndex): string {
+  return compileRedactIndex(index)(text);
+}
+
+export function compileRedactIndex(index: RedactIndex): (text: string) => string {
   const key = Buffer.from(index.key, "base64");
   const byLength = new Map<number, Map<number, RedactIndex["entries"]>>();
   for (const entry of index.entries) {
@@ -118,32 +145,24 @@ export function redactWithIndex(text: string, index: RedactIndex): string {
     rolls.set(entry.roll, [...(rolls.get(entry.roll) ?? []), entry]);
     byLength.set(entry.length, rolls);
   }
-  const hits: Array<{ start: number; end: number; name: string }> = [];
-  for (const [length, rolls] of byLength) {
-    if (text.length < length) continue;
-    const power = rollPower(length);
-    let hash = rollHash(text, 0, length);
-    for (let start = 0; ; start++) {
-      const candidates = rolls.get(hash);
-      if (candidates) {
-        const digest = mac(key, text.slice(start, start + length));
-        const match = candidates.find((entry) => entry.mac === digest);
-        if (match) hits.push({ start, end: start + length, name: match.name });
+  return (text) => {
+    const hits: Hit[] = [];
+    for (const [length, rolls] of byLength) {
+      if (text.length < length) continue;
+      const power = rollPower(length);
+      let hash = rollHash(text, 0, length);
+      for (let start = 0; ; start++) {
+        const candidates = rolls.get(hash);
+        if (candidates) {
+          const digest = mac(key, text.slice(start, start + length));
+          const match = candidates.find((entry) => entry.mac === digest);
+          if (match) hits.push({ start, end: start + length, name: match.name });
+        }
+        if (start + length >= text.length) break;
+        const outgoing = Math.imul(text.charCodeAt(start), power) >>> 0;
+        hash = (Math.imul((hash - outgoing) >>> 0, ROLL_BASE) + text.charCodeAt(start + length)) >>> 0;
       }
-      if (start + length >= text.length) break;
-      const outgoing = Math.imul(text.charCodeAt(start), power) >>> 0;
-      hash = (Math.imul((hash - outgoing) >>> 0, ROLL_BASE) + text.charCodeAt(start + length)) >>> 0;
     }
-  }
-  if (!hits.length) return text;
-  // Prefer the longest match at each position, then drop overlaps.
-  hits.sort((a, b) => a.start - b.start || b.end - a.end);
-  let out = "";
-  let cursor = 0;
-  for (const hit of hits) {
-    if (hit.start < cursor) continue;
-    out += text.slice(cursor, hit.start) + placeholder(hit.name);
-    cursor = hit.end;
-  }
-  return out + text.slice(cursor);
+    return applyHits(text, hits);
+  };
 }

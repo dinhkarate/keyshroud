@@ -3,25 +3,30 @@
 // index that SessionStart (or any other unlocked command) last wrote.
 import { BRAND } from "./brand.ts";
 import * as core from "./core.ts";
-import { redactWithIndex, type RedactIndex } from "./redact.ts";
+import { compileRedactIndex } from "./redact.ts";
 
-function redactDeep(value: unknown, index: RedactIndex): unknown {
-  if (typeof value === "string") return redactWithIndex(value, index);
-  if (Array.isArray(value)) return value.map((entry) => redactDeep(entry, index));
+function redactDeep(value: unknown, redact: (text: string) => string): unknown {
+  if (typeof value === "string") return redact(value);
+  if (Array.isArray(value)) return value.map((entry) => redactDeep(entry, redact));
   if (value && typeof value === "object") {
-    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, redactDeep(entry, index)]));
+    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, redactDeep(entry, redact)]));
   }
   return value;
 }
 
 async function sessionStart(): Promise<string> {
-  await core.ensureSession();
-  const env = await core.resolveEntries(await core.authEnvEntries());
-  await core.writeRedactIndex(await core.redactionValues(env.secrets));
-  const names = Object.keys(env.values);
-  const context = names.length
-    ? `${BRAND.name}: vault secrets are available by name only: ${names.join(", ")}. Run commands that need them with \`${BRAND.bin} run -- <command>\`; secret values in tool output are replaced with <redacted:NAME>. Never ask the user to paste a secret into chat; use \`${BRAND.bin} add\` in their terminal instead.`
-    : `${BRAND.name}: no secrets are wired yet. Ask the user to run \`${BRAND.bin} add --env NAME --item "Item"\` in their own terminal.`;
+  let context: string;
+  try {
+    await core.ensureSession();
+    const env = await core.resolveEntries(await core.authEnvEntries());
+    await core.writeRedactIndex(core.indexValues(env.secrets));
+    const names = Object.keys(env.values);
+    context = names.length
+      ? `${BRAND.name}: vault secrets are available by name only: ${names.join(", ")}. Run every command that uses one through \`${BRAND.bin} run -- <command>\` (or the secrets_run MCP tool): its output is masked as <redacted:NAME> even when the command fails. Never print a secret. Never ask the user to paste a secret into chat; use \`${BRAND.bin} add\` in their terminal instead.`
+      : `${BRAND.name}: no secrets are wired yet. Ask the user to run \`${BRAND.bin} add --env NAME --item "Item"\` in their own terminal.`;
+  } catch (error) {
+    context = `${BRAND.name}: the vault could not be unlocked (${error instanceof Error ? error.message : String(error)}), so tool-output redaction may be incomplete this session. Do not print or inspect secrets; ask the user to run \`${BRAND.bin} unlock\`.`;
+  }
   return JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: context } });
 }
 
@@ -29,7 +34,7 @@ async function postToolUse(input: { tool_response?: unknown }): Promise<string> 
   const index = await core.readRedactIndex();
   if (!index || index.entries.length === 0 || input.tool_response === undefined) return "";
   const before = JSON.stringify(input.tool_response);
-  const redacted = redactDeep(input.tool_response, index);
+  const redacted = redactDeep(input.tool_response, compileRedactIndex(index));
   if (JSON.stringify(redacted) === before) return "";
   return JSON.stringify({ hookSpecificOutput: { hookEventName: "PostToolUse", updatedToolOutput: redacted } });
 }

@@ -77,33 +77,44 @@ async function runTool(args: Json): Promise<Json> {
   await core.audit("run", Object.keys(env.secrets), "mcp");
   const redactor = createRedactor(await core.redactionValues(env.secrets));
   const timeout = typeof args.timeout_ms === "number" && args.timeout_ms > 0 ? args.timeout_ms : 120000;
+  // Own process group so a timeout kills everything the command started.
   const child = spawn("/bin/sh", ["-c", args.command], {
     cwd: typeof args.cwd === "string" && args.cwd ? args.cwd : process.cwd(),
-    env: { ...process.env, ...env.values },
+    env: core.childEnv(env.values),
     stdio: ["ignore", "pipe", "pipe"],
+    detached: true,
   });
   const chunks = { stdout: [] as Buffer[], stderr: [] as Buffer[] };
+  // Collect generously, mask, then truncate, so a cut never splits a secret
+  // before redaction.
   let size = 0;
-  let truncated = false;
   for (const stream of ["stdout", "stderr"] as const) {
     child[stream].on("data", (chunk: Buffer) => {
-      if (size >= OUTPUT_LIMIT) { truncated = true; return; }
+      if (size >= OUTPUT_LIMIT * 4) return;
       size += chunk.length;
       chunks[stream].push(chunk);
     });
   }
-  const timer = setTimeout(() => child.kill("SIGTERM"), timeout);
+  const timer = setTimeout(() => { try { process.kill(-child.pid!, "SIGTERM"); } catch {} }, timeout);
   const code = await new Promise<string>((done) => {
     child.on("close", (exit, signal) => done(signal ? `signal ${signal}` : String(exit)));
     child.on("error", (error) => done(`spawn error: ${error.message}`));
   });
   clearTimeout(timer);
-  const out = (stream: "stdout" | "stderr") => redactor.redact(Buffer.concat(chunks[stream]).toString("utf8"));
+  let truncated = size >= OUTPUT_LIMIT * 4;
+  const out = (stream: "stdout" | "stderr") => {
+    const masked = redactor.redact(Buffer.concat(chunks[stream]).toString("utf8"));
+    if (masked.length <= OUTPUT_LIMIT / 2) return masked;
+    truncated = true;
+    return masked.slice(0, OUTPUT_LIMIT / 2);
+  };
+  const stdout = out("stdout");
+  const stderr = out("stderr");
   const lines = [
     `exit: ${code}`,
     env.missing.length ? `unresolved: ${env.missing.join(", ")}` : null,
-    `--- stdout ---\n${out("stdout")}`,
-    `--- stderr ---\n${out("stderr")}`,
+    `--- stdout ---\n${stdout}`,
+    `--- stderr ---\n${stderr}`,
     truncated ? `[output truncated at ${OUTPUT_LIMIT} bytes]` : null,
   ].filter((line): line is string => line !== null);
   return text(lines.join("\n"), code !== "0");
