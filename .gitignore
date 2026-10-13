@@ -9,3 +9,6 @@ dist/
 *.tgz
 .DS_Store
 !.env.*.example
+
+# Internal notes (competitor research, launch strategy) stay local
+docs/
