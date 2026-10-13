@@ -32,6 +32,14 @@ First public release, renamed from `pi-vaultwarden` to **keyshroud**.
   (`KEYSHROUD_PLANNER_URL`).
 - Duplicate vault item names fail closed instead of picking one.
 
+- `run` and MCP `secrets_run` strip `BW_SESSION`, `BW_PASSWORD`,
+  `BW_CLIENTID` and `BW_CLIENTSECRET` from the child environment.
+- Env files (`--env-file`, MCP `env_file`) reject `!command` values, including
+  legacy `!bw get …` lines; auth.json still accepts them.
+- `run` exits with 128+N when the child dies from signal N.
+- auth.json writes refuse to replace an unparseable file, use pi's directory
+  lock (`auth.json.lock/`), and write through symlinks.
+
 ### Removed
 - Hard-coded server URL and personal infrastructure defaults.
 

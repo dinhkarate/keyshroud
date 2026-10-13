@@ -111,9 +111,12 @@ also re-login automatically when the `bw` session expires.
    memory for `KEYSHROUD_CACHE_TTL_MS` (default 1 h).
 4. **Inject.** Values go into the child process environment — never into argv
    or tool results (`inject` writes `0600` files only when you ask it to).
-5. **Redact.** Output passes through a redactor that knows every wired value and
-   every login password in the vault. Out-of-process hooks use a keyed-HMAC
-   fingerprint index (`redact-index.json`, `0600`) so they never hold plaintext.
+5. **Redact.** In-process (`run`, MCP, pi/omp) output passes through a redactor
+   that knows every wired value, the vault session token, and every login
+   password in the vault. Out-of-process Claude Code hooks use a keyed-HMAC
+   fingerprint index (`redact-index.json`, `0600`) of wired values and the
+   session token only, so they never hold plaintext or fingerprint your
+   personal passwords.
 
 ## Claude Code
 
