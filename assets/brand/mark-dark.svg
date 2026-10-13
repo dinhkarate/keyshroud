@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="keyshroud">
+  <title>keyshroud: a key whose blade is covered by a shroud</title>
+  <g transform="translate(0 0)">
+    <circle cx="32" cy="58" r="17" fill="none" stroke="#F5F3FF" stroke-width="10"/>
+    <rect x="47" y="53" width="64" height="10" rx="2" fill="#F5F3FF"/>
+    <path d="M58 52 Q84 42 112 52 L116 92 Q109 86 101 92 Q93 98 86 92 Q78 86 70 92 Q62 98 54 92 Z" fill="#8B7FFA"/>
+    <path d="M84 48 Q80 70 85 93" fill="none" stroke="#C4BDFD" stroke-width="3" stroke-linecap="round"/>
+  </g>
+</svg>

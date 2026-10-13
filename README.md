@@ -1,6 +1,11 @@
 <div align="center">
 
-# keyshroud
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/dinhkarate/keyshroud/main/assets/brand/lockup-dark.svg">
+    <img alt="keyshroud" src="https://raw.githubusercontent.com/dinhkarate/keyshroud/main/assets/brand/lockup.svg" height="88">
+  </picture>
+</h1>
 
 **Your agents use the keys. They never see them.**
 
