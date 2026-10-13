@@ -25,6 +25,11 @@ MCP results, hook output, the audit log, files with permissions wider than
 `0600`, or the model's context despite redaction being enabled; auth.json
 corruption; session token exposure.
 
+Note on `redact-index.json`: it holds a keyed HMAC and a 32-bit rolling hash of
+each value so hooks can redact without plaintext. Anyone who can read this
+`0600` file can brute-force weak values offline — the same trust boundary as the
+`bw` session file next to it, which unlocks the whole vault.
+
 Out of scope (documented limitations, see the README's *Security model*): an
 agent deliberately exfiltrating a value it was given (for example over the
 network, or after encoding it); secrets shorter than 6 characters; values the

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { readFile, stat, writeFile } from "node:fs/promises";
+import { readFile, stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
 import { CLI, item, runCli, sandbox, writeAuth } from "./helpers.ts";
@@ -69,6 +69,35 @@ test("run injects secrets and masks them in piped output", async () => {
   assert.ok(!audit.includes(GH));
 });
 
+test("env files cannot run shell commands", async () => {
+  const box = await wired();
+  const marker = join(box.dir, "pwned");
+  await writeFile(join(box.dir, ".env.refs"), `X=!touch ${marker}\n`);
+  const result = await runCli(box, ["run", "--no-auth", "--env-file", ".env.refs", "--", "true"]);
+  assert.notEqual(result.code, 0);
+  assert.match(result.stderr, /accept only bw:\/\/ references/);
+  await assert.rejects(stat(marker));
+});
+
+test("an unreadable auth.json is never overwritten", async () => {
+  const box = await wired();
+  const path = join(box.env.PI_CODING_AGENT_DIR, "auth.json");
+  await writeFile(path, "{ not json");
+  const result = await runCli(box, ["wire", "--env", "NEW", "--item", "npm publish", "--target", "omp"]);
+  assert.notEqual(result.code, 0);
+  assert.equal(await readFile(path, "utf8"), "{ not json");
+});
+
+test("values from env files used by run stay covered by the hook index", async () => {
+  const box = await wired();
+  await writeFile(join(box.dir, ".env.refs"), "ORG=bw://GitHub CLI token/fields/org\n");
+  await runCli(box, ["hook", "claude", "session-start"], "{}");
+  assert.equal((await runCli(box, ["run", "--env-file", ".env.refs", "--", "true"])).code, 0);
+  await runCli(box, ["hook", "claude", "session-start"], "{}");
+  const post = await runCli(box, ["hook", "claude", "post-tool-use"], JSON.stringify({ tool_response: { stdout: "org=acme-org" } }));
+  assert.equal(JSON.parse(post.stdout).hookSpecificOutput.updatedToolOutput.stdout, "org=<redacted:ORG>");
+});
+
 test("run --no-mask passes values through and --only limits injection", async () => {
   const box = await wired();
   const raw = await runCli(box, ["run", "--no-mask", "--only", "GH_TOKEN", "--", "/bin/sh", "-c", "echo $GH_TOKEN-$NPM_TOKEN"]);
@@ -92,6 +121,8 @@ test("redact and scan find vault values", async () => {
   const redacted = await runCli(box, ["redact"], `token ${GH} and ${NPM}\n`);
   assert.equal(redacted.stdout, "token <redacted:GH_TOKEN> and <redacted:NPM_TOKEN>\n");
   await writeFile(join(box.dir, "leak.ts"), `const key = "${NPM}";\n`);
+  await symlink(join(box.dir, "missing"), join(box.dir, "dangling"));
+  assert.equal((await runCli(box, ["scan", "."])).code, 1);
   const scan = await runCli(box, ["scan", "leak.ts"]);
   assert.equal(scan.code, 1);
   assert.equal(scan.stdout.trim(), "leak.ts:1 NPM_TOKEN");

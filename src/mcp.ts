@@ -7,7 +7,7 @@ import process from "node:process";
 import { BRAND } from "./brand.ts";
 import * as core from "./core.ts";
 import { createRedactor } from "./redact.ts";
-import { ENV_NAME_RE, parseEnvFile } from "./refs.ts";
+import { ENV_NAME_RE } from "./refs.ts";
 
 const SUPPORTED_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 const OUTPUT_LIMIT = 256 * 1024;
@@ -59,9 +59,7 @@ function shellQuote(value: string): string { return `'${value.replaceAll("'", "'
 
 async function collectEntries(envFile: unknown): Promise<Array<{ name: string; raw: string }>> {
   const entries = await core.authEnvEntries();
-  if (typeof envFile === "string" && envFile) {
-    for (const { name, value } of parseEnvFile(await readFile(envFile, "utf8"))) entries.push({ name, raw: value });
-  }
+  if (typeof envFile === "string" && envFile) entries.push(...await core.envFileEntries(envFile));
   return [...new Map(entries.map((entry) => [entry.name, entry])).values()];
 }
 

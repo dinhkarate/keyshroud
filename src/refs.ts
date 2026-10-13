@@ -67,8 +67,8 @@ export function parseEnvFile(text: string): Array<{ name: string; value: string 
     const match = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/.exec(trimmed);
     if (!match) throw new Error(`Invalid env file line ${index + 1}`);
     let value = match[2];
-    const quote = value[0];
-    if ((quote === "'" || quote === "\"") && value.length >= 2 && value.endsWith(quote)) value = value.slice(1, -1);
+    const quoted = /^(['"])(.*)\1(?:\s+#.*)?$/.exec(value);
+    if (quoted) value = quoted[2];
     else value = value.replace(/\s+#.*$/, "").trim();
     out.push({ name: match[1], value });
   });

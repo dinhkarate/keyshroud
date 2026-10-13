@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { chmod, copyFile, mkdir, readdir, readFile, readlink, stat, symlink, unlink, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, lstat, readdir, readFile, readlink, symlink, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { join, resolve } from "node:path";
@@ -10,7 +10,7 @@ import * as core from "./core.ts";
 import { runClaudeHook } from "./hooks.ts";
 import { serveMcp } from "./mcp.ts";
 import { createRedactor, createRedactStream, redactWithIndex, type RedactIndex } from "./redact.ts";
-import { ENV_NAME_RE, parseEnvFile, parseRef } from "./refs.ts";
+import { ENV_NAME_RE, parseRef } from "./refs.ts";
 
 const usage = `Usage: ${BRAND.bin} <command> [options]
 
@@ -82,9 +82,7 @@ async function runCommand(args: string[]): Promise<void> {
   requireKnownFlags(flags, ["--env-file", "--only"], ["--no-auth", "--mask", "--no-mask"]);
 
   const entries = flags.includes("--no-auth") ? [] : await core.authEnvEntries();
-  for (const file of valuesAfter(flags, "--env-file")) {
-    for (const { name, value } of parseEnvFile(await readFile(file, "utf8"))) entries.push({ name, raw: value });
-  }
+  for (const file of valuesAfter(flags, "--env-file")) entries.push(...await core.envFileEntries(file));
   const only = valueAfter(flags, "--only")?.split(",").map((name) => name.trim()).filter(Boolean);
   const selected = only ? entries.filter((entry) => only.includes(entry.name)) : entries;
   if (only) for (const name of only) if (!selected.some((entry) => entry.name === name)) fail(`Secret unresolved: ${name} is not wired`, 4);
@@ -98,6 +96,9 @@ async function runCommand(args: string[]): Promise<void> {
   // Mask by default whenever output is not a human terminal (agents, CI, pipes).
   const mask = flags.includes("--mask") || (!flags.includes("--no-mask") && !process.stdout.isTTY);
   const redactor = createRedactor(mask ? await core.redactionValues(env.secrets) : {});
+  // Agents started through `run` (e.g. `keyshroud run -- claude`) rely on the
+  // hook index, so it must cover env-file values too.
+  if (Object.keys(env.secrets).length) { try { await core.writeRedactIndex(await core.redactionValues(env.secrets)); } catch {} }
   const child = spawn(command, commandArgs, { stdio: mask ? ["inherit", "pipe", "pipe"] : "inherit", env: { ...process.env, ...env.values } });
   if (mask) {
     child.stdout?.pipe(createRedactStream(redactor)).pipe(process.stdout);
@@ -136,7 +137,8 @@ async function inject(args: string[]): Promise<void> {
 const SKIP_DIRS = new Set([".git", "node_modules", "dist", ".next", ".venv"]);
 
 async function* walk(path: string): AsyncGenerator<string> {
-  const info = await stat(path);
+  const info = await lstat(path).catch(() => null);
+  if (!info) return;
   if (info.isFile()) { if (info.size <= 2 * 1024 * 1024) yield path; return; }
   if (!info.isDirectory()) return;
   for (const entry of await readdir(path)) if (!SKIP_DIRS.has(entry)) yield* walk(join(path, entry));
@@ -283,6 +285,7 @@ async function main(): Promise<void> {
     }
     if (command === "doctor") {
       requireKnownFlags(args, []);
+      try { await core.ensureSession(); } catch {}
       const s = await core.getStatus(); console.log(`bw version=${s.version ?? "missing (install @bitwarden/cli)"}`); console.log(`bw server=${s.serverUrl ?? "unconfigured (run: bw config server <url>)"}`); console.log(`session=${s.status}`);
       for (const [service, present] of Object.entries(await core.keychainPresence())) console.log(`keychain ${service}=${present ? "present" : "missing"}`);
       for (const path of [targetPaths.omp, targetPaths.pi]) for (const name of Object.keys(await core.readAuthEntries(path))) console.log(`${path} ${name} resolved=${(await authValue(name)) ? "yes" : "no"}`);
