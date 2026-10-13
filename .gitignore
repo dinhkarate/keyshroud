@@ -1,7 +1,11 @@
 node_modules/
+dist/
 .npm/
 *.log
 .env
 .env.*
+!.env.example
 *.session
+*.tgz
 .DS_Store
+!.env.*.example

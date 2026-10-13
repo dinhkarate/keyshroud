@@ -1,24 +1,100 @@
 {
-  "name": "@piskill/pi-vaultwarden",
-  "version": "0.4.0",
-  "description": "Self-hosted Vaultwarden secrets for pi, omp, and Claude Code",
-  "keywords": ["pi-package", "pi-extension", "vaultwarden", "bitwarden", "secrets", "claude-code"],
+  "name": "keyshroud",
+  "version": "0.5.0",
+  "description": "Let AI coding agents use your secrets without ever seeing them. Self-hosted Vaultwarden/Bitwarden, masked output, MCP server, Claude Code + pi plugins.",
+  "keywords": [
+    "secrets",
+    "ai-agents",
+    "mcp",
+    "claude-code",
+    "vaultwarden",
+    "bitwarden",
+    "redaction",
+    "llm",
+    "security",
+    "pi-package",
+    "pi-extension",
+    "dotenv",
+    "op-run"
+  ],
   "license": "MIT",
-  "author": "Daniel / EONSR",
-  "repository": { "type": "git", "url": "https://github.com/dinhkarate/pi-vaultwarden" },
-  "bugs": { "url": "https://github.com/dinhkarate/pi-vaultwarden/issues" },
-  "homepage": "https://github.com/dinhkarate/pi-vaultwarden#readme",
+  "author": "dinhkarate (https://github.com/dinhkarate)",
+  "homepage": "https://keyshroud.dev",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dinhkarate/keyshroud.git"
+  },
+  "bugs": {
+    "url": "https://github.com/dinhkarate/keyshroud/issues"
+  },
   "type": "module",
-  "main": "./index.ts",
-  "types": "./index.ts",
-  "bin": { "pi-vaultwarden": "./cli.ts" },
-  "files": ["index.ts", "core.ts", "cli.ts", "ui/", "LICENSE", "UPSTREAM.md", "README.md"],
-  "engines": { "node": ">=22.18.0" },
-  "pi": { "extensions": ["./index.ts"] },
+  "bin": {
+    "keyshroud": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/core.d.ts",
+      "default": "./dist/core.js"
+    },
+    "./redact": {
+      "types": "./dist/redact.d.ts",
+      "default": "./dist/redact.js"
+    },
+    "./refs": {
+      "types": "./dist/refs.d.ts",
+      "default": "./dist/refs.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist/",
+    "src/",
+    "extensions/",
+    "skills/",
+    "CHANGELOG.md",
+    "SECURITY.md"
+  ],
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.json && chmod +x dist/cli.js",
+    "typecheck": "tsc -p tsconfig.check.json",
+    "test": "node --test test/*.test.ts",
+    "check": "npm run typecheck && npm test && npm run build && node dist/cli.js --version",
+    "prepack": "npm run build"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/pi/index.ts"
+    ]
+  },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*",
     "typebox": "*"
   },
-  "publishConfig": { "access": "public" }
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    },
+    "@earendil-works/pi-tui": {
+      "optional": true
+    },
+    "typebox": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^1.2.0",
+    "@earendil-works/pi-tui": "^1.2.0",
+    "@types/node": "^24.19.2",
+    "typebox": "^1.3.37",
+    "typescript": "^7.0.2"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "types": "./dist/core.d.ts"
 }

@@ -1,0 +1,10 @@
+{
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "keyshroud hook claude session-start", "timeout": 60 }] }
+    ],
+    "PostToolUse": [
+      { "matcher": "*", "hooks": [{ "type": "command", "command": "keyshroud hook claude post-tool-use", "timeout": 10 }] }
+    ]
+  }
+}

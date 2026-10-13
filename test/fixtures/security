@@ -1,0 +1,5 @@
+#!/bin/sh
+# Fake macOS `security`: answers find-generic-password from $FAKE_KEYCHAIN_DIR/<service>.
+service=""; while [ $# -gt 0 ]; do [ "$1" = "-s" ] && service="$2"; shift; done
+[ -n "$FAKE_KEYCHAIN_DIR" ] && [ -f "$FAKE_KEYCHAIN_DIR/$service" ] && cat "$FAKE_KEYCHAIN_DIR/$service" && exit 0
+exit 44

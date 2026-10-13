@@ -1,0 +1,16 @@
+{
+  "name": "keyshroud",
+  "description": "keyshroud: agent-safe secrets for Claude Code backed by self-hosted Vaultwarden.",
+  "owner": {
+    "name": "dinhkarate",
+    "url": "https://github.com/dinhkarate"
+  },
+  "plugins": [
+    {
+      "name": "keyshroud",
+      "source": "./",
+      "description": "Agent-safe secrets from self-hosted Vaultwarden: MCP tools, tool-output redaction hooks, and a skill.",
+      "homepage": "https://keyshroud.dev"
+    }
+  ]
+}

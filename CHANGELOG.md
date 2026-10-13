@@ -1,0 +1,43 @@
+# Changelog
+
+All notable changes are documented here. This project follows
+[Semantic Versioning](https://semver.org/).
+
+## [0.5.0] - Unreleased
+
+First public release, renamed from `pi-vaultwarden` to **keyshroud**.
+
+### Added
+- `bw://item[/field|/fields/name]` references, including `username`, `notes`,
+  `uri`, `id`, custom fields and TOTP codes.
+- `run --env-file` for commit-safe reference files, `--only` for least
+  privilege, and streaming output masking (on by default when not a TTY).
+- `inject` template rendering into `0600` files, `redact` filter, `scan` leak
+  finder, `lock`, append-only `audit.jsonl` (names only).
+- MCP stdio server: `secrets_list`, `secrets_run`, `secrets_request`,
+  `vault_status`.
+- Claude Code plugin: SessionStart + PostToolUse redaction hooks, MCP server,
+  skill.
+- pi/omp `tool_result` redaction of every tool result.
+- Test suite against a fake `bw`; CI; compiled `dist/` so the CLI runs from
+  `node_modules`.
+
+### Changed
+- Default cache TTL is 1 hour (`KEYSHROUD_CACHE_TTL_MS`; was 7 days via
+  `PI_VAULTWARDEN_CACHE_TTL_MS`).
+- Config moved to `~/.config/keyshroud/`.
+- pi commands renamed: `/vault_add`, `/vault_wire`, `/vault_rotate`,
+  `/vault_status`; tools `vault_add_secret`, `vault_status`.
+- `/secret` no longer needs a hard-coded local model; the planner is optional
+  (`KEYSHROUD_PLANNER_URL`).
+- Duplicate vault item names fail closed instead of picking one.
+
+### Removed
+- Hard-coded server URL and personal infrastructure defaults.
+
+### Migration from pi-vaultwarden
+- Existing `!bw get password '…'` auth.json entries keep working unchanged.
+- Rename `PI_VAULTWARDEN_CACHE_TTL_MS` → `KEYSHROUD_CACHE_TTL_MS`.
+- Move `~/.config/pi-vaultwarden/master-password` (if used) to
+  `~/.config/keyshroud/master-password`.
+- Replace `pi install @piskill/pi-vaultwarden` with `pi install npm:keyshroud`.

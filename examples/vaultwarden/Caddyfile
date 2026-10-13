@@ -1,0 +1,4 @@
+{$VAULT_DOMAIN} {
+  encode zstd gzip
+  reverse_proxy vaultwarden:80
+}
