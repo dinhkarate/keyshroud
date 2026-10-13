@@ -33,6 +33,7 @@ test("parseEnvFile parses comments, export, and quotes", () => {
   assert.deepEqual(parseEnvFile("# c\nexport A=bw://X\nB=\"bw://Y/fields/z\"\nC=literal # note\n\nD='k=v'\n"), [
     { name: "A", value: "bw://X" }, { name: "B", value: "bw://Y/fields/z" }, { name: "C", value: "literal" }, { name: "D", value: "k=v" },
   ]);
+  assert.deepEqual(parseEnvFile('A="x y" # note'), [{ name: "A", value: "x y" }]);
   assert.throws(() => parseEnvFile("not a line"), /line 1/);
 });
 

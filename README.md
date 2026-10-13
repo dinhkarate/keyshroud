@@ -109,8 +109,8 @@ also re-login automatically when the `bw` session expires.
    in `~/.config/keyshroud/session` (`0600`).
 3. **Resolve.** All references resolve from one `bw list items` snapshot held in
    memory for `KEYSHROUD_CACHE_TTL_MS` (default 1 h).
-4. **Inject.** Values go into the child process environment — never into argv,
-   files, or tool results.
+4. **Inject.** Values go into the child process environment — never into argv
+   or tool results (`inject` writes `0600` files only when you ask it to).
 5. **Redact.** Output passes through a redactor that knows every wired value and
    every login password in the vault. Out-of-process hooks use a keyed-HMAC
    fingerprint index (`redact-index.json`, `0600`) so they never hold plaintext.
@@ -135,6 +135,10 @@ What you get:
   `<redacted:NAME>` using Claude Code's `updatedToolOutput`.
 - **MCP tools** — `secrets_run`, `secrets_list`, `secrets_request`, `vault_status`.
 - **Skill** — teaches Claude to use names and references, never values.
+
+The plugin calls `keyshroud` from `PATH`. If Claude Code is launched from a GUI
+that doesn't see your npm/nvm bin directory, run `keyshroud link-cli` (links it
+into `~/.local/bin`) and make sure that directory is on the GUI's `PATH`.
 
 To give Bash commands the secrets as env vars, start Claude through keyshroud:
 
@@ -266,8 +270,14 @@ Guarantees we test for:
 - new secrets are read from a masked prompt or stdin, never flags;
 - the session file, redact index, rendered templates and auth files are `0600`;
 - auth.json writes are locked and atomic and never overwrite without `--force`;
-- values shorter than 6 characters are not redacted (to avoid noise), so don't
-  wire short PINs.
+- env files may contain only references and literals — a `!command` value is
+  rejected, so a cloned repo's `.env.refs` cannot run code;
+- an unparseable `auth.json` is never overwritten.
+
+Known limits: redaction is exact-match, so a *partial* or transformed value
+(`${TOKEN:0:10}`, base64, a line wrapped by a tool) is not masked; values
+shorter than 6 characters are not redacted (to avoid noise), so don't wire short
+PINs.
 
 Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 

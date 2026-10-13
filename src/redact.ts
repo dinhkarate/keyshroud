@@ -95,15 +95,18 @@ function mac(key: Buffer, value: string): string {
   return createHmac("sha256", key).update(value, "utf8").digest("hex").slice(0, 32);
 }
 
-export function buildRedactIndex(values: Record<string, string>): RedactIndex {
-  const key = randomBytes(32);
-  const seen = new Set<string>();
+export function buildRedactIndex(values: Record<string, string>, previous?: RedactIndex): RedactIndex {
+  const key = previous ? Buffer.from(previous.key, "base64") : randomBytes(32);
   const entries: RedactIndex["entries"] = [];
+  const seen = new Set<string>();
   for (const [name, value] of Object.entries(values)) {
-    if (value.length < MIN_REDACT_LENGTH || seen.has(value)) continue;
-    seen.add(value);
-    entries.push({ name, length: value.length, roll: rollHash(value, 0, value.length), mac: mac(key, value) });
+    if (value.length < MIN_REDACT_LENGTH) continue;
+    const digest = mac(key, value);
+    if (seen.has(digest)) continue;
+    seen.add(digest);
+    entries.push({ name, length: value.length, roll: rollHash(value, 0, value.length), mac: digest });
   }
+  for (const entry of previous?.entries ?? []) if (!seen.has(entry.mac)) { seen.add(entry.mac); entries.push(entry); }
   return { v: 1, key: key.toString("base64"), entries };
 }
 

@@ -8,7 +8,7 @@ import process from "node:process";
 import * as readline from "node:readline";
 import { BRAND } from "./brand.ts";
 import { buildRedactIndex, type RedactIndex } from "./redact.ts";
-import { ENV_NAME_RE, legacyRefFor, parseRef, type SecretRef } from "./refs.ts";
+import { ENV_NAME_RE, legacyRefFor, parseEnvFile, parseRef, type SecretRef } from "./refs.ts";
 
 const P = BRAND.envPrefix;
 function setting(name: string): string | undefined {
@@ -368,11 +368,25 @@ async function acquireLock(path: string): Promise<() => Promise<void>> {
   }
 }
 
+// Unlike readAuthEntries, a write must never start from an empty object just
+// because the file was unreadable: that would wipe every provider login.
+async function readAuthForUpdate(path: string): Promise<Record<string, unknown>> {
+  let text: string;
+  try { text = await readFile(path, "utf8"); } catch (error) {
+    if ((error as { code?: string }).code === "ENOENT") return {};
+    throw error;
+  }
+  let parsed: unknown;
+  try { parsed = text.trim() ? JSON.parse(text) : {}; } catch { parsed = null; }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error(`${path} is not a valid JSON object; refusing to overwrite it`);
+  return parsed as Record<string, unknown>;
+}
+
 async function updateAuthFile(path: string, update: (current: Record<string, unknown>) => Record<string, unknown> | null): Promise<boolean> {
   await mkdir(dirname(path), { recursive: true });
   const release = await acquireLock(`${path}.lock`);
   try {
-    const next = update(await readAuthEntries(path));
+    const next = update(await readAuthForUpdate(path));
     if (!next) return false;
     await writePrivateFile(path, `${JSON.stringify(next, null, 2)}\n`);
     return true;
@@ -422,6 +436,15 @@ export async function resolveEntries(entries: Array<{ name: string; raw: string 
   return result;
 }
 
+// Env files are data that may come from a cloned repo or an agent, so only
+// references and literals are allowed; `!command` values would be code execution.
+export async function envFileEntries(path: string): Promise<Array<{ name: string; raw: string }>> {
+  return parseEnvFile(await readFile(path, "utf8")).map(({ name, value }) => {
+    if (value.trim().startsWith("!")) throw new Error(`${path}: ${name} uses a shell command; env files accept only bw:// references and literals`);
+    return { name, raw: value };
+  });
+}
+
 export async function authEnvEntries(): Promise<Array<{ name: string; raw: string }>> {
   const targets = getAuthTargets();
   const merged = { ...(await readAuthEntries(targets.pi)), ...(await readAuthEntries(targets.omp)) };
@@ -450,8 +473,10 @@ export async function redactionValues(wired: Record<string, string> = {}): Promi
   return values;
 }
 
+// Merges into the existing index so values added by one command (for example
+// an env file passed to `run`) stay covered for later hook invocations.
 export async function writeRedactIndex(values: Record<string, string>): Promise<RedactIndex> {
-  const index = buildRedactIndex(values);
+  const index = buildRedactIndex(values, (await readRedactIndex()) ?? undefined);
   await writePrivateFile(REDACT_INDEX_FILE, `${JSON.stringify(index)}\n`);
   return index;
 }
