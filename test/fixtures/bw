@@ -1,0 +1,43 @@
+#!/usr/bin/env node
+// Fake Bitwarden CLI for tests. State lives in $FAKE_BW_VAULT (JSON); every
+// invocation is appended to $FAKE_BW_LOG so tests can count spawns.
+import fs from "node:fs";
+const vaultPath = process.env.FAKE_BW_VAULT;
+const args = process.argv.slice(2);
+if (process.env.FAKE_BW_LOG) fs.appendFileSync(process.env.FAKE_BW_LOG, `${args.join(" ")}\n`);
+const state = JSON.parse(fs.readFileSync(vaultPath, "utf8"));
+const save = () => fs.writeFileSync(vaultPath, JSON.stringify(state));
+const out = (value) => process.stdout.write(typeof value === "string" ? value : JSON.stringify(value));
+const die = (message) => { process.stderr.write(message); process.exit(1); };
+const unlocked = () => state.status === "unlocked" && process.env.BW_SESSION === "fake-session";
+const find = (key) => {
+  const byId = state.items.filter((item) => item.id === key);
+  if (byId.length) return byId[0];
+  const matches = state.items.filter((item) => item.name.toLowerCase() === key.toLowerCase());
+  if (matches.length > 1) die("More than one result was found. Try getting a specific object by `id` instead.");
+  if (!matches.length) die("Not found.");
+  return matches[0];
+};
+const stdin = () => { try { return fs.readFileSync(0, "utf8"); } catch { return ""; } };
+const [cmd, sub, key] = args;
+if (cmd === "--version") out("2026.1.0\n");
+else if (cmd === "status") out({ serverUrl: "https://vault.example.test", status: unlocked() ? "unlocked" : state.status === "unauthenticated" ? "unauthenticated" : "locked" });
+else if (cmd === "unlock") { if (process.env.BW_PASSWORD !== "master") die("Invalid master password."); state.status = "unlocked"; save(); out("fake-session"); }
+else if (cmd === "login") { state.status = "locked"; save(); out("logged in"); }
+else if (cmd === "sync") out("");
+else if (cmd === "lock") { state.status = "locked"; save(); out("Your vault is locked."); }
+else if (!unlocked()) die("Vault is locked.");
+else if (cmd === "list" && sub === "items") {
+  const search = args[3] ?? "";
+  out(state.items.filter((item) => item.name.toLowerCase().includes(search.toLowerCase())));
+} else if (cmd === "get" && sub === "item") out(find(key));
+else if (cmd === "get" && sub === "password") { const item = find(key); if (!item.login?.password) die("No password available."); out(item.login.password); }
+else if (cmd === "get" && sub === "totp") out("123456");
+else if (cmd === "create" && sub === "item") {
+  const item = JSON.parse(Buffer.from(stdin(), "base64").toString("utf8"));
+  item.id = `id-${state.items.length + 1}`; state.items.push(item); save(); out(item);
+} else if (cmd === "edit" && sub === "item") {
+  const item = JSON.parse(Buffer.from(stdin(), "base64").toString("utf8"));
+  state.items = state.items.map((existing) => (existing.id === key ? item : existing)); save(); out(item);
+} else if (cmd === "delete" && sub === "item") { state.items = state.items.filter((item) => item.id !== key); save(); }
+else die(`fake bw: unsupported ${args.join(" ")}`);

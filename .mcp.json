@@ -1,0 +1,5 @@
+{
+  "mcpServers": {
+    "keyshroud": { "command": "keyshroud", "args": ["mcp"] }
+  }
+}

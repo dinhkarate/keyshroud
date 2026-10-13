@@ -1,0 +1,21 @@
+# Minimal Vaultwarden + automatic HTTPS (Caddy). Pin image tags for production.
+services:
+  vaultwarden:
+    image: vaultwarden/server:latest
+    restart: unless-stopped
+    environment:
+      DOMAIN: "https://${VAULT_DOMAIN}"
+      SIGNUPS_ALLOWED: "${SIGNUPS_ALLOWED:-true}"   # set to false after creating your account
+      # ADMIN_TOKEN: generate with `vaultwarden hash` and keep it out of git
+    volumes:
+      - ./vw-data:/data
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      VAULT_DOMAIN: "${VAULT_DOMAIN}"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./caddy-data:/data
