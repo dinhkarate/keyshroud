@@ -1,7 +1,7 @@
 // Runtime-neutral core: no pi/omp/Claude Code imports. Every caller (agent
 // extensions, CLI, MCP server, hooks) goes through these functions.
 import { execFile } from "node:child_process";
-import { appendFile, chmod, mkdir, open, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { appendFile, chmod, mkdir, readFile, realpath, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import process from "node:process";
@@ -64,6 +64,16 @@ export function getAuthTargets(): AuthTargets {
 // auth.json entries use the legacy shell form so pi/omp resolve them even
 // without this package loaded.
 export const referenceFor = legacyRefFor;
+
+// Vault credentials never reach commands run on the agent's behalf: with the
+// session token a child could dump the whole vault, defeating `--only`.
+export const VAULT_ENV_KEYS: readonly string[] = ["BW_SESSION", "BW_PASSWORD", "BW_CLIENTID", "BW_CLIENTSECRET"];
+
+export function childEnv(extra: Record<string, string> = {}): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [name, value] of Object.entries(process.env)) if (value !== undefined && !VAULT_ENV_KEYS.includes(name)) env[name] = value;
+  return { ...env, ...extra };
+}
 
 export async function bw(args: string[], opts: { input?: string; session?: string } = {}): Promise<string> {
   const session = opts.session ?? process.env.BW_SESSION;
@@ -353,17 +363,20 @@ export function authEntryRaw(entry: unknown): string | undefined {
   return typeof raw === "string" ? raw : undefined;
 }
 
+// Directory lock compatible with pi/omp (proper-lockfile: `<file>.lock/`,
+// stale after 10 s without an mtime refresh).
 async function acquireLock(path: string): Promise<() => Promise<void>> {
   const start = Date.now();
   for (;;) {
     try {
-      const handle = await open(path, "wx");
-      await handle.close();
-      return async () => { try { await unlink(path); } catch {} };
+      await mkdir(path);
+      return async () => { await rm(path, { recursive: true, force: true }); };
     } catch (error) {
       if ((error as { code?: string }).code !== "EEXIST") throw error;
-      if (Date.now() - start > 5000) { try { await unlink(path); } catch {} }
-      await new Promise((resolve) => setTimeout(resolve, 30));
+      const lockedAt = await stat(path).then((info) => info.mtimeMs, () => 0);
+      if (Date.now() - lockedAt > 10000) { await rm(path, { recursive: true, force: true }); continue; }
+      if (Date.now() - start > 30000) throw new Error(`Timed out waiting for lock ${path}`);
+      await new Promise((resolve) => setTimeout(resolve, 50));
     }
   }
 }
@@ -386,9 +399,11 @@ async function updateAuthFile(path: string, update: (current: Record<string, unk
   await mkdir(dirname(path), { recursive: true });
   const release = await acquireLock(`${path}.lock`);
   try {
-    const next = update(await readAuthForUpdate(path));
+    // Write through a symlinked auth.json instead of replacing the link.
+    const target = await realpath(path).catch(() => path);
+    const next = update(await readAuthForUpdate(target));
     if (!next) return false;
-    await writePrivateFile(path, `${JSON.stringify(next, null, 2)}\n`);
+    await writePrivateFile(target, `${JSON.stringify(next, null, 2)}\n`);
     return true;
   } finally { await release(); }
 }
@@ -463,13 +478,22 @@ export async function buildEnvMap(): Promise<Record<string, string>> {
   try { return (await resolveEntries(await authEnvEntries(), { preferProcessEnv: true })).values; } catch { return {}; }
 }
 
-// Everything worth redacting: wired secrets (labelled by variable name) plus
-// every other login password in the unlocked vault snapshot (labelled by item).
+// Values to redact in-process: wired secrets (labelled by variable name), the
+// vault session token, and every other login password in the snapshot.
 export async function redactionValues(wired: Record<string, string> = {}): Promise<Record<string, string>> {
-  const values: Record<string, string> = { ...wired };
+  const values = indexValues(wired);
   try {
     for (const item of (await vaultIndex()).byId.values()) if (item.password && !Object.hasOwn(values, item.name)) values[item.name] = item.password;
   } catch {}
+  return values;
+}
+
+// The on-disk index (for out-of-process hooks) covers only wired secrets and
+// the session token, so it never fingerprints the user's personal passwords.
+export function indexValues(wired: Record<string, string> = {}): Record<string, string> {
+  const values: Record<string, string> = { ...wired };
+  const session = process.env.BW_SESSION?.trim();
+  if (session) values.BW_SESSION = session;
   return values;
 }
 

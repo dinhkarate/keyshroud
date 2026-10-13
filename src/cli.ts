@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { chmod, copyFile, mkdir, lstat, readdir, readFile, readlink, symlink, unlink, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
+import { constants, homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
@@ -9,7 +9,7 @@ import { BRAND } from "./brand.ts";
 import * as core from "./core.ts";
 import { runClaudeHook } from "./hooks.ts";
 import { serveMcp } from "./mcp.ts";
-import { createRedactor, createRedactStream, redactWithIndex, type RedactIndex } from "./redact.ts";
+import { buildRedactIndex, compileRedactIndex, createRedactor, createRedactStream, type RedactIndex } from "./redact.ts";
 import { ENV_NAME_RE, parseRef } from "./refs.ts";
 
 const usage = `Usage: ${BRAND.bin} <command> [options]
@@ -98,15 +98,15 @@ async function runCommand(args: string[]): Promise<void> {
   const redactor = createRedactor(mask ? await core.redactionValues(env.secrets) : {});
   // Agents started through `run` (e.g. `keyshroud run -- claude`) rely on the
   // hook index, so it must cover env-file values too.
-  if (Object.keys(env.secrets).length) { try { await core.writeRedactIndex(await core.redactionValues(env.secrets)); } catch {} }
-  const child = spawn(command, commandArgs, { stdio: mask ? ["inherit", "pipe", "pipe"] : "inherit", env: { ...process.env, ...env.values } });
+  if (Object.keys(env.secrets).length) { try { await core.writeRedactIndex(core.indexValues(env.secrets)); } catch {} }
+  const child = spawn(command, commandArgs, { stdio: mask ? ["inherit", "pipe", "pipe"] : "inherit", env: core.childEnv(env.values) });
   if (mask) {
     child.stdout?.pipe(createRedactStream(redactor)).pipe(process.stdout);
     child.stderr?.pipe(createRedactStream(redactor)).pipe(process.stderr);
   }
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.on(signal, () => child.kill(signal));
   await new Promise<void>((done) => {
-    child.on("close", (code, signal) => { process.exitCode = code ?? (signal ? 128 : 1); done(); });
+    child.on("close", (code, signal) => { process.exitCode = code ?? 128 + (signal ? constants.signals[signal] ?? 0 : 1); done(); });
     child.on("error", (error) => { console.error(error.message); process.exitCode = 127; done(); });
   });
 }
@@ -145,20 +145,22 @@ async function* walk(path: string): AsyncGenerator<string> {
 }
 
 async function scan(paths: string[]): Promise<void> {
+  // Scan against every vault password, kept in memory only.
   let index: RedactIndex | null = null;
   try {
     await core.ensureSession();
     const env = await core.resolveEntries(await core.authEnvEntries());
-    index = await core.writeRedactIndex(await core.redactionValues(env.secrets));
+    index = buildRedactIndex(await core.redactionValues(env.secrets));
   } catch { index = await core.readRedactIndex(); }
   if (!index) fail("No vault snapshot or redact index available; unlock first", 3);
+  const redact = compileRedactIndex(index);
   let leaks = 0;
   for (const root of paths.length ? paths : ["."]) {
     for await (const file of walk(root)) {
       const content = await readFile(file, "utf8").catch(() => "");
       if (content.includes("\u0000")) continue;
       content.split("\n").forEach((line, number) => {
-        const redacted = redactWithIndex(line, index);
+        const redacted = redact(line);
         if (redacted === line) return;
         const names = [...redacted.matchAll(/<redacted:([^>]+)>/g)].map((match) => match[1]);
         for (const name of names) { leaks++; console.log(`${file}:${number + 1} ${name}`); }

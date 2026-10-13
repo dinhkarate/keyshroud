@@ -21,6 +21,11 @@ in output with `<redacted:NAME>`.
    `<redacted:NAME>` in output means the secret was used correctly. Do not try
    to recover it.
 3. Never write a secret value into a file. Write a reference instead.
+4. Run **every** command that uses a secret through `keyshroud run` (or the
+   `secrets_run` MCP tool). Plain shell commands are only masked when they
+   succeed; `keyshroud run` masks even when the command fails.
+5. Never run `keyshroud get`, `keyshroud env --shell`, `keyshroud inject`
+   without `-o`, or `bw` directly — they print values.
 
 ## See what exists
 

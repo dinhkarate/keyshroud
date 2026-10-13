@@ -82,6 +82,23 @@ test("redact stream never leaks a secret split across chunks", async () => {
   assert.equal(await streamThrough(values, ["no secrets here"]), "no secrets here");
 });
 
+test("overlapping secrets: plain, streaming, and index redaction agree and never leak", async () => {
+  let state = 7;
+  const rand = (n: number) => { state = (state * 1103515245 + 12345) % 2147483648; return state % n; };
+  const word = (length: number) => Array.from({ length }, () => "xy"[rand(2)]).join("");
+  for (let round = 0; round < 400; round++) {
+    const values: Record<string, string> = { A: word(6 + rand(3)), B: word(6 + rand(3)), C: word(7) };
+    const text = word(20 + rand(40));
+    const redactor = createRedactor(values);
+    const expected = redactor.redact(text);
+    for (const secret of Object.values(values)) assert.ok(!expected.includes(secret), `round ${round} plain leaked`);
+    assert.equal(redactWithIndex(text, buildRedactIndex(values)), expected, `round ${round} index`);
+    const cuts: string[] = [];
+    for (let at = 0; at < text.length;) { const size = 1 + rand(5); cuts.push(text.slice(at, at + size)); at += size; }
+    assert.equal(await streamThrough(values, cuts), expected, `round ${round} stream`);
+  }
+});
+
 test("index redaction matches plaintext redaction without holding values", () => {
   const values = { A: "sk-abcdef123456", B: "abcdef", C: "correct horse battery" };
   const index = buildRedactIndex(values);

@@ -17,9 +17,9 @@ self-hosted [Vaultwarden](https://github.com/dani-garcia/vaultwarden) (or Bitwar
 </div>
 
 ```console
-$ keyshroud run --mask -- sh -c 'echo "deploying with $GH_TOKEN"; curl -sf -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/user | jq .login'
+$ keyshroud run --mask -- sh -c 'echo "deploying with $GH_TOKEN"; gh api user -q .login'
 deploying with <redacted:GH_TOKEN>
-"dinhkarate"
+dinhkarate
 ```
 
 The command got the real token. The transcript — and the model reading it — got
@@ -47,7 +47,7 @@ scrubs every value from tool output before the model sees it.
 | | |
 |---|---|
 | 🙈 **Masked output** | `keyshroud run` replaces every secret value in stdout/stderr with `<redacted:NAME>` — streaming-safe across chunk boundaries. |
-| 🪝 **Agent hooks** | Claude Code `PostToolUse` and pi/omp `tool_result` hooks redact **every** tool result (Bash, Read, Grep, MCP…), not just commands you remembered to wrap. |
+| 🪝 **Agent hooks** | The pi/omp `tool_result` hook redacts every tool result, failed ones included. Claude Code's `PostToolUse` hook redacts every *successful* tool result (Bash, Read, Grep, MCP…) — see [limits](#security-model). |
 | 🔌 **MCP server** | `keyshroud mcp` gives any MCP client `secrets_run`, `secrets_list`, `secrets_request`, `vault_status`. No tool ever returns a value. |
 | 🔗 **Commit-safe references** | `bw://item`, `bw://item/username`, `bw://item/fields/name`, `bw://item/totp` in `.env.refs` files and templates. |
 | ⌨️ **Paste-to-create** | New secrets go through a masked prompt in the user's terminal or a masked popup in pi — never through the chat. |
@@ -131,8 +131,13 @@ What you get:
 
 - **SessionStart hook** — unlocks, refreshes the redaction index, and tells
   Claude which secret *names* exist.
-- **PostToolUse hook** — rewrites any tool result that contains a vault value to
-  `<redacted:NAME>` using Claude Code's `updatedToolOutput`.
+- **PostToolUse hook** — rewrites any successful tool result that contains a
+  wired value or the vault session token to `<redacted:NAME>` using Claude
+  Code's `updatedToolOutput` (tested with Claude Code 2.1.296).
+  **Limit:** when a command fails, Claude Code fires `PostToolUseFailure`, which
+  cannot rewrite output. The skill and session context therefore tell Claude to
+  run every secret-using command through `keyshroud run` (or `secrets_run`),
+  which masks inside the process regardless of the exit code.
 - **MCP tools** — `secrets_run`, `secrets_list`, `secrets_request`, `vault_status`.
 - **Skill** — teaches Claude to use names and references, never values.
 
@@ -165,7 +170,8 @@ The extension:
 
 - hydrates wired secrets into the agent's environment before provider auth
   resolves, so `$CUSTOM_KEY` provider references work at startup;
-- redacts every tool result through the `tool_result` hook;
+- redacts every tool result, successful or failed, through the `tool_result`
+  hook (wired values, the vault session token, and every vault login password);
 - adds `/secret` (describe → confirm name → masked paste), `/vault_add`,
   `/vault_wire`, `/vault_rotate`, `/vault_status`, and the `vault_add_secret` /
   `vault_status` tools.
@@ -270,11 +276,17 @@ Guarantees we test for:
 - new secrets are read from a masked prompt or stdin, never flags;
 - the session file, redact index, rendered templates and auth files are `0600`;
 - auth.json writes are locked and atomic and never overwrite without `--force`;
+- commands started by `run` and `secrets_run` never receive `BW_SESSION`,
+  `BW_PASSWORD`, `BW_CLIENTID` or `BW_CLIENTSECRET`, so `--only` really limits
+  what a command can read (inside pi/omp the agent process keeps the session for
+  legacy `!bw` auth entries; its value is redacted from tool output);
 - env files may contain only references and literals — a `!command` value is
   rejected, so a cloned repo's `.env.refs` cannot run code;
 - an unparseable `auth.json` is never overwritten.
 
-Known limits: redaction is exact-match, so a *partial* or transformed value
+Known limits: an agent with shell access as your user can read
+`~/.config/keyshroud/session` and use `bw` directly — run agents in a sandbox or
+container if that matters. Redaction is exact-match, so a *partial* or transformed value
 (`${TOKEN:0:10}`, base64, a line wrapped by a tool) is not masked; values
 shorter than 6 characters are not redacted (to avoid noise), so don't wire short
 PINs.
