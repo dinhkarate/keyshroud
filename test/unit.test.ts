@@ -99,6 +99,20 @@ test("overlapping secrets: plain, streaming, and index redaction agree and never
   }
 });
 
+test("redact stream keeps flowing on output that repeats a periodic secret", async () => {
+  const stream = createRedactStream(createRedactor({ ZEROS: "00000000" }));
+  let early = 0;
+  let out = "";
+  stream.on("data", (data) => { out += data; });
+  for (let i = 0; i < 64; i++) stream.write(Buffer.from("0".repeat(1024)));
+  early = out.length;
+  const done = new Promise((resolve) => stream.on("end", resolve));
+  stream.end();
+  await done;
+  assert.ok(early > 0, "nothing emitted before EOF");
+  assert.ok(!out.includes("00000000"));
+});
+
 test("index redaction matches plaintext redaction without holding values", () => {
   const values = { A: "sk-abcdef123456", B: "abcdef", C: "correct horse battery" };
   const index = buildRedactIndex(values);

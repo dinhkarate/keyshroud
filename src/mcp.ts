@@ -115,7 +115,7 @@ async function runTool(args: Json): Promise<Json> {
     env.missing.length ? `unresolved: ${env.missing.join(", ")}` : null,
     `--- stdout ---\n${stdout}`,
     `--- stderr ---\n${stderr}`,
-    truncated ? `[output truncated at ${OUTPUT_LIMIT} bytes]` : null,
+    truncated ? `[output truncated to ${OUTPUT_LIMIT / 2} characters per stream]` : null,
   ].filter((line): line is string => line !== null);
   return text(lines.join("\n"), code !== "0");
 }

@@ -6,6 +6,10 @@ import { StringDecoder } from "node:string_decoder";
 // ordinary output into noise.
 export const MIN_REDACT_LENGTH = 6;
 
+// Upper bound on how much output the stream holds back. Periodic output that
+// keeps matching a repetitive secret would otherwise stall until EOF.
+const MAX_HOLD = 4096;
+
 export interface Redactor {
   readonly size: number;
   redact(text: string): string;
@@ -60,6 +64,12 @@ export function createRedactor(values: Record<string, string>): Redactor {
       }
       // Hold back any complete secret that straddles the cut too: it may merge
       // with the unfinished one once the next chunk arrives.
+      const straddling = (at: number) => secrets.find(([value]) => {
+        for (let hit = text.indexOf(value, Math.max(0, at - value.length + 1)); hit !== -1 && hit < at; hit = text.indexOf(value, hit + 1)) {
+          if (hit + value.length > at) return true;
+        }
+        return false;
+      });
       for (let moved = true; moved;) {
         moved = false;
         for (const [value] of secrets) {
@@ -68,6 +78,11 @@ export function createRedactor(values: Record<string, string>): Redactor {
           }
         }
       }
+      if (text.length - cut <= MAX_HOLD) return cut;
+      // Bounded fallback: cut near the end, moving forward past any complete
+      // secret that straddles it, so whole matches are still replaced.
+      cut = text.length - maxLength;
+      while (cut < text.length && straddling(cut)) cut++;
       return cut;
     },
   };

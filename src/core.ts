@@ -364,7 +364,7 @@ export function authEntryRaw(entry: unknown): string | undefined {
 }
 
 // Directory lock compatible with pi/omp (proper-lockfile: `<file>.lock/`,
-// stale after 10 s without an mtime refresh).
+// stale after 30 s without an mtime refresh, matching pi's auth storage).
 async function acquireLock(path: string): Promise<() => Promise<void>> {
   const start = Date.now();
   for (;;) {
@@ -374,8 +374,8 @@ async function acquireLock(path: string): Promise<() => Promise<void>> {
     } catch (error) {
       if ((error as { code?: string }).code !== "EEXIST") throw error;
       const lockedAt = await stat(path).then((info) => info.mtimeMs, () => 0);
-      if (Date.now() - lockedAt > 10000) { await rm(path, { recursive: true, force: true }); continue; }
-      if (Date.now() - start > 30000) throw new Error(`Timed out waiting for lock ${path}`);
+      if (Date.now() - lockedAt > 30000) { await rm(path, { recursive: true, force: true }); continue; }
+      if (Date.now() - start > 60000) throw new Error(`Timed out waiting for lock ${path}`);
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
   }
