@@ -8,17 +8,23 @@
 <meta property="og:title" content="keyshroud">
 <meta property="og:description" content="Your agents use the keys. They never see them.">
 <meta property="og:url" content="https://keyshroud.dev">
+<meta property="og:image" content="https://keyshroud.dev/og.png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="640">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://keyshroud.dev/og.png">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
 <meta name="color-scheme" content="light dark">
 <style>
 :root {
   --bg: #fbfaf7; --surface: #ffffff; --text: #1b1d22; --muted: #5d6270; --line: #e4e2dc;
-  --accent: #3d5afe; --accent-ink: #ffffff; --term-bg: #14161b; --term-text: #e6e8ee;
+  --accent: #6d5df6; --accent-ink: #ffffff; --term-bg: #14161b; --term-text: #e6e8ee;
   --term-dim: #8a90a0; --ok: #3fb950; --redact: #f0b429;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #0f1115; --surface: #171a20; --text: #e8eaf0; --muted: #9aa1b2; --line: #272b34;
-    --accent: #7b8cff; --accent-ink: #0f1115; --term-bg: #0a0b0e;
+    --accent: #8b7ffa; --accent-ink: #0f1115; --term-bg: #0a0b0e;
   }
 }
 * { box-sizing: border-box; }
@@ -32,7 +38,7 @@ a { color: var(--accent); }
 .wrap { max-width: 1040px; margin: 0 auto; padding: 0 16px; }
 header.top { display: flex; align-items: center; justify-content: space-between; padding: 20px 0; gap: 12px; }
 .brand { font-weight: 700; font-size: 18px; letter-spacing: -0.01em; text-decoration: none; color: var(--text); display: flex; align-items: center; gap: 8px; }
-.brand svg { width: 22px; height: 22px; }
+.brand img { height: 40px; width: auto; display: block; }
 nav a { color: var(--muted); text-decoration: none; margin-left: 18px; font-size: 15px; }
 nav a:hover { color: var(--text); }
 .hero { padding: 48px 0 24px; display: grid; gap: 40px; grid-template-columns: 1fr; }
@@ -92,8 +98,10 @@ footer a { color: var(--muted); }
 <div class="wrap">
   <header class="top">
     <a class="brand" href="/">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/><circle cx="12" cy="11" r="2"/><path d="M12 13v3"/></svg>
-      keyshroud
+      <picture>
+        <source srcset="logo-dark.svg" media="(prefers-color-scheme: dark)">
+        <img src="logo.svg" alt="keyshroud">
+      </picture>
     </a>
     <nav>
       <a href="#quickstart">Quickstart</a>
