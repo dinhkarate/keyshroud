@@ -16,7 +16,10 @@ jobs:
       - run: npm run check
       - name: Verify tag matches package version
         run: test "v$(node -p 'require("./package.json").version')" = "$GITHUB_REF_NAME"
-      - run: npm publish --provenance --access public
+      - name: Publish unless this version is already on npm
+        run: |
+          if npm view "keyshroud@$(node -p 'require("./package.json").version')" version >/dev/null 2>&1; then
+            echo "already published"; else npm publish --provenance --access public; fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}   # omit once npm trusted publishing is configured
       - run: gh release create "$GITHUB_REF_NAME" --generate-notes
