@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>keyshroud — agent-safe secrets for Vaultwarden</title>
+<title>keyshroud — Hide API keys from Claude Code, Codex &amp; Cursor | Vaultwarden secrets for AI agents</title>
 <meta name="description" content="Let AI coding agents use your API keys without ever seeing them. Self-hosted Vaultwarden/Bitwarden, masked output, MCP server, Claude Code and pi plugins. Free and MIT-licensed.">
 <meta property="og:title" content="keyshroud">
 <meta property="og:description" content="Your agents use the keys. They never see them.">
@@ -114,6 +114,24 @@ h2 { font-size: 28px; letter-spacing: -0.02em; margin: 0 0 8px; }
 .mark.n { background: color-mix(in srgb, var(--muted) 16%, transparent); color: var(--muted); }
 @media (prefers-color-scheme: dark) { .mark.p { color: var(--redact); } }
 .note { color: var(--muted); font-size: 13.5px; margin-top: 12px; }
+.agents { display: grid; gap: 12px; grid-template-columns: 1fr; }
+@media (min-width: 640px) { .agents { grid-template-columns: repeat(2, 1fr); } }
+@media (min-width: 960px) { .agents { grid-template-columns: repeat(3, 1fr); } }
+.agent { display: block; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; text-decoration: none; color: var(--text); }
+.agent:hover { border-color: var(--accent); }
+.agent b { display: block; font-size: 16px; margin-bottom: 4px; }
+.agent .via { display: inline-block; font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--accent); margin-bottom: 8px; }
+.agent span:last-child { display: block; color: var(--muted); font-size: 14px; }
+.pain { display: grid; gap: 16px; grid-template-columns: 1fr; }
+@media (min-width: 760px) { .pain { grid-template-columns: 1fr 1fr; } }
+.pain ul { list-style: none; margin: 0; padding: 0; }
+.pain li { padding: 8px 0 8px 30px; position: relative; color: var(--muted); }
+.pain li::before { position: absolute; left: 0; top: 8px; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 700; }
+.pain .bad li::before { content: "\2715"; background: color-mix(in srgb, var(--muted) 16%, transparent); color: var(--muted); }
+.pain .good li::before { content: "\2713"; background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok); }
+.pain li b { color: var(--text); }
+.final { text-align: center; }
+.final .cta { justify-content: center; margin-top: 24px; }
 .threat { display: grid; gap: 16px; grid-template-columns: 1fr; }
 @media (min-width: 760px) { .threat { grid-template-columns: 1fr 1fr; } }
 .threat ul { margin: 0; padding-left: 20px; color: var(--muted); }
@@ -134,7 +152,9 @@ footer a { color: var(--muted); }
     </a>
     <nav>
       <a href="#quickstart">Quickstart</a>
+      <a class="hide-sm" href="#agents">Agents</a>
       <a class="hide-sm" href="#compare">Compare</a>
+      <a href="https://github.com/dinhkarate/keyshroud#readme">Docs</a>
       <a href="https://github.com/dinhkarate/keyshroud">GitHub</a>
     </nav>
   </header>
@@ -199,6 +219,21 @@ keyshroud doctor</code></pre>
       <div class="card"><h3><code>bw://</code> references</h3><p>Write <code>GH_TOKEN=bw://GitHub/fields/token</code> in a <code>.env.refs</code> file you can commit. References cover passwords, usernames, notes, TOTP codes, URIs and custom fields.</p></div>
       <div class="card"><h3>Inject &amp; scan</h3><p><code>inject</code> renders <code>{{ bw://… }}</code> templates into files only you can read (mode 0600). <code>scan</code> finds leaked values in your repo before you commit.</p></div>
       <div class="card"><h3>Self-hosted, free</h3><p>Runs on the Vaultwarden you already host. No SaaS, no account with us, no telemetry. Adding a secret uses a masked prompt, so the value never enters the chat.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="agents">
+  <div class="wrap">
+    <h2>Works with your agent</h2>
+    <p class="sub">One vault, every coding agent you use. Setup for each is in the docs.</p>
+    <div class="agents">
+      <a class="agent" href="https://github.com/dinhkarate/keyshroud#claude-code"><span class="via">Plugin</span><b>Claude Code</b><span>SessionStart and PostToolUse hooks mask tool results; MCP tools and a skill included.</span></a>
+      <a class="agent" href="https://github.com/dinhkarate/keyshroud#pi--omp"><span class="via">Extension</span><b>pi / omp</b><span>Hydrates env before provider auth and masks every tool result, failed ones too.</span></a>
+      <a class="agent" href="https://github.com/dinhkarate/keyshroud#any-mcp-client"><span class="via">MCP</span><b>Codex</b><span><code>codex mcp add keyshroud -- keyshroud mcp</code></span></a>
+      <a class="agent" href="https://github.com/dinhkarate/keyshroud#any-mcp-client"><span class="via">MCP</span><b>Cursor &amp; Claude Desktop</b><span>One <code>mcpServers</code> entry. <code>secrets_run</code> returns masked output.</span></a>
+      <a class="agent" href="https://github.com/dinhkarate/keyshroud#any-mcp-client"><span class="via">MCP</span><b>Cline, OpenCode, Gemini CLI</b><span>Any client that speaks MCP over stdio.</span></a>
+      <a class="agent" href="https://github.com/dinhkarate/keyshroud#quickstart"><span class="via">CLI</span><b>Any shell or CI</b><span><code>keyshroud run -- &lt;cmd&gt;</code> injects env and masks stdout/stderr.</span></a>
     </div>
   </div>
 </section>
@@ -268,6 +303,38 @@ keyshroud doctor</code></pre>
           <li>Values shorter than 6 characters (not redacted, to avoid noise)</li>
         </ul>
       </div>
+    </div>
+  </div>
+</section>
+
+<section class="final-band">
+  <div class="wrap">
+    <h2>Stop pasting API keys into chat</h2>
+    <p class="sub">Every key you paste lives on in the transcript, the provider&#8217;s logs and every future context window.</p>
+    <div class="pain">
+      <div class="card bad">
+        <h3>Without keyshroud</h3>
+        <ul>
+          <li>The agent <b>reads <code>.env</code></b> while debugging and the key lands in the transcript</li>
+          <li>A vault MCP server <b>returns plaintext</b> to the model</li>
+          <li>Keeping keys out of chat <b>means a paid, hosted</b> secrets manager</li>
+        </ul>
+      </div>
+      <div class="card good">
+        <h3>With keyshroud</h3>
+        <ul>
+          <li>The agent sees <b>names and <code>bw://</code> references</b>, never values</li>
+          <li>Any value in tool output becomes <b><code>&lt;redacted:NAME&gt;</code></b></li>
+          <li>Keys stay in <b>your own Vaultwarden</b>, free and MIT-licensed</li>
+        </ul>
+      </div>
+    </div>
+    <div class="final">
+      <div class="cta">
+        <a class="btn primary" href="#quickstart">Get started free</a>
+        <a class="btn" href="https://github.com/dinhkarate/keyshroud#readme">Read the docs</a>
+      </div>
+      <p class="install"><code>npm i -g keyshroud</code> &middot; No account &middot; No telemetry &middot; MIT</p>
     </div>
   </div>
 </section>

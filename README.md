@@ -9,15 +9,19 @@
 
 **Your agents use the keys. They never see them.**
 
-Agent-safe secrets for Claude Code, Codex, Cursor, pi and omp — backed by your own
-self-hosted [Vaultwarden](https://github.com/dani-garcia/vaultwarden) (or Bitwarden).
+**Keep API keys out of Claude Code, Codex, Cursor, Cline, OpenCode, Gemini CLI, pi and omp** —
+secrets stay in your own self-hosted [Vaultwarden](https://github.com/dani-garcia/vaultwarden)
+(or Bitwarden), and every value is masked before the model reads it.
 
 [![npm](https://img.shields.io/npm/v/keyshroud.svg)](https://www.npmjs.com/package/keyshroud)
+[![Downloads](https://img.shields.io/npm/dm/keyshroud.svg)](https://www.npmjs.com/package/keyshroud)
 [![CI](https://github.com/dinhkarate/keyshroud/actions/workflows/ci.yml/badge.svg)](https://github.com/dinhkarate/keyshroud/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/node/v/keyshroud.svg)](package.json)
 
-[Quickstart](#quickstart) · [How it works](#how-it-works) · [Claude Code](#claude-code) · [pi / omp](#pi--omp) · [MCP](#any-mcp-client-codex-cursor-claude-desktop) · [Security model](#security-model)
+[🚀 Quickstart](#quickstart) · [🔌 Supported agents](#supported-agents) · [⚙️ How it works](#how-it-works) · [❓ FAQ](#faq) · [🛡️ Security model](#security-model) · [🌐 Website](https://keyshroud.dev)
+
+[🇻🇳 Tiếng Việt](i18n/README.vi.md)
 
 </div>
 
@@ -31,21 +35,22 @@ The command got the real token. The transcript — and the model reading it — 
 `<redacted:GH_TOKEN>`. (Masking is automatic when an agent runs the command;
 `--mask` forces it in a human terminal.)
 
-## Why
+## Why keyshroud?
 
 Coding agents need credentials to do real work: `gh`, `npm publish`, cloud CLIs,
 webhooks, databases. The usual options are bad:
 
-- **Paste the key into the chat.** It is now in the transcript, the provider's
-  logs, and every future context window.
-- **Put it in `.env`.** The agent reads `.env`, `cat`s it while debugging, or
-  commits it.
-- **Use a paid secrets manager.** Good, but `op run` needs a 1Password
-  subscription, and most "agent vaults" are hosted SaaS.
+- ❌ **Paste the key into the chat** — now it is in the transcript, the provider's logs, and every future context window
+- ❌ **Put it in `.env`** — the agent `cat`s it while debugging, or commits it
+- ❌ **Pay for a secrets manager** — `op run` needs a 1Password subscription, and most "agent vaults" are hosted SaaS
+- ❌ **Use a vault MCP server** — most of them return the plaintext value straight to the model
 
-keyshroud keeps secrets in a vault you host, hands agents **names and
-references**, injects values only into the child processes that need them, and
-scrubs every value from tool output before the model sees it.
+**keyshroud fixes this:**
+
+- ✅ **Names, not values** — agents see `GH_TOKEN` and `bw://GitHub CLI token`, never the token
+- ✅ **Masked output** — any value that reaches stdout/stderr becomes `<redacted:GH_TOKEN>`
+- ✅ **Your vault** — Vaultwarden on a $5 VPS or a Raspberry Pi, or Bitwarden; no account with us
+- ✅ **Free** — MIT-licensed, no telemetry
 
 ## Features
 
@@ -61,6 +66,32 @@ scrubs every value from tool output before the model sees it.
 | ⚡ **Fast** | One batched `bw list items` per session instead of one `bw get` (~3 s) per secret. |
 | 🏠 **Self-hosted, free** | Vaultwarden on a $5 VPS or a Raspberry Pi. No SaaS account, no telemetry. |
 | 🧾 **Audit log** | `audit.jsonl` records which *names* were used, when, by which command. Never values. |
+
+## Supported agents
+
+| Agent | Install | What you get |
+|---|---|---|
+| **Claude Code** | [plugin](#claude-code) | SessionStart + PostToolUse redaction hooks, MCP tools, skill |
+| **pi / omp** | [`pi install npm:keyshroud`](#pi--omp) | env hydration, `tool_result` redaction (failed calls too), `/secret` |
+| **Codex** | [`codex mcp add keyshroud -- keyshroud mcp`](#any-mcp-client) | MCP tools with masked output |
+| **Cursor, Claude Desktop, Cline, Gemini CLI** | [`mcpServers` JSON](#any-mcp-client) | MCP tools with masked output |
+| **OpenCode** | [`mcp` config](#any-mcp-client) | MCP tools with masked output |
+| **Any shell or CI** | `keyshroud run -- <cmd>` | env injection + masked output |
+
+## Use cases
+
+**"Claude Code keeps reading my `.env`."** Move the values into the vault, commit a
+`.env.refs` file with `GH_TOKEN=bw://GitHub CLI token`, and start the agent with
+`keyshroud run -- claude`. The plugin's hooks mask anything that still slips into a tool result.
+
+**"I already self-host Vaultwarden."** Point `bw` at it, run `keyshroud doctor`, and you
+are done — keyshroud adds no server of its own.
+
+**"I like `op run` but don't want 1Password."** `keyshroud run` is the same idea —
+references in, masked output out — on a vault you host.
+
+**"My agent needs to add a new key."** It calls `secrets_request` (MCP) or `/secret` (pi);
+you type the value into a masked prompt in your own terminal. It never enters the chat.
 
 ## Quickstart
 
@@ -195,13 +226,16 @@ export KEYSHROUD_PLANNER_MODEL=qwen3-4b
 
 Without a planner, names are derived from the description and you can edit them.
 
-## Any MCP client (Codex, Cursor, Claude Desktop)
+## Any MCP client
+
+Codex, Cursor, Claude Desktop, Cline, Gemini CLI and any other client that speaks MCP over stdio:
 
 ```json
 { "mcpServers": { "keyshroud": { "command": "keyshroud", "args": ["mcp"] } } }
 ```
 
 Codex: `codex mcp add keyshroud -- keyshroud mcp`.
+OpenCode (`opencode.json`): `"mcp": { "keyshroud": { "type": "local", "command": ["keyshroud", "mcp"] } }`.
 
 | Tool | Does | Returns |
 |---|---|---|
@@ -264,6 +298,25 @@ closed (exit `4`) instead of guessing.
 | `KEYSHROUD_KEYCHAIN_CLIENT_SECRET` | `vaultwarden-api-client-secret` | |
 | `KEYSHROUD_AUDIT` | on | `0` disables `audit.jsonl` |
 | `KEYSHROUD_PLANNER_URL` / `_MODEL` / `_API_KEY` | unset | optional naming helper for `/secret` |
+
+## FAQ
+
+**Do I need Vaultwarden?** No. The official Bitwarden cloud works too; keyshroud talks to
+whatever server `bw` is configured for.
+
+**Do secrets leave my machine?** Only between `bw` and your vault server. keyshroud has no
+backend and sends no telemetry; values go into the environment of the command you run.
+
+**Can the agent still use the key?** Yes. The command gets the real value; only the text
+the model reads is masked.
+
+**Is this a sandbox?** No. It stops *accidental* disclosure. A hostile or prompt-injected
+agent can still exfiltrate a value it can use — see the [security model](#security-model).
+
+**Why not just `.gitignore` my `.env`?** That stops commits, not reads. Agents read `.env`
+to debug, and whatever they read goes to the model provider.
+
+**Does it work on Windows?** Not tested yet. macOS and Linux are supported.
 
 ## Security model
 
