@@ -19,7 +19,7 @@ secrets stay in your own self-hosted [Vaultwarden](https://github.com/dani-garci
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/node/v/keyshroud.svg)](package.json)
 
-[🚀 Quickstart](#quickstart) · [🔌 Supported agents](#supported-agents) · [⚙️ How it works](#how-it-works) · [❓ FAQ](#faq) · [🛡️ Security model](#security-model) · [🌐 Website](https://keyshroud.dev)
+[🚀 Quickstart](#quickstart) · [🔐 Vault setup](examples/vaultwarden#readme) · [🔌 Supported agents](#supported-agents) · [⚙️ How it works](#how-it-works) · [❓ FAQ](#faq) · [🛡️ Security model](#security-model) · [🌐 Website](https://keyshroud.dev)
 
 [🇻🇳 Tiếng Việt](i18n/README.vi.md) · [🇨🇳 简体中文](i18n/README.zh-CN.md) · [🇯🇵 日本語](i18n/README.ja-JP.md)
 
@@ -97,13 +97,18 @@ you type the value into a masked prompt in your own terminal. It never enters th
 
 ## Quickstart
 
-**Requirements:** Node.js ≥ 22.18, the Bitwarden CLI (`npm i -g @bitwarden/cli`),
-and a Vaultwarden or Bitwarden account. No server yet?
-[examples/vaultwarden](examples/vaultwarden) runs Vaultwarden behind Caddy
-(automatic HTTPS) with one `docker compose up -d`.
+**Requirements:** Node.js ≥ 22.18, the Bitwarden CLI, and a vault.
+
+**0. Get a vault** — pick one:
+
+- **Self-host Vaultwarden** (free, your server): follow
+  [examples/vaultwarden](examples/vaultwarden#readme) — Docker Compose + Caddy with automatic HTTPS,
+  from an empty VPS to `keyshroud doctor`, plus backups and hardening.
+- **Bitwarden cloud** (free account, no server): sign up at [bitwarden.com](https://bitwarden.com)
+  and skip `bw config server` below (EU accounts: `bw config server https://vault.bitwarden.eu`).
 
 ```bash
-npm install -g keyshroud
+npm install -g keyshroud @bitwarden/cli    # or: brew install bitwarden-cli
 
 # 1. Point bw at your server and log in once
 bw config server https://vault.example.com
@@ -126,7 +131,8 @@ keyshroud run -- claude          # start an agent with every wired secret availa
 
 Optional: put `vaultwarden-api-client-id` / `vaultwarden-api-client-secret` (from
 *Settings → Security → Keys → API key*) in the keychain too, and keyshroud will
-also re-login automatically when the `bw` session expires.
+also re-login automatically when the `bw` session expires. Linux keyring commands
+and a headless-server option are in the [vault setup guide](examples/vaultwarden#4-let-keyshroud-unlock-without-prompting).
 
 ## How it works
 
