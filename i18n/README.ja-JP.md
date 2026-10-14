@@ -86,6 +86,7 @@ security add-generic-password -a "$USER" -s vaultwarden-master-password -w      
 # 3. 全体をチェック
 keyshroud doctor
 
+# .env がある場合：`keyshroud import`（ドライラン、名前のみ表示）→ `keyshroud import --yes` で .env.refs を作成
 # 4. シークレットを保存 — マスクされたプロンプトに入力し、画面には表示されない
 keyshroud add --env GH_TOKEN --item "GitHub CLI token" --notes "gh for agents"
 

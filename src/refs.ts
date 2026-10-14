@@ -74,3 +74,52 @@ export function parseEnvFile(text: string): Array<{ name: string; value: string 
   });
   return out;
 }
+
+export interface DotenvEntry { line: number; name: string; value: string; exported: boolean }
+
+// Stricter than parseEnvFile, for `import`: a misread value would be stored in
+// the vault, so anything ambiguous is reported by line number (never by value)
+// instead of guessed. Values must also read back unchanged through parseEnvFile.
+export function parseDotenvStrict(text: string): { entries: DotenvEntry[]; errors: Array<{ line: number; reason: string }> } {
+  const entries: DotenvEntry[] = [];
+  const errors: Array<{ line: number; reason: string }> = [];
+  const seen = new Set<string>();
+  text.split(/\r?\n/).forEach((raw, index) => {
+    const line = index + 1;
+    const trimmed = raw.trim();
+    if (!trimmed || trimmed.startsWith("#")) return;
+    const match = /^(export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$/.exec(trimmed);
+    if (!match) { errors.push({ line, reason: "not a NAME=value line" }); return; }
+    const rest = match[3].trim();
+    let value: string;
+    if (rest.startsWith("'") || rest.startsWith('"')) {
+      const end = rest.indexOf(rest[0], 1);
+      if (end < 0) { errors.push({ line, reason: "unterminated quote (multiline values are not supported)" }); return; }
+      const after = rest.slice(end + 1).trim();
+      if (after && !/^#/.test(after)) { errors.push({ line, reason: "text after the closing quote" }); return; }
+      if (after && end + 1 === rest.indexOf("#", end)) { errors.push({ line, reason: "comment must be separated from the closing quote by a space" }); return; }
+      value = rest.slice(1, end);
+      if (rest[0] === '"' && /[\\$]/.test(value)) { errors.push({ line, reason: "escape sequence or $ expansion inside double quotes" }); return; }
+    } else {
+      value = rest.replace(/\s+#.*$/, "");
+      if (value.includes("${")) { errors.push({ line, reason: "${} expansion" }); return; }
+    }
+    if (value.startsWith("!")) { errors.push({ line, reason: "value starts with '!' (env files cannot run commands)" }); return; }
+    if (seen.has(match[2])) { errors.push({ line, reason: `duplicate key ${match[2]}` }); return; }
+    seen.add(match[2]);
+    entries.push({ line, name: match[2], value, exported: Boolean(match[1]) });
+  });
+  return { entries, errors };
+}
+
+const SECRET_NAME_RE = /(SECRET|TOKEN|PASSW(?:OR)?D|PASSPHRASE|PWD|(?:^|_)KEY(?:$|_)|APIKEY|PRIVATE|CREDENTIAL|AUTH|DSN|WEBHOOK|COOKIE|SIGNING|ENCRYPT|SALT)/i;
+const SECRET_VALUE_RE = /^(?:gh[pousr]_|github_pat_|glpat-|xox[abprs]-|sk-|sk_(?:live|test)_|rk_(?:live|test)_|whsec_|AKIA|ASIA|AIza|npm_|hf_|ya29\.|eyJ)/;
+const URL_PASSWORD_RE = /^[a-z][a-z0-9+.-]*:\/\/[^\s:@/]+:[^\s@/]+@/i;
+
+// Local heuristic for `import`: never sends anything anywhere. Names that say
+// PUBLIC (NEXT_PUBLIC_*, VITE_PUBLIC_*) are meant to ship to browsers.
+export function looksSecret(name: string, value: string): boolean {
+  if (!value || isRef(value) || /PUBLIC/i.test(name)) return false;
+  if (SECRET_VALUE_RE.test(value) || URL_PASSWORD_RE.test(value) || SECRET_NAME_RE.test(name)) return true;
+  return value.length >= 24 && !/\s/.test(value) && /[a-z]/.test(value) && /[A-Z]/.test(value) && /\d/.test(value);
+}

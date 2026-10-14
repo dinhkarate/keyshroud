@@ -86,6 +86,7 @@ security add-generic-password -a "$USER" -s vaultwarden-master-password -w      
 # 3. 检查所有配置
 keyshroud doctor
 
+# 已有 .env？先 `keyshroud import`（预演，只列名称），再 `keyshroud import --yes` → .env.refs
 # 4. 存入一个密钥 —— 在遮蔽的提示符中输入，不会回显
 keyshroud add --env GH_TOKEN --item "GitHub CLI token" --notes "gh for agents"
 
