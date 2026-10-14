@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-import { chmod, copyFile, mkdir, lstat, readdir, readFile, readlink, symlink, unlink, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, lstat, readdir, readFile, readlink, rename, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import { constants, homedir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { join, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import process from "node:process";
 import { BRAND } from "./brand.ts";
@@ -10,7 +10,7 @@ import * as core from "./core.ts";
 import { runClaudeHook } from "./hooks.ts";
 import { serveMcp } from "./mcp.ts";
 import { buildRedactIndex, compileRedactIndex, createRedactor, createRedactStream, type RedactIndex } from "./redact.ts";
-import { ENV_NAME_RE, parseRef } from "./refs.ts";
+import { ENV_NAME_RE, isRef, looksSecret, parseDotenvStrict, parseRef, type DotenvEntry } from "./refs.ts";
 
 const usage = `Usage: ${BRAND.bin} <command> [options]
 
@@ -23,6 +23,9 @@ Secrets
   scan [paths...]                  Find vault secret values in files (exit 1 on leaks)
   env [--shell]                    List wired names (or print shell exports)
   add --env NAME --item ITEM [--notes TEXT] [--target pi|omp|both] [--stdin]
+  import [--from F|-] [--out F] [--prefix P] [--only A,B] [--skip A,B] [--yes] [--replace] [--force]
+                                   Move secrets from a .env into the vault and write .env.refs
+                                   (dry run unless --yes; prints names only)
   rotate --item ITEM [--stdin]
   wire --env NAME --item ITEM [--target pi|omp|both] [--force]
   unwire --env NAME [--target pi|omp|both]
@@ -171,6 +174,90 @@ async function scan(paths: string[]): Promise<void> {
   if (leaks) process.exitCode = 1;
 }
 
+interface ImportRow { entry: DotenvEntry; kind: "new" | "reuse" | "conflict" | "literal" | "ref"; item?: string; note?: string }
+
+async function importCommand(args: string[]): Promise<void> {
+  requireKnownFlags(args, ["--from", "--out", "--prefix", "--only", "--skip"], ["--yes", "--replace", "--force"]);
+  const from = valueAfter(args, "--from") ?? ".env";
+  const yes = args.includes("--yes"); const replace = args.includes("--replace");
+  if (replace && (from === "-" || valueAfter(args, "--out"))) fail("--replace rewrites the --from file; it cannot be combined with stdin or --out", 2);
+  if (from === "-" && process.stdin.isTTY) fail("--from - needs the .env piped on stdin", 2);
+  const baseDir = from === "-" ? process.cwd() : dirname(resolve(from));
+  const out = replace ? resolve(from) : resolve(valueAfter(args, "--out") ?? join(baseDir, ".env.refs"));
+  const prefix = valueAfter(args, "--prefix") ?? basename(baseDir);
+  if (!/^[A-Za-z0-9._-]+$/.test(prefix)) fail("--prefix may contain only letters, digits, '.', '_' and '-' (set it with --prefix)", 2);
+  const list = (flag: string) => (valueAfter(args, flag) ?? "").split(",").map((name) => name.trim()).filter(Boolean);
+  const only = list("--only"); const skip = list("--skip");
+
+  let text: string;
+  try { text = from === "-" ? await readStdin() : await readFile(from, "utf8"); } catch { fail(`Cannot read ${from}`, 2); }
+  const { entries, errors } = parseDotenvStrict(text);
+  if (errors.length) {
+    for (const error of errors) console.error(`${from}:${error.line} ${error.reason}`);
+    fail(`${errors.length} line(s) cannot be imported safely; fix them or move them out of the file`, 2);
+  }
+  for (const name of [...only, ...skip]) if (!entries.some((entry) => entry.name === name)) fail(`--only/--skip name not in ${from}: ${name}`, 2);
+
+  await core.ensureSession();
+  const existing = await core.findItems(prefix);
+  const rows: ImportRow[] = [];
+  for (const entry of entries) {
+    if (isRef(entry.value)) { rows.push({ entry, kind: "ref" }); continue; }
+    const secret = (only.length ? only.includes(entry.name) : looksSecret(entry.name, entry.value)) && !skip.includes(entry.name);
+    if (!secret) { rows.push({ entry, kind: "literal" }); continue; }
+    const item = `${prefix} ${entry.name}`;
+    const matches = existing.filter((candidate) => candidate.name.toLowerCase() === item.toLowerCase());
+    if (matches.length > 1) { rows.push({ entry, item, kind: "conflict", note: "more than one vault item has this name" }); continue; }
+    if (matches.length === 0) { rows.push({ entry, item, kind: "new" }); continue; }
+    const current = await core.resolveRef({ item: matches[0].id, field: "password" });
+    rows.push(current === entry.value
+      ? { entry, item, kind: "reuse", note: "same value already in the vault" }
+      : { entry, item, kind: "conflict", note: "vault item exists with a different value" });
+  }
+
+  const width = Math.max(4, ...rows.map((row) => row.entry.name.length));
+  console.log(`import plan for ${from} (item prefix "${prefix}")`);
+  for (const row of rows) {
+    const label = row.kind === "literal" ? "literal   kept" : row.kind === "ref" ? "reference kept"
+      : row.kind === "conflict" ? `secret    conflict: ${row.note} ("${row.item}")`
+      : `secret    ${row.kind.padEnd(8)} -> bw://${row.item}${row.note ? `  (${row.note})` : ""}`;
+    const short = row.item && row.entry.value.length < 6 ? "  [under 6 characters: stored, but too short to be masked]" : "";
+    console.log(`  ${row.entry.name.padEnd(width)}  ${label}${short}`);
+  }
+  const count = (kind: ImportRow["kind"]) => rows.filter((row) => row.kind === kind).length;
+  const toStore = rows.filter((row) => row.kind === "new" || row.kind === "reuse");
+  console.log(`${toStore.length + count("conflict")} secret(s): ${count("new")} new, ${count("reuse")} already in the vault, ${count("conflict")} conflict(s); ${count("literal")} literal(s), ${count("ref")} reference(s)`);
+  if (count("conflict")) fail("Resolve the conflicts (choose another --prefix, or rename the vault items) before importing", 5);
+  if (!toStore.length) { console.log("Nothing to import."); return; }
+  const outExists = await stat(out).then(() => true, () => false);
+  if (outExists && !replace && !args.includes("--force")) fail(`${out} already exists; use --force to overwrite it`, 5);
+  if (!yes) { console.log(`Dry run: nothing written. Re-run with --yes to create ${count("new")} item(s) and write ${out}`); return; }
+
+  const created: string[] = [];
+  for (const row of rows) {
+    if (row.kind !== "new") continue;
+    try { await core.createSecretItem({ itemName: row.item!, secret: row.entry.value, envName: row.entry.name, notes: `Imported by ${BRAND.bin} from ${basename(from === "-" ? "stdin" : from)}` }); }
+    catch { if (created.length) console.error(`Created before the failure: ${created.join(", ")}`); fail(`Failed to create the vault item for ${row.entry.name}; nothing was written to ${out}`, 3); }
+    created.push(row.entry.name);
+  }
+  for (const row of toStore) {
+    let value: string | null = null;
+    try { value = await core.resolveRef({ item: row.item!, field: "password" }); } catch {}
+    if (value !== row.entry.value) fail(`Verification failed for ${row.entry.name}: the vault does not return the imported value; nothing was written to ${out}`, 4);
+  }
+
+  const eol = text.includes("\r\n") ? "\r\n" : "\n";
+  const lines = text.split(/\r?\n/);
+  for (const row of toStore) lines[row.entry.line - 1] = `${row.entry.exported ? "export " : ""}${row.entry.name}=bw://${row.item}`;
+  const mode = replace ? (await stat(out)).mode & 0o777 : 0o644;
+  const tmp = `${out}.tmp.${process.pid}`;
+  await writeFile(tmp, lines.join(eol), { mode });
+  await rename(tmp, out);
+  await core.audit("import", toStore.map((row) => row.entry.name), "cli");
+  console.log(`imported ${toStore.length} secret(s) (${created.length} new); wrote ${out}`);
+  if (!replace && from !== "-") console.log(`${from} still holds the plaintext values. Check with \`${BRAND.bin} run --env-file ${relative(process.cwd(), out) || out} -- <cmd>\`, then delete it or re-run with --replace.`);
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2); const command = args.shift();
   if (!command || command === "--help" || command === "-h" || command === "help") { console.log(usage); if (!command) process.exitCode = 2; return; }
@@ -241,6 +328,7 @@ async function main(): Promise<void> {
       if (conflict) { console.error("Item created, but one or more auth targets already contained the environment name."); process.exitCode = 5; }
       return;
     }
+    if (command === "import") { await importCommand(args); return; }
     if (command === "rotate") {
       requireKnownFlags(args, ["--item"], ["--stdin"]);
       const itemName = valueAfter(args, "--item"); if (!itemName) fail(usage, 2);

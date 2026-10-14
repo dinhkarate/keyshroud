@@ -82,9 +82,9 @@ webhooks, databases. The usual options are bad:
 
 ## Use cases
 
-**"Claude Code keeps reading my `.env`."** Move the values into the vault, commit a
-`.env.refs` file with `GH_TOKEN=bw://GitHub CLI token`, and start the agent with
-`keyshroud run -- claude`. The plugin's hooks mask anything that still slips into a tool result.
+**"Claude Code keeps reading my `.env`."** Run `keyshroud import` to move the values into
+the vault and write a `.env.refs` file with lines like `GH_TOKEN=bw://myapp GH_TOKEN`, then start
+the agent with `keyshroud run --env-file .env.refs -- claude`. The plugin's hooks mask anything that still slips into a tool result.
 
 **"I already self-host Vaultwarden."** Point `bw` at it, run `keyshroud doctor`, and you
 are done — keyshroud adds no server of its own.
@@ -269,6 +269,7 @@ keyshroud redact < log.txt
 keyshroud scan [paths...]
 keyshroud env [--shell]
 keyshroud add --env NAME --item ITEM [--notes TEXT] [--target pi|omp|both] [--stdin]
+keyshroud import [--from F|-] [--out F] [--prefix P] [--only A,B] [--skip A,B] [--yes] [--replace] [--force]
 keyshroud rotate --item ITEM [--stdin]
 keyshroud wire --env NAME --item ITEM [--target pi|omp|both] [--force]
 keyshroud unwire --env NAME [--target pi|omp|both]
@@ -283,6 +284,21 @@ keyshroud link-cli [--dir DIR] [--force]
 `run` masks output whenever stdout is not a terminal (agents, CI, pipes) and
 passes the TTY through untouched for interactive use. Force either way with
 `--mask` / `--no-mask`. `exec` is an alias of `run`.
+
+`import` reads a `.env` (default `./.env`), decides which lines are secrets (by name, such as
+`*_TOKEN` or `*_KEY`, or by value, such as `sk-…` or a URL with a password), and prints a plan of
+names only. Nothing is written until you add `--yes`: it then creates one vault item per secret,
+named `<prefix> NAME` (prefix defaults to the directory name), reads each value back to verify it,
+and writes `.env.refs` with comments and non-secret lines kept. Re-running reuses items that already
+hold the same value and stops on a conflicting one. `--replace` rewrites the source file in place
+instead (atomically, no backup copy). Multiline values, `${VAR}` expansion and duplicate keys are
+rejected with the line number, never the value.
+
+```bash
+keyshroud import                 # dry run: which names would move
+keyshroud import --yes           # store them and write .env.refs
+keyshroud run --env-file .env.refs -- npm test
+```
 
 **Exit codes:** `0` ok · `2` usage · `3` vault locked or unavailable · `4` secret
 missing or item name ambiguous · `5` refusing to overwrite existing state.

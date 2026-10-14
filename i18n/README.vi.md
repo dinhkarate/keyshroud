@@ -86,6 +86,7 @@ security add-generic-password -a "$USER" -s vaultwarden-master-password -w      
 # 3. Kiểm tra
 keyshroud doctor
 
+# Đã có .env? `keyshroud import` (chạy thử, chỉ in tên) rồi `keyshroud import --yes` → .env.refs
 # 4. Lưu secret — gõ vào prompt có che, không hiện ra màn hình
 keyshroud add --env GH_TOKEN --item "GitHub CLI token" --notes "gh for agents"
 

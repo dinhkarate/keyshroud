@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdir, readFile, stat, symlink, utimes, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
 import { CLI, item, runCli, sandbox, writeAuth } from "./helpers.ts";
@@ -166,6 +166,107 @@ test("add stores a piped secret, wires both agents, and never prints it", async 
   }
   const again = await runCli(box, ["add", "--env", "NEW_KEY", "--item", "New key", "--stdin"], "x");
   assert.equal(again.code, 5);
+});
+
+const DOTENV = [
+  "# app config",
+  "PORT=3000",
+  "export STRIPE_SECRET_KEY=sk_test_FAKE0123456789abcd",
+  "DATABASE_URL='postgres://app:pa55-FAKE-word@db:5432/app'",
+  "NEXT_PUBLIC_SITE=https://example.test",
+  "LOG_LEVEL=debug   # verbose",
+  "SENTRY_DSN=bw://Sentry/fields/dsn",
+  "",
+].join("\n");
+const DOTENV_SECRETS = ["sk_test_FAKE0123456789abcd", "pa55-FAKE-word"];
+const noValues = (result: { stdout: string; stderr: string }) =>
+  DOTENV_SECRETS.every((value) => !result.stdout.includes(value) && !result.stderr.includes(value));
+
+test("import dry run prints a names-only plan and writes nothing", async () => {
+  const box = await wired();
+  await writeFile(join(box.dir, ".env"), DOTENV);
+  const before = (await box.vault()).items.length;
+  const plan = await runCli(box, ["import", "--prefix", "app"]);
+  assert.equal(plan.code, 0, plan.stderr);
+  assert.ok(noValues(plan));
+  assert.match(plan.stdout, /STRIPE_SECRET_KEY\s+secret\s+new\s+-> bw:\/\/app STRIPE_SECRET_KEY/);
+  assert.match(plan.stdout, /DATABASE_URL\s+secret\s+new/);
+  assert.match(plan.stdout, /PORT\s+literal\s+kept/);
+  assert.match(plan.stdout, /NEXT_PUBLIC_SITE\s+literal\s+kept/);
+  assert.match(plan.stdout, /SENTRY_DSN\s+reference kept/);
+  assert.match(plan.stdout, /Dry run: nothing written/);
+  assert.equal((await box.vault()).items.length, before);
+  await assert.rejects(stat(join(box.dir, ".env.refs")));
+});
+
+test("import --yes stores secrets, writes .env.refs that run resolves, and re-runs idempotently", async () => {
+  const box = await wired();
+  await writeFile(join(box.dir, ".env"), DOTENV);
+  const done = await runCli(box, ["import", "--prefix", "app", "--yes"]);
+  assert.equal(done.code, 0, done.stderr);
+  assert.ok(noValues(done));
+  const refs = await readFile(join(box.dir, ".env.refs"), "utf8");
+  assert.ok(DOTENV_SECRETS.every((value) => !refs.includes(value)));
+  assert.match(refs, /^export STRIPE_SECRET_KEY=bw:\/\/app STRIPE_SECRET_KEY$/m);
+  assert.match(refs, /^PORT=3000$/m);
+  assert.match(refs, /^# app config$/m);
+  assert.equal(await readFile(join(box.dir, ".env"), "utf8"), DOTENV);
+  const run = await runCli(box, ["run", "--no-mask", "--env-file", ".env.refs", "--only", "STRIPE_SECRET_KEY,DATABASE_URL,PORT", "--", "/bin/sh", "-c", "echo $STRIPE_SECRET_KEY $DATABASE_URL $PORT"]);
+  assert.equal(run.stdout, "sk_test_FAKE0123456789abcd postgres://app:pa55-FAKE-word@db:5432/app 3000\n", run.stderr);
+  const count = (await box.vault()).items.length;
+  assert.equal((await runCli(box, ["import", "--prefix", "app", "--yes"])).code, 5);
+  const again = await runCli(box, ["import", "--prefix", "app", "--yes", "--force"]);
+  assert.equal(again.code, 0, again.stderr);
+  assert.match(again.stdout, /0 new, 2 already in the vault/);
+  assert.equal((await box.vault()).items.length, count);
+});
+
+test("import refuses conflicts and ambiguous lines before writing anything", async () => {
+  const box = await sandbox([item("c1", "app STRIPE_SECRET_KEY", "sk_test_DIFFERENT00000000000")]);
+  await writeFile(join(box.dir, ".env"), DOTENV);
+  const conflict = await runCli(box, ["import", "--prefix", "app", "--yes"]);
+  assert.equal(conflict.code, 5);
+  assert.match(conflict.stdout, /STRIPE_SECRET_KEY\s+secret\s+conflict: vault item exists with a different value/);
+  assert.ok(noValues(conflict));
+  assert.equal((await box.vault()).items.length, 1);
+  await assert.rejects(stat(join(box.dir, ".env.refs")));
+  await writeFile(join(box.dir, "bad.env"), 'A_TOKEN="zqval1\nB=1\nB=2\nC_KEY="zq\\nval2"\nD=${HOME}/x\nE=!cmd\n');
+  const bad = await runCli(box, ["import", "--from", "bad.env", "--prefix", "app"]);
+  assert.equal(bad.code, 2);
+  assert.match(bad.stderr, /bad\.env:1 unterminated quote/);
+  assert.match(bad.stderr, /bad\.env:3 duplicate key B/);
+  assert.match(bad.stderr, /bad\.env:4 escape sequence/);
+  assert.match(bad.stderr, /bad\.env:5 \$\{\} expansion/);
+  assert.match(bad.stderr, /bad\.env:6 value starts with '!'/);
+  assert.ok(!bad.stderr.includes("zqval1") && !bad.stderr.includes("val2"));
+});
+
+test("import --replace rewrites the source only after verification; --only and --skip override detection", async () => {
+  const box = await wired();
+  await writeFile(join(box.dir, ".env"), DOTENV, { mode: 0o600 });
+  const done = await runCli(box, ["import", "--prefix", "app", "--skip", "DATABASE_URL", "--only", "STRIPE_SECRET_KEY,DATABASE_URL,LOG_LEVEL", "--replace", "--yes"]);
+  assert.equal(done.code, 0, done.stderr);
+  const replaced = await readFile(join(box.dir, ".env"), "utf8");
+  assert.match(replaced, /^export STRIPE_SECRET_KEY=bw:\/\/app STRIPE_SECRET_KEY$/m);
+  assert.match(replaced, /^LOG_LEVEL=bw:\/\/app LOG_LEVEL$/m);
+  assert.match(replaced, /^DATABASE_URL='postgres:/m);
+  assert.equal((await stat(join(box.dir, ".env"))).mode & 0o777, 0o600);
+  assert.deepEqual((await readdir(box.dir)).filter((name) => name.startsWith(".env")).sort(), [".env"]);
+  assert.equal((await runCli(box, ["import", "--from", "-", "--replace"], DOTENV)).code, 2);
+});
+
+test("import stops on a failed create, names what was created, and writes no output", async () => {
+  const box = await wired();
+  await writeFile(join(box.dir, ".env"), DOTENV);
+  const failed = await runCli(box, ["import", "--prefix", "app", "--yes"], undefined, { FAKE_BW_FAIL_CREATE: "app DATABASE_URL" });
+  assert.equal(failed.code, 3);
+  assert.match(failed.stderr, /Created before the failure: STRIPE_SECRET_KEY/);
+  assert.match(failed.stderr, /Failed to create the vault item for DATABASE_URL; nothing was written/);
+  assert.ok(noValues(failed));
+  await assert.rejects(stat(join(box.dir, ".env.refs")));
+  const resumed = await runCli(box, ["import", "--prefix", "app", "--yes"]);
+  assert.equal(resumed.code, 0, resumed.stderr);
+  assert.match(resumed.stdout, /1 new, 1 already in the vault/);
 });
 
 test("rotate, wire, unwire, lock", async () => {

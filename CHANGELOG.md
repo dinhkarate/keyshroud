@@ -3,6 +3,14 @@
 All notable changes are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- `keyshroud import`: moves the secrets in a `.env` into the vault and writes
+  `.env.refs`. Dry run with names only by default, `--yes` to write; values are
+  verified after storing, never printed, and `--replace` rewrites the source
+  atomically without a backup.
+
 ## [0.5.1] - 2026-10-14
 
 ### Added

@@ -35,6 +35,7 @@ else if (cmd === "get" && sub === "password") { const item = find(key); if (!ite
 else if (cmd === "get" && sub === "totp") out("123456");
 else if (cmd === "create" && sub === "item") {
   const item = JSON.parse(Buffer.from(stdin(), "base64").toString("utf8"));
+  if (item.name === process.env.FAKE_BW_FAIL_CREATE) die("Simulated create failure.");
   item.id = `id-${state.items.length + 1}`; state.items.push(item); save(); out(item);
 } else if (cmd === "edit" && sub === "item") {
   const item = JSON.parse(Buffer.from(stdin(), "base64").toString("utf8"));
