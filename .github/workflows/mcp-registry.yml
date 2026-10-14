@@ -1,0 +1,22 @@
+name: MCP Registry
+on:
+  workflow_dispatch:
+  workflow_call:
+permissions:
+  contents: read
+  id-token: write   # GitHub OIDC login for the io.github.dinhkarate/* namespace
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Verify server.json matches package.json
+        run: |
+          v=$(node -p 'require("./package.json").version')
+          test "$(node -p 'require("./server.json").version')" = "$v"
+          test "$(node -p 'require("./server.json").packages[0].version')" = "$v"
+          test "$(node -p 'require("./server.json").name')" = "$(node -p 'require("./package.json").mcpName')"
+      - name: Install mcp-publisher
+        run: curl -fsSL https://github.com/modelcontextprotocol/registry/releases/download/v1.8.1/mcp-publisher_linux_amd64.tar.gz | tar xz mcp-publisher
+      - run: ./mcp-publisher login github-oidc
+      - run: ./mcp-publisher publish
