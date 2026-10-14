@@ -19,7 +19,7 @@ và mọi giá trị đều bị che trước khi model đọc được.
 
 [🚀 Bắt đầu nhanh](#bắt-đầu-nhanh) · [🔌 Agent được hỗ trợ](#agent-được-hỗ-trợ) · [❓ Hỏi đáp](#hỏi-đáp) · [🌐 Website](https://keyshroud.dev)
 
-[🇬🇧 English](../README.md)
+[🇬🇧 English](../README.md) · [🇻🇳 Tiếng Việt](README.vi.md) · [🇨🇳 简体中文](README.zh-CN.md) · [🇯🇵 日本語](README.ja-JP.md)
 
 </div>
 
@@ -55,7 +55,7 @@ Agent cần credential để làm việc thật: `gh`, `npm publish`, CLI của 
 | **pi / omp** | `pi install npm:keyshroud` | nạp env, che `tool_result` (cả lệnh lỗi), `/secret` |
 | **Codex** | `codex mcp add keyshroud -- keyshroud mcp` | MCP tools, output đã che |
 | **Cursor, Claude Desktop, Cline, Gemini CLI** | JSON `mcpServers` | MCP tools, output đã che |
-| **OpenCode** | config `mcp` | MCP tools, output đã che |
+| **OpenCode** | `opencode mcp add keyshroud -- keyshroud mcp` | MCP tools, output đã che |
 | **Shell hoặc CI bất kỳ** | `keyshroud run -- <cmd>` | inject env + che output |
 
 ## Bắt đầu nhanh
@@ -104,7 +104,15 @@ Vì vậy mọi lệnh dùng secret nên chạy qua `keyshroud run` (hoặc `sec
 { "mcpServers": { "keyshroud": { "command": "keyshroud", "args": ["mcp"] } } }
 ```
 
-OpenCode (`opencode.json`): `"mcp": { "keyshroud": { "type": "local", "command": ["keyshroud", "mcp"] } }`.
+OpenCode: `opencode mcp add keyshroud -- keyshroud mcp`.
+
+Codex: `codex mcp add keyshroud -- keyshroud mcp`. Chế độ `codex exec` (không tương tác) từ chối lệnh MCP cần duyệt; cho phép tool của keyshroud:
+
+```toml
+# ~/.codex/config.toml
+[mcp_servers.keyshroud.tools.secrets_run]
+approval_mode = "approve"
+```
 
 Các tool: `secrets_list`, `secrets_run`, `secrets_request`, `vault_status`. Không tool nào trả về giá trị.
 

@@ -21,7 +21,7 @@ secrets stay in your own self-hosted [Vaultwarden](https://github.com/dani-garci
 
 [🚀 Quickstart](#quickstart) · [🔌 Supported agents](#supported-agents) · [⚙️ How it works](#how-it-works) · [❓ FAQ](#faq) · [🛡️ Security model](#security-model) · [🌐 Website](https://keyshroud.dev)
 
-[🇻🇳 Tiếng Việt](i18n/README.vi.md)
+[🇻🇳 Tiếng Việt](i18n/README.vi.md) · [🇨🇳 简体中文](i18n/README.zh-CN.md) · [🇯🇵 日本語](i18n/README.ja-JP.md)
 
 </div>
 
@@ -75,7 +75,7 @@ webhooks, databases. The usual options are bad:
 | **pi / omp** | [`pi install npm:keyshroud`](#pi--omp) | env hydration, `tool_result` redaction (failed calls too), `/secret` |
 | **Codex** | [`codex mcp add keyshroud -- keyshroud mcp`](#any-mcp-client) | MCP tools with masked output |
 | **Cursor, Claude Desktop, Cline, Gemini CLI** | [`mcpServers` JSON](#any-mcp-client) | MCP tools with masked output |
-| **OpenCode** | [`mcp` config](#any-mcp-client) | MCP tools with masked output |
+| **OpenCode** | [`opencode mcp add keyshroud -- keyshroud mcp`](#any-mcp-client) | MCP tools with masked output |
 | **Any shell or CI** | `keyshroud run -- <cmd>` | env injection + masked output |
 
 ## Use cases
@@ -234,8 +234,15 @@ Codex, Cursor, Claude Desktop, Cline, Gemini CLI and any other client that speak
 { "mcpServers": { "keyshroud": { "command": "keyshroud", "args": ["mcp"] } } }
 ```
 
-Codex: `codex mcp add keyshroud -- keyshroud mcp`.
-OpenCode (`opencode.json`): `"mcp": { "keyshroud": { "type": "local", "command": ["keyshroud", "mcp"] } }`.
+Codex: `codex mcp add keyshroud -- keyshroud mcp`. Non-interactive `codex exec` refuses MCP calls that need approval; allow keyshroud's tools explicitly:
+
+```toml
+# ~/.codex/config.toml
+[mcp_servers.keyshroud.tools.secrets_run]
+approval_mode = "approve"
+```
+
+OpenCode: `opencode mcp add keyshroud -- keyshroud mcp`.
 
 | Tool | Does | Returns |
 |---|---|---|
