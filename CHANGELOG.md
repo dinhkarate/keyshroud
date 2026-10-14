@@ -3,6 +3,20 @@
 All notable changes are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.1] - 2026-10-14
+
+### Added
+- `mcpName` in `package.json` and a `server.json` for the official MCP Registry
+  (`io.github.dinhkarate/keyshroud`).
+
+### Fixed
+- `bin` path written as `dist/cli.js` so `npm publish` no longer rewrites it.
+
+### Docs
+- README: supported agents table, use cases, FAQ, demo GIF; Vietnamese,
+  Simplified Chinese and Japanese translations; OpenCode v2 setup via
+  `opencode mcp add`; `approval_mode` note for non-interactive `codex exec`.
+
 ## [0.5.0] - 2026-10-13
 
 First public release, renamed from `pi-vaultwarden` to **keyshroud**.

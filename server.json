@@ -1,0 +1,28 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.dinhkarate/keyshroud",
+  "title": "keyshroud",
+  "description": "Agent-safe secrets from self-hosted Vaultwarden/Bitwarden: injected into commands, masked in output",
+  "repository": {
+    "url": "https://github.com/dinhkarate/keyshroud",
+    "source": "github"
+  },
+  "websiteUrl": "https://keyshroud.dev",
+  "version": "0.5.1",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "keyshroud",
+      "version": "0.5.1",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "mcp"
+        }
+      ]
+    }
+  ]
+}
