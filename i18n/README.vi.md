@@ -23,6 +23,8 @@ và mọi giá trị đều bị che trước khi model đọc được.
 
 </div>
 
+<p align="center"><img src="../assets/demo.gif" alt="Demo: keyshroud masks a GitHub token in command output while the command still uses it, and scan finds a key leaked into a test file" width="860"></p>
+
 ```console
 $ keyshroud run --mask -- sh -c 'echo "deploying with $GH_TOKEN"; gh api user -q .login'
 deploying with <redacted:GH_TOKEN>
