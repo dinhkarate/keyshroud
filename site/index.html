@@ -13,6 +13,24 @@
 <meta property="og:image:height" content="640">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:image" content="https://keyshroud.dev/og.png">
+<link rel="canonical" href="https://keyshroud.dev/">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "keyshroud",
+  "description": "Let AI coding agents use your API keys without ever seeing them. Self-hosted Vaultwarden/Bitwarden, masked output, MCP server, Claude Code and pi plugins.",
+  "url": "https://keyshroud.dev/",
+  "applicationCategory": "DeveloperApplication",
+  "operatingSystem": "macOS, Linux",
+  "softwareVersion": "0.5.0",
+  "license": "https://opensource.org/licenses/MIT",
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+  "downloadUrl": "https://www.npmjs.com/package/keyshroud",
+  "codeRepository": "https://github.com/dinhkarate/keyshroud",
+  "image": "https://keyshroud.dev/og.png"
+}
+</script>
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <meta name="color-scheme" content="light dark">
 <style>
@@ -77,13 +95,24 @@ h2 { font-size: 28px; letter-spacing: -0.02em; margin: 0 0 8px; }
 .card h3 { margin: 0 0 6px; font-size: 16px; }
 .card p { margin: 0; color: var(--muted); font-size: 14.5px; }
 .card code { font-size: 13px; }
-.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
-table { border-collapse: collapse; width: 100%; min-width: 560px; font-size: 14.5px; }
-th, td { text-align: left; padding: 12px 14px; border-bottom: 1px solid var(--line); }
-th { font-weight: 600; color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spacing: .04em; }
-tr:last-child td { border-bottom: 0; }
-td.us { font-weight: 600; }
-.yes { color: var(--ok); font-weight: 600; } .no { color: var(--muted); }
+.vs { display: grid; gap: 16px; grid-template-columns: 1fr; align-items: start; }
+@media (min-width: 820px) { .vs { grid-template-columns: 1.15fr 1fr 1fr; } }
+.vs .card { padding: 22px; }
+.vs .card.us { border: 2px solid var(--accent); box-shadow: 0 18px 40px -24px var(--accent); }
+.vs .tag { display: inline-block; font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
+.vs .us .tag { color: var(--accent); }
+.vs h3 { font-size: 19px; margin: 0 0 4px; }
+.vs .what { color: var(--muted); font-size: 14px; margin: 0 0 16px; }
+@media (min-width: 820px) { .vs .what { min-height: 3em; } }
+.vs ul { list-style: none; margin: 0; padding: 0; }
+.vs li { display: grid; grid-template-columns: 22px 1fr; gap: 10px; padding: 9px 0; border-top: 1px solid var(--line); font-size: 14.5px; }
+.vs li b { font-weight: 600; display: block; }
+.vs li span { color: var(--muted); font-size: 13.5px; }
+.mark { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 13px; font-weight: 700; line-height: 1; }
+.mark.y { background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok); }
+.mark.p { background: color-mix(in srgb, var(--redact) 22%, transparent); color: #b7791f; }
+.mark.n { background: color-mix(in srgb, var(--muted) 16%, transparent); color: var(--muted); }
+@media (prefers-color-scheme: dark) { .mark.p { color: var(--redact); } }
 .note { color: var(--muted); font-size: 13.5px; margin-top: 12px; }
 .threat { display: grid; gap: 16px; grid-template-columns: 1fr; }
 @media (min-width: 760px) { .threat { grid-template-columns: 1fr 1fr; } }
@@ -177,20 +206,43 @@ keyshroud doctor</code></pre>
 <section id="compare">
   <div class="wrap">
     <h2>How it compares</h2>
-    <p class="sub">There are good tools nearby. Here is where keyshroud fits.</p>
-    <div class="table-wrap">
-      <table>
-        <thead><tr><th>Tool</th><th>Self-hosted vault</th><th>Cost</th><th>Masks agent output</th><th>Agent plugins</th></tr></thead>
-        <tbody>
-          <tr><td class="us">keyshroud</td><td class="yes">Vaultwarden / Bitwarden</td><td>Free</td><td class="yes">Every tool result</td><td class="yes">Claude Code, pi, MCP</td></tr>
-          <tr><td>1Password <code>op run</code></td><td class="no">No</td><td>Paid plan</td><td class="yes">Wrapped commands</td><td class="yes">Claude Code, Cursor, MCP</td></tr>
-          <tr><td>Bitwarden MCP server</td><td class="yes">Yes</td><td>Free</td><td class="no">No: returns plaintext</td><td>MCP</td></tr>
-          <tr><td>varlock</td><td>Via plugins</td><td>Free</td><td class="yes">Log redaction</td><td class="no">Schema only</td></tr>
-          <tr><td>dotenvx</td><td class="no">Encrypted files</td><td>Free</td><td>Opt-in</td><td class="no">Recipes</td></tr>
-        </tbody>
-      </table>
+    <p class="sub">The closest tools, side by side. keyshroud is the only one that keeps values out of the model and off someone else&#8217;s cloud.</p>
+    <div class="vs">
+      <div class="card us">
+        <span class="tag">This project</span>
+        <h3>keyshroud</h3>
+        <p class="what">Your vault, masked agent output, plugins for the agents you use.</p>
+        <ul>
+          <li><i class="mark y" role="img" aria-label="Yes">&#10003;</i><div><b>Self-hosted vault</b><span>Vaultwarden or Bitwarden</span></div></li>
+          <li><i class="mark y" role="img" aria-label="Yes">&#10003;</i><div><b>Free</b><span>MIT-licensed, no account with us</span></div></li>
+          <li><i class="mark y" role="img" aria-label="Yes">&#10003;</i><div><b>Masks agent output</b><span>Every tool result, wrapped or not</span></div></li>
+          <li><i class="mark y" role="img" aria-label="Yes">&#10003;</i><div><b>Agent plugins</b><span>Claude Code, pi, MCP</span></div></li>
+        </ul>
+      </div>
+      <div class="card">
+        <span class="tag">Commercial</span>
+        <h3>1Password <code>op run</code></h3>
+        <p class="what">Polished, but your secrets live in 1Password&#8217;s cloud.</p>
+        <ul>
+          <li><i class="mark n" role="img" aria-label="No">&#10005;</i><div><b>Self-hosted vault</b><span>1Password cloud only</span></div></li>
+          <li><i class="mark n" role="img" aria-label="No">&#10005;</i><div><b>Free</b><span>Needs a paid plan</span></div></li>
+          <li><i class="mark p" role="img" aria-label="Partly">~</i><div><b>Masks agent output</b><span>Only commands wrapped in <code>op run</code></span></div></li>
+          <li><i class="mark y" role="img" aria-label="Yes">&#10003;</i><div><b>Agent plugins</b><span>Claude Code, Cursor, MCP</span></div></li>
+        </ul>
+      </div>
+      <div class="card">
+        <span class="tag">Open source</span>
+        <h3>Bitwarden MCP server</h3>
+        <p class="what">Self-hosted too, but it hands values to the model.</p>
+        <ul>
+          <li><i class="mark y" role="img" aria-label="Yes">&#10003;</i><div><b>Self-hosted vault</b><span>Vaultwarden or Bitwarden</span></div></li>
+          <li><i class="mark y" role="img" aria-label="Yes">&#10003;</i><div><b>Free</b><span>Open source</span></div></li>
+          <li><i class="mark n" role="img" aria-label="No">&#10005;</i><div><b>Masks agent output</b><span>Returns plaintext to the model</span></div></li>
+          <li><i class="mark p" role="img" aria-label="Partly">~</i><div><b>Agent plugins</b><span>MCP only</span></div></li>
+        </ul>
+      </div>
     </div>
-    <p class="note">As of 2026-10-13.</p>
+    <p class="note">Also nearby: <a href="https://github.com/dmno-dev/varlock">varlock</a> (env schemas with log redaction) and <a href="https://dotenvx.com">dotenvx</a> (encrypted <code>.env</code> files). Neither plugs into agent tool output. As of 2026-10-13.</p>
   </div>
 </section>
 
