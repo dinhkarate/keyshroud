@@ -17,7 +17,7 @@
 [![Downloads](https://img.shields.io/npm/dm/keyshroud.svg)](https://www.npmjs.com/package/keyshroud)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](../LICENSE)
 
-[🚀 クイックスタート](#クイックスタート) · [🔌 対応エージェント](#対応エージェント) · [❓ よくある質問](#よくある質問) · [🌐 Web サイト](https://keyshroud.dev)
+[🚀 クイックスタート](#クイックスタート) · [🔐 Vault のセットアップ](../examples/vaultwarden#readme) · [🔌 対応エージェント](#対応エージェント) · [❓ よくある質問](#よくある質問) · [🌐 Web サイト](https://keyshroud.dev)
 
 [🇬🇧 English](../README.md) · [🇻🇳 Tiếng Việt](README.vi.md) · [🇨🇳 简体中文](README.zh-CN.md) · [🇯🇵 日本語](README.ja-JP.md)
 
@@ -63,11 +63,17 @@ dinhkarate
 
 ## クイックスタート
 
-**必要なもの：** Node.js ≥ 22.18、Bitwarden CLI（`npm i -g @bitwarden/cli`）、Vaultwarden または Bitwarden のアカウント。
-サーバーがまだなければ、[examples/vaultwarden](../examples/vaultwarden) で `docker compose up -d` を 1 回実行するだけで、Caddy の背後（HTTPS は自動）で Vaultwarden が動きます。
+**必要なもの：** Node.js ≥ 22.18、Bitwarden CLI、そして vault。
+
+**0. vault を用意する**（どちらか一方）：
+
+- **Vaultwarden をセルフホスト**（無料、自分のサーバー）：[examples/vaultwarden](../examples/vaultwarden#readme) の手順に従います。
+  Docker Compose + Caddy で HTTPS は自動。空の VPS から `keyshroud doctor` まで、バックアップとハードニングも含みます（英語のガイド）。
+- **Bitwarden クラウド**（無料アカウント、サーバー不要）：[bitwarden.com](https://bitwarden.com) で登録し、
+  下の `bw config server` は飛ばします（EU アカウント：`bw config server https://vault.bitwarden.eu`）。
 
 ```bash
-npm install -g keyshroud
+npm install -g keyshroud @bitwarden/cli    # または：brew install bitwarden-cli
 
 # 1. bw を自分のサーバーに向けて、一度だけログインする
 bw config server https://vault.example.com

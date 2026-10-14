@@ -17,7 +17,7 @@ và mọi giá trị đều bị che trước khi model đọc được.
 [![Downloads](https://img.shields.io/npm/dm/keyshroud.svg)](https://www.npmjs.com/package/keyshroud)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](../LICENSE)
 
-[🚀 Bắt đầu nhanh](#bắt-đầu-nhanh) · [🔌 Agent được hỗ trợ](#agent-được-hỗ-trợ) · [❓ Hỏi đáp](#hỏi-đáp) · [🌐 Website](https://keyshroud.dev)
+[🚀 Bắt đầu nhanh](#bắt-đầu-nhanh) · [🔐 Cài vault](../examples/vaultwarden#readme) · [🔌 Agent được hỗ trợ](#agent-được-hỗ-trợ) · [❓ Hỏi đáp](#hỏi-đáp) · [🌐 Website](https://keyshroud.dev)
 
 [🇬🇧 English](../README.md) · [🇻🇳 Tiếng Việt](README.vi.md) · [🇨🇳 简体中文](README.zh-CN.md) · [🇯🇵 日本語](README.ja-JP.md)
 
@@ -62,11 +62,18 @@ Agent cần credential để làm việc thật: `gh`, `npm publish`, CLI của 
 
 ## Bắt đầu nhanh
 
-**Cần:** Node.js ≥ 22.18, Bitwarden CLI (`npm i -g @bitwarden/cli`), và tài khoản Vaultwarden hoặc Bitwarden.
-Chưa có server? [examples/vaultwarden](../examples/vaultwarden) chạy Vaultwarden sau Caddy (HTTPS tự động) bằng một lệnh `docker compose up -d`.
+**Cần:** Node.js ≥ 22.18, Bitwarden CLI, và một vault.
+
+**0. Chuẩn bị vault** — chọn một:
+
+- **Tự host Vaultwarden** (miễn phí, server của bạn): làm theo
+  [examples/vaultwarden](../examples/vaultwarden#readme) — Docker Compose + Caddy có HTTPS tự động,
+  từ VPS trống tới `keyshroud doctor`, kèm backup và hardening (hướng dẫn bằng tiếng Anh).
+- **Bitwarden cloud** (tài khoản miễn phí, không cần server): đăng ký ở [bitwarden.com](https://bitwarden.com)
+  và bỏ qua `bw config server` bên dưới (tài khoản EU: `bw config server https://vault.bitwarden.eu`).
 
 ```bash
-npm install -g keyshroud
+npm install -g keyshroud @bitwarden/cli    # hoặc: brew install bitwarden-cli
 
 # 1. Trỏ bw vào server và đăng nhập một lần
 bw config server https://vault.example.com

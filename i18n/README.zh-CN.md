@@ -17,7 +17,7 @@
 [![Downloads](https://img.shields.io/npm/dm/keyshroud.svg)](https://www.npmjs.com/package/keyshroud)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](../LICENSE)
 
-[🚀 快速开始](#快速开始) · [🔌 支持的 Agent](#支持的-agent) · [❓ 常见问题](#常见问题) · [🌐 网站](https://keyshroud.dev)
+[🚀 快速开始](#快速开始) · [🔐 Vault 搭建](../examples/vaultwarden#readme) · [🔌 支持的 Agent](#支持的-agent) · [❓ 常见问题](#常见问题) · [🌐 网站](https://keyshroud.dev)
 
 [🇬🇧 English](../README.md) · [🇻🇳 Tiếng Việt](README.vi.md) · [🇨🇳 简体中文](README.zh-CN.md) · [🇯🇵 日本語](README.ja-JP.md)
 
@@ -63,11 +63,17 @@ Coding agent 要做实际工作就需要凭据：`gh`、`npm publish`、云厂�
 
 ## 快速开始
 
-**环境要求：** Node.js ≥ 22.18、Bitwarden CLI（`npm i -g @bitwarden/cli`），以及一个 Vaultwarden 或 Bitwarden 账号。
-还没有服务器？[examples/vaultwarden](../examples/vaultwarden) 只需一条 `docker compose up -d`，就能把 Vaultwarden 跑在 Caddy 后面（自动 HTTPS）。
+**环境要求：** Node.js ≥ 22.18、Bitwarden CLI，以及一个 vault。
+
+**0. 准备 vault**（二选一）：
+
+- **自建 Vaultwarden**（免费，用你自己的服务器）：按 [examples/vaultwarden](../examples/vaultwarden#readme) 操作——
+  Docker Compose + Caddy 自动 HTTPS，从空白 VPS 一直到 `keyshroud doctor`，并包含备份与加固（英文指南）。
+- **Bitwarden 云**（免费账号，无需服务器）：在 [bitwarden.com](https://bitwarden.com) 注册，
+  并跳过下面的 `bw config server`（欧盟账号：`bw config server https://vault.bitwarden.eu`）。
 
 ```bash
-npm install -g keyshroud
+npm install -g keyshroud @bitwarden/cli    # 或：brew install bitwarden-cli
 
 # 1. 让 bw 指向你的服务器，并登录一次
 bw config server https://vault.example.com
