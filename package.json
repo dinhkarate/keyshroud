@@ -15,7 +15,15 @@
     "pi-package",
     "pi-extension",
     "dotenv",
-    "op-run"
+    "op-run",
+    "codex",
+    "cursor",
+    "cline",
+    "opencode",
+    "gemini-cli",
+    "api-keys",
+    "secrets-management",
+    "mcp-server"
   ],
   "license": "MIT",
   "author": "dinhkarate (https://github.com/dinhkarate)",
