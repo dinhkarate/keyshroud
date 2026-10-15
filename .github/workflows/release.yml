@@ -20,6 +20,10 @@ jobs:
         run: |
           if npm view "keyshroud@$(node -p 'require("./package.json").version')" version >/dev/null 2>&1; then
             echo "already published"; else npm publish --provenance --access public; fi
+      - name: Wait until the registry serves this version (the MCP Registry checks it)
+        run: |
+          url="https://registry.npmjs.org/keyshroud/$(node -p 'require("./package.json").version')"
+          for i in $(seq 1 40); do curl -sf -o /dev/null "$url" && exit 0; sleep 15; done; exit 1
       - run: gh release create "$GITHUB_REF_NAME" --generate-notes
         env: { GH_TOKEN: "${{ github.token }}" }
   registry:
