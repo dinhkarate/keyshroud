@@ -5,6 +5,8 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-10-15
+
 ### Added
 - `keyshroud import`: moves the secrets in a `.env` into the vault and writes
   `.env.refs`. Dry run with names only by default, `--yes` to write; values are
