@@ -20,8 +20,6 @@ jobs:
         run: |
           if npm view "keyshroud@$(node -p 'require("./package.json").version')" version >/dev/null 2>&1; then
             echo "already published"; else npm publish --provenance --access public; fi
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}   # omit once npm trusted publishing is configured
       - run: gh release create "$GITHUB_REF_NAME" --generate-notes
         env: { GH_TOKEN: "${{ github.token }}" }
   registry:
