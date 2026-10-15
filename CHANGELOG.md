@@ -5,6 +5,8 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-10-15
+
 ### Security
 Fixes from an independent audit and a multi-model review of 0.5.2.
 - The native dialog could be used by a prompt-injected agent to phish new
