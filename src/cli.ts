@@ -32,6 +32,11 @@ Secrets
   unwire --env NAME [--target pi|omp|both]
 
 Vault
+  setup --email EMAIL [--server URL] [--confirm-unlock] [--registered]
+                                   Give ${BRAND.name} its own bw login on a dedicated agent account
+  migrate [--item NAME]... [--env-file F]... [--yes]
+                                   Copy the wired items from your personal vault to that account
+                                   (dry run unless --yes; prints names only)
   status | unlock | lock | doctor
 
 Agents
@@ -196,6 +201,86 @@ async function scan(paths: string[]): Promise<void> {
 
 interface ImportRow { entry: DotenvEntry; kind: "new" | "reuse" | "conflict" | "literal" | "ref"; item?: string; note?: string }
 
+// setup: keyshroud gets its own bw login (CONFIG_DIR/bw) on a separate agent
+// account, so agents never get a session for the user's personal vault.
+async function setupCommand(args: string[]): Promise<void> {
+  requireKnownFlags(args, ["--email", "--server"], ["--confirm-unlock", "--registered"]);
+  const email = valueAfter(args, "--email");
+  if (!email || !/^[^\s@]+@[^\s@]+$/.test(email)) fail("setup needs --email for a separate agent account (not your personal one)", 2);
+  let server = valueAfter(args, "--server");
+  if (!server) { try { server = (JSON.parse(await core.bw(["status"])) as { serverUrl?: string }).serverUrl ?? undefined; } catch {} }
+  if (!server || !/^https:\/\//.test(server)) fail("setup needs --server https://… (no bw server is configured)", 2);
+  const confirm = args.includes("--confirm-unlock");
+  if (confirm && process.platform !== "darwin") fail("--confirm-unlock needs the macOS keychain; Linux secret-tool cannot ask before each read", 2);
+  core.useOwnBwLogin();
+  await mkdir(core.OWN_BW_DIR, { recursive: true, mode: 0o700 });
+  const status = JSON.parse(await core.bw(["status"]).catch(() => "{}")) as { status?: string; userEmail?: string };
+  if (status.userEmail && status.userEmail.toLowerCase() !== email.toLowerCase()) fail(`${BRAND.name}'s bw login already belongs to ${status.userEmail}; remove ${core.OWN_BW_DIR} to start over`, 5);
+  const loggedOut = !status.status || status.status === "unauthenticated";
+  if (loggedOut) await core.bw(["config", "server", server]);
+  await unlink(core.SESSION_FILE).catch(() => {});
+  console.log(`${BRAND.name} now keeps its own bw login in ${core.OWN_BW_DIR}; your personal bw login is untouched.`);
+  if (loggedOut && !args.includes("--registered")) {
+    const url = `${server.replace(/\/$/, "")}/#/signup?email=${encodeURIComponent(email)}`;
+    console.log(`1. Create the agent account ${email}: ${url}`);
+    console.log("   Pick a new master password, not your personal one.");
+    spawn(process.platform === "darwin" ? "open" : "xdg-open", [url], { stdio: "ignore" }).on("error", () => {});
+    process.stdout.write("   Press Enter once the account exists. ");
+    await new Promise((resolve) => process.stdin.once("data", resolve)); process.stdin.pause();
+  }
+  if (confirm || !(await core.readKeychain(core.KEYCHAIN_MASTER_SERVICE))) {
+    console.log(`2. Type the agent account's master password for the keychain entry ${core.KEYCHAIN_MASTER_SERVICE}${confirm ? " (macOS will ask before every unlock)" : ""}:`);
+    if (!(await core.storeKeychainInteractive(core.KEYCHAIN_MASTER_SERVICE, `${BRAND.name} agent account`, confirm))) fail("Could not store it (needs macOS security or Linux secret-tool)", 3);
+  }
+  const master = await core.readKeychain(core.KEYCHAIN_MASTER_SERVICE);
+  if (!master) fail(`The keychain entry ${core.KEYCHAIN_MASTER_SERVICE} is missing or access was denied`, 3);
+  if (loggedOut) await core.loginOwnAccount(email, master); else await core.ensureSession();
+  await core.audit("setup", [], "cli");
+  console.log(`ready: bw login=${email} (own). Next: \`${BRAND.bin} migrate\` copies the wired secrets from your personal vault.`);
+}
+
+// migrate: copy the items that wired names (and env files) reference from the
+// personal vault into the agent account. Same names, so references keep working.
+async function migrateCommand(args: string[]): Promise<void> {
+  requireKnownFlags(args, ["--item", "--env-file"], ["--yes"]);
+  if (!core.OWN_BW_LOGIN) fail(`Run \`${BRAND.bin} setup\` first: migrate copies items into ${BRAND.name}'s own agent account`, 2);
+  const entries = [...await core.authEnvEntries()];
+  for (const file of valuesAfter(args, "--env-file")) entries.push(...await core.envFileEntries(file));
+  const names = new Map<string, string>();
+  for (const entry of entries) { try { const ref = parseRef(entry.raw); if (ref) names.set(ref.item.toLowerCase(), ref.item); } catch {} }
+  for (const name of valuesAfter(args, "--item")) names.set(name.toLowerCase(), name);
+  await core.ensureSession();
+  const own = await core.findItems("");
+  const personal = await core.readPersonalItems();
+  type Row = { name: string; state: "copy" | "present" | "missing" | "ambiguous"; item?: Record<string, unknown> };
+  const rows: Row[] = [...names.values()].sort().map((name) => {
+    if (own.some((item) => item.name.toLowerCase() === name.toLowerCase() || item.id === name)) return { name, state: "present" };
+    const matches = personal.filter((item) => String(item.name ?? "").toLowerCase() === name.toLowerCase() || item.id === name);
+    return matches.length === 1 ? { name, state: "copy", item: matches[0] } : { name, state: matches.length ? "ambiguous" : "missing" };
+  });
+  const width = Math.max(4, ...rows.map((row) => row.name.length));
+  console.log("migrate plan (personal vault -> agent account):");
+  for (const row of rows) console.log(`  ${row.name.padEnd(width)}  ${row.state === "present" ? "already in the agent account" : row.state}`);
+  const count = (state: Row["state"]) => rows.filter((row) => row.state === state).length;
+  console.log(`${count("copy")} to copy, ${count("present")} already there, ${count("missing")} missing, ${count("ambiguous")} ambiguous`);
+  if (!args.includes("--yes")) { console.log("Dry run: nothing copied. Re-run with --yes."); return; }
+  const copied: string[] = [];
+  for (const row of rows.filter((entry) => entry.state === "copy")) {
+    try { await core.copyItemToOwnVault(row.item!); copied.push(row.name); }
+    catch { if (copied.length) console.error(`Copied before the failure: ${copied.join(", ")}`); fail(`Failed to copy ${row.name}`, 3); }
+  }
+  await core.syncOwnVault();
+  const after = await core.findItems("");
+  const unverified = copied.filter((name) => !after.some((item) => item.name.toLowerCase() === name.toLowerCase()));
+  await core.audit("migrate", copied, "cli");
+  await core.refreshRedactIndex();
+  console.log(`copied ${copied.length} item(s) into the agent account; references are unchanged.`);
+  const cut = process.platform === "darwin" ? `security delete-generic-password -s ${core.PERSONAL_KEYCHAIN_MASTER_SERVICE}` : `secret-tool clear service ${core.PERSONAL_KEYCHAIN_MASTER_SERVICE} account "$USER"`;
+  console.log(`Your personal master password is still in the keychain, where any program running as you can read it. Once you no longer need it there: ${cut}`);
+  if (unverified.length) fail(`Not found after copying: ${unverified.join(", ")}`, 4);
+  if (count("missing") || count("ambiguous")) process.exitCode = 4;
+}
+
 async function importCommand(args: string[]): Promise<void> {
   requireKnownFlags(args, ["--from", "--out", "--prefix", "--only", "--skip"], ["--yes", "--replace", "--force"]);
   const from = valueAfter(args, "--from") ?? ".env";
@@ -353,6 +438,8 @@ async function main(): Promise<void> {
       return;
     }
     if (command === "import") { await importCommand(args); return; }
+    if (command === "setup") { await setupCommand(args); return; }
+    if (command === "migrate") { await migrateCommand(args); return; }
     if (command === "rotate") {
       requireKnownFlags(args, ["--item"], ["--stdin", "--dialog"]);
       const itemName = valueAfter(args, "--item"); if (!itemName) fail(usage, 2);
@@ -402,7 +489,7 @@ async function main(): Promise<void> {
     if (command === "doctor") {
       requireKnownFlags(args, []);
       try { await core.ensureSession(); } catch {}
-      const s = await core.getStatus(); console.log(`bw version=${s.version ?? "missing (install @bitwarden/cli)"}`); console.log(`bw server=${s.serverUrl ?? "unconfigured (run: bw config server <url>)"}`); console.log(`session=${s.status}`);
+      const s = await core.getStatus(); console.log(`bw login=${core.OWN_BW_LOGIN ? `own agent account (${core.OWN_BW_DIR})` : `shared with your personal bw (run: ${BRAND.bin} setup)`}`); console.log(`bw version=${s.version ?? "missing (install @bitwarden/cli)"}`); console.log(`bw server=${s.serverUrl ?? "unconfigured (run: bw config server <url>)"}`); console.log(`session=${s.status}`);
       for (const [service, present] of Object.entries(await core.keychainPresence())) console.log(`keychain ${service}=${present ? "present" : "missing"}`);
       for (const path of [targetPaths.omp, targetPaths.pi]) for (const name of Object.keys(await core.readAuthEntries(path))) console.log(`${path} ${name} resolved=${(await authValue(name)) ? "yes" : "no"}`);
       console.log(`redact index=${(await core.readRedactIndex()) ? "present" : "missing"}`);

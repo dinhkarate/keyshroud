@@ -1,15 +1,19 @@
 #!/usr/bin/env node
-// Fake Bitwarden CLI for tests. State lives in $FAKE_BW_VAULT (JSON); every
-// invocation is appended to $FAKE_BW_LOG so tests can count spawns.
+// Fake Bitwarden CLI for tests. State lives in $FAKE_BW_VAULT (JSON), or in
+// $BITWARDENCLI_APPDATA_DIR/fake-vault.json for a separate login (an account
+// with its own "password" and "session"); every invocation is appended to
+// $FAKE_BW_LOG so tests can count spawns.
 import fs from "node:fs";
-const vaultPath = process.env.FAKE_BW_VAULT;
+const appdata = process.env.BITWARDENCLI_APPDATA_DIR;
+const vaultPath = appdata ? `${appdata}/fake-vault.json` : process.env.FAKE_BW_VAULT;
 const args = process.argv.slice(2);
-if (process.env.FAKE_BW_LOG) fs.appendFileSync(process.env.FAKE_BW_LOG, `${args.join(" ")}\n`);
-const state = JSON.parse(fs.readFileSync(vaultPath, "utf8"));
+if (process.env.FAKE_BW_LOG) fs.appendFileSync(process.env.FAKE_BW_LOG, `${appdata ? "[own] " : ""}${args.join(" ")}\n`);
+const state = fs.existsSync(vaultPath) ? JSON.parse(fs.readFileSync(vaultPath, "utf8")) : { status: "unauthenticated", items: [] };
 const save = () => fs.writeFileSync(vaultPath, JSON.stringify(state));
 const out = (value) => process.stdout.write(typeof value === "string" ? value : JSON.stringify(value));
 const die = (message) => { process.stderr.write(message); process.exit(1); };
-const unlocked = () => state.status === "unlocked" && process.env.BW_SESSION === "fake-session";
+const session = state.session ?? "fake-session";
+const unlocked = () => state.status === "unlocked" && process.env.BW_SESSION === session;
 const find = (key) => {
   const byId = state.items.filter((item) => item.id === key);
   if (byId.length) return byId[0];
@@ -21,9 +25,14 @@ const find = (key) => {
 const stdin = () => { try { return fs.readFileSync(0, "utf8"); } catch { return ""; } };
 const [cmd, sub, key] = args;
 if (cmd === "--version") out("2026.1.0\n");
-else if (cmd === "status") out({ serverUrl: "https://vault.example.test", status: unlocked() ? "unlocked" : state.status === "unauthenticated" ? "unauthenticated" : "locked" });
-else if (cmd === "unlock") { if (process.env.BW_PASSWORD !== "master") die("Invalid master password."); state.status = "unlocked"; save(); out("fake-session"); }
-else if (cmd === "login") { state.status = "locked"; save(); out("logged in"); }
+else if (cmd === "status") out({ serverUrl: state.server ?? "https://vault.example.test", ...(state.email ? { userEmail: state.email } : {}), status: unlocked() ? "unlocked" : state.status === "unauthenticated" ? "unauthenticated" : "locked" });
+else if (cmd === "config" && sub === "server") { fs.mkdirSync(appdata, { recursive: true }); fs.writeFileSync(`${appdata}/data.json`, "{}"); state.server = key; save(); out("Saved setting `config`."); }
+else if (cmd === "unlock") { if (process.env.BW_PASSWORD !== (state.password ?? "master")) die("Invalid master password."); state.status = "unlocked"; save(); out(session); }
+else if (cmd === "login" && sub === "--apikey") { state.status = "locked"; save(); out("logged in"); }
+else if (cmd === "login") {
+  if (state.registered !== sub || process.env.BW_PASSWORD !== state.password) die("Username or password is incorrect. Try again.");
+  state.email = sub; state.status = "unlocked"; save(); out(session);
+}
 else if (cmd === "sync") out("");
 else if (cmd === "lock") { state.status = "locked"; save(); out("Your vault is locked."); }
 else if (!unlocked()) die("Vault is locked.");

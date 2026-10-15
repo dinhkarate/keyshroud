@@ -78,3 +78,6 @@ keyshroud scan .          # exits 1 and lists file:line NAME for any leaked valu
 `0` ok · `2` usage · `3` vault locked/unavailable (ask the user to run
 `keyshroud unlock`) · `4` secret missing or item name ambiguous · `5` would
 overwrite existing state.
+
+`setup` and `migrate` are for the user: they touch the personal vault. If an item
+is missing after `setup`, ask the user to run `keyshroud migrate --item "NAME"`.

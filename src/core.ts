@@ -1,7 +1,8 @@
 // Runtime-neutral core: no pi/omp/Claude Code imports. Every caller (agent
 // extensions, CLI, MCP server, hooks) goes through these functions.
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { existsSync } from "node:fs";
 import { appendFile, chmod, mkdir, readFile, realpath, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
@@ -21,9 +22,25 @@ export const SESSION_FILE = join(CONFIG_DIR, "session");
 export const MASTER_PASSWORD_FILE = join(CONFIG_DIR, "master-password");
 export const REDACT_INDEX_FILE = join(CONFIG_DIR, "redact-index.json");
 export const AUDIT_FILE = join(CONFIG_DIR, "audit.jsonl");
-export const KEYCHAIN_MASTER_SERVICE = setting("KEYCHAIN_MASTER") ?? "vaultwarden-master-password";
-export const KEYCHAIN_CLIENT_ID_SERVICE = setting("KEYCHAIN_CLIENT_ID") ?? "vaultwarden-api-client-id";
-export const KEYCHAIN_CLIENT_SECRET_SERVICE = setting("KEYCHAIN_CLIENT_SECRET") ?? "vaultwarden-api-client-secret";
+
+// After `setup`, keyshroud keeps its own bw login (a dedicated agent account) in
+// CONFIG_DIR/bw, with its own keychain entries, so the user's personal bw login
+// and vault are never unlocked. Without it, keyshroud shares the default bw login.
+export const OWN_BW_DIR = join(CONFIG_DIR, "bw");
+export const PERSONAL_KEYCHAIN_MASTER_SERVICE = setting("PERSONAL_KEYCHAIN_MASTER") ?? "vaultwarden-master-password";
+export let OWN_BW_LOGIN = false;
+export let KEYCHAIN_MASTER_SERVICE = setting("KEYCHAIN_MASTER") ?? PERSONAL_KEYCHAIN_MASTER_SERVICE;
+export let KEYCHAIN_CLIENT_ID_SERVICE = setting("KEYCHAIN_CLIENT_ID") ?? "vaultwarden-api-client-id";
+export let KEYCHAIN_CLIENT_SECRET_SERVICE = setting("KEYCHAIN_CLIENT_SECRET") ?? "vaultwarden-api-client-secret";
+
+export function useOwnBwLogin(): void {
+  OWN_BW_LOGIN = true;
+  process.env.BITWARDENCLI_APPDATA_DIR = OWN_BW_DIR;
+  KEYCHAIN_MASTER_SERVICE = setting("KEYCHAIN_MASTER") ?? `${BRAND.bin}-master-password`;
+  KEYCHAIN_CLIENT_ID_SERVICE = setting("KEYCHAIN_CLIENT_ID") ?? `${BRAND.bin}-api-client-id`;
+  KEYCHAIN_CLIENT_SECRET_SERVICE = setting("KEYCHAIN_CLIENT_SECRET") ?? `${BRAND.bin}-api-client-secret`;
+}
+if (!process.env.BITWARDENCLI_APPDATA_DIR && existsSync(join(OWN_BW_DIR, "data.json"))) useOwnBwLogin();
 
 export const PROVIDER_KEYS: ReadonlySet<string> = new Set([
   "anthropic", "openai", "azure-openai-responses", "deepseek", "google", "mistral",
@@ -67,7 +84,7 @@ export const referenceFor = legacyRefFor;
 
 // Vault credentials never reach commands run on the agent's behalf: with the
 // session token a child could dump the whole vault, defeating `--only`.
-export const VAULT_ENV_KEYS: readonly string[] = ["BW_SESSION", "BW_PASSWORD", "BW_CLIENTID", "BW_CLIENTSECRET"];
+export const VAULT_ENV_KEYS: readonly string[] = ["BW_SESSION", "BW_PASSWORD", "BW_CLIENTID", "BW_CLIENTSECRET", "BITWARDENCLI_APPDATA_DIR"];
 
 export function childEnv(extra: Record<string, string> = {}): Record<string, string> {
   const env: Record<string, string> = {};
@@ -205,10 +222,12 @@ export async function resolveRef(ref: SecretRef): Promise<string | null> {
   }
 }
 
-async function readKeychain(service: string): Promise<string | null> {
+// The timeout leaves room for a macOS "allow access" prompt when the entry was
+// stored with `setup --confirm-unlock`; a missing entry still fails at once.
+export async function readKeychain(service: string): Promise<string | null> {
   const user = process.env.USER || process.env.LOGNAME || "";
   try {
-    const result = await runFile("security", ["find-generic-password", "-a", user, "-s", service, "-w"], { timeout: 10000, maxBuffer: 1024 * 1024 });
+    const result = await runFile("security", ["find-generic-password", "-a", user, "-s", service, "-w"], { timeout: 120000, maxBuffer: 1024 * 1024 });
     return result.stdout.trim() || null;
   } catch {}
   try {
@@ -293,6 +312,74 @@ async function ensureSessionInner(existing: string | undefined): Promise<string>
   invalidateSecretCache();
   return token;
 }
+
+// Store a keychain entry by letting the OS tool prompt for the value on the
+// user's terminal, so keyshroud never holds it in argv. `confirm` (macOS) trusts
+// no app, so every later read asks the user first.
+export async function storeKeychainInteractive(service: string, label: string, confirm: boolean): Promise<boolean> {
+  const user = process.env.USER || process.env.LOGNAME || "";
+  const attempts: Array<[string, string[]]> = process.platform === "darwin"
+    ? [["security", ["add-generic-password", "-U", "-a", user, "-s", service, "-l", label, ...(confirm ? ["-T", ""] : []), "-w"]]]
+    : [["secret-tool", ["store", `--label=${label}`, "service", service, "account", user]]];
+  // -U keeps an existing entry's access list, so an ask-every-time entry is recreated.
+  if (process.platform === "darwin" && confirm) await runFile("security", ["delete-generic-password", "-a", user, "-s", service], { timeout: 10000, maxBuffer: 1024 * 1024 }).catch(() => {});
+  for (const [command, args] of attempts) {
+    const code = await new Promise<number | null>((resolve) => {
+      const child = spawn(command, args, { stdio: "inherit" });
+      child.on("error", () => resolve(null));
+      child.on("exit", (exit) => resolve(exit));
+    });
+    if (code === 0) return true;
+  }
+  return false;
+}
+
+// `setup`: log keyshroud's own bw login in to the agent account. stdin and
+// stderr stay on the terminal so bw can ask for a two-step login code.
+export async function loginOwnAccount(email: string, master: string): Promise<string> {
+  const token = await new Promise<string>((resolve, reject) => {
+    const child = spawn("bw", ["login", email, "--passwordenv", "BW_PASSWORD", "--raw"], { env: { ...process.env, BW_PASSWORD: master }, stdio: ["inherit", "pipe", "inherit"] });
+    let out = "";
+    child.stdout.on("data", (chunk: Buffer) => { out += chunk; });
+    child.on("error", reject);
+    child.on("exit", (exit) => (exit === 0 && out.trim() ? resolve(out.trim()) : reject(new Error("bw login failed"))));
+  });
+  await writePrivateFile(SESSION_FILE, `${token}\n`);
+  process.env.BW_SESSION = token;
+  try { await bw(["sync", "--quiet"], { session: token }); } catch {}
+  invalidateSecretCache();
+  return token;
+}
+
+// `migrate`: read the items of the bw login the user had before setup (the
+// default bw data dir), then lock it again. The values stay in memory.
+export async function readPersonalItems(): Promise<Array<Record<string, unknown>>> {
+  const master = await readKeychain(PERSONAL_KEYCHAIN_MASTER_SERVICE);
+  if (!master) throw new Error(`Personal master password not in the keychain (${PERSONAL_KEYCHAIN_MASTER_SERVICE})`);
+  const env = (extra: Record<string, string>) => {
+    const out: Record<string, string> = {};
+    for (const [name, value] of Object.entries(process.env)) if (value !== undefined && !VAULT_ENV_KEYS.includes(name)) out[name] = value;
+    return { ...out, ...extra };
+  };
+  const token = (await runFile("bw", ["unlock", "--passwordenv", "BW_PASSWORD", "--raw"], { env: env({ BW_PASSWORD: master }), timeout: 30000, maxBuffer: 4 * 1024 * 1024 })).stdout.trim();
+  if (!token) throw new Error("Personal vault unlock returned no session");
+  try {
+    const parsed = JSON.parse((await runFile("bw", ["list", "items"], { env: env({ BW_SESSION: token }), timeout: 120000, maxBuffer: 256 * 1024 * 1024 })).stdout) as unknown;
+    return Array.isArray(parsed) ? parsed as Array<Record<string, unknown>> : [];
+  } finally {
+    try { await runFile("bw", ["lock"], { env: env({}), timeout: 20000, maxBuffer: 1024 * 1024 }); } catch {}
+  }
+}
+
+// A personal item as a new item for the agent account: no ids, folders,
+// organizations, history, attachments or per-item key (encrypted to the personal account).
+export async function copyItemToOwnVault(item: Record<string, unknown>): Promise<void> {
+  const copy: Record<string, unknown> = { ...item, favorite: false };
+  for (const key of ["id", "key", "object", "organizationId", "folderId", "collectionIds", "revisionDate", "creationDate", "deletedDate", "passwordHistory", "attachments"]) delete copy[key];
+  await bw(["create", "item"], { input: Buffer.from(JSON.stringify(copy), "utf8").toString("base64") });
+}
+
+export async function syncOwnVault(): Promise<void> { await bw(["sync", "--quiet"]); invalidateSecretCache(); }
 
 // Forget the cached session and lock the bw CLI. The next resolve unlocks
 // again from the keychain.
