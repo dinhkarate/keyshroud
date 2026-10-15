@@ -7,7 +7,7 @@ import process from "node:process";
 import { BRAND } from "./brand.ts";
 import * as core from "./core.ts";
 import { createRedactor } from "./redact.ts";
-import { ENV_NAME_RE } from "./refs.ts";
+import { ENV_NAME_RE, isLoaderEnvName, itemNameProblem } from "./refs.ts";
 
 const SUPPORTED_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 const OUTPUT_LIMIT = 256 * 1024;
@@ -85,13 +85,13 @@ async function runTool(args: Json): Promise<Json> {
     detached: true,
   });
   const chunks = { stdout: [] as Buffer[], stderr: [] as Buffer[] };
-  // Collect generously, mask, then truncate, so a cut never splits a secret
-  // before redaction.
-  let size = 0;
+  // Collect generously per stream, mask, then truncate. If collection stopped
+  // early, the tail may end inside a secret, so it is dropped before masking.
+  const sizes = { stdout: 0, stderr: 0 };
   for (const stream of ["stdout", "stderr"] as const) {
     child[stream].on("data", (chunk: Buffer) => {
-      if (size >= OUTPUT_LIMIT * 4) return;
-      size += chunk.length;
+      if (sizes[stream] >= OUTPUT_LIMIT * 2) return;
+      sizes[stream] += chunk.length;
       chunks[stream].push(chunk);
     });
   }
@@ -101,9 +101,11 @@ async function runTool(args: Json): Promise<Json> {
     child.on("error", (error) => done(`spawn error: ${error.message}`));
   });
   clearTimeout(timer);
-  let truncated = size >= OUTPUT_LIMIT * 4;
+  let truncated = false;
   const out = (stream: "stdout" | "stderr") => {
-    const masked = redactor.redact(Buffer.concat(chunks[stream]).toString("utf8"));
+    let raw = Buffer.concat(chunks[stream]).toString("utf8");
+    if (sizes[stream] >= OUTPUT_LIMIT * 2) { truncated = true; raw = raw.slice(0, redactor.safeCut(raw)); }
+    const masked = redactor.redact(raw);
     if (masked.length <= OUTPUT_LIMIT / 2) return masked;
     truncated = true;
     return masked.slice(0, OUTPUT_LIMIT / 2);
@@ -132,25 +134,32 @@ async function callTool(name: string, args: Json): Promise<Json> {
     const envName = String(args.env_name ?? "");
     const itemName = String(args.item_name ?? "");
     if (!ENV_NAME_RE.test(envName) || !itemName) return text("env_name must be UPPER_SNAKE_CASE and item_name is required", true);
-    const notes = typeof args.purpose === "string" && args.purpose ? args.purpose : undefined;
+    if (isLoaderEnvName(envName)) return text(`${envName} changes what programs load or run; it cannot be wired to a secret`, true);
+    const problem = itemNameProblem(itemName);
+    if (problem) return text(`item_name ${problem}`, true);
+    const notes = typeof args.purpose === "string" && args.purpose ? args.purpose.slice(0, 500) : undefined;
     try {
+      const reference = core.referenceFor(itemName);
       await core.ensureSession();
-      const secret = await core.readSecretFromDialog({ label: envName, itemName });
+      if ((await core.findItems(itemName)).some((item) => item.name.toLowerCase() === itemName.toLowerCase())) return text(`Vault item already exists: ${itemName}`, true);
+      const secret = await core.readSecretFromDialog({ itemName, envName });
       if (secret === "") return text("The user saved an empty value; nothing was stored.", true);
       if (secret !== null) {
         await core.createSecretItem({ itemName, secret, envName, notes });
-        const reference = core.referenceFor(itemName);
-        for (const path of Object.values(core.getAuthTargets())) await core.writeAuthEntry(path, envName, reference);
+        await core.audit("request", [envName], "mcp");
+        const conflicts: string[] = [];
+        for (const path of Object.values(core.getAuthTargets())) if (!(await core.writeAuthEntry(path, envName, reference)).ok) conflicts.push(path);
+        await core.refreshRedactIndex();
+        if (conflicts.length) return text(`created item=${itemName}, but ${envName} is already wired to another secret in ${conflicts.join(", ")} and was left unchanged. Ask the user before running \`${BRAND.bin} wire --env ${envName} --item ${shellQuote(itemName)} --force\`.`, true);
         const verified = (await core.resolveShellValue(reference)) !== null;
         return text(`The user entered the value in a ${BRAND.name} dialog. created item=${itemName} env=${envName} verified=${verified ? "yes" : "no"}. Use secrets_run with $${envName}.`);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (message === "Cancelled") return text("The user cancelled the dialog; nothing was stored.", true);
-      if (/already exists/.test(message)) return text(message, true);
+      return text(message === "Cancelled" ? "The user cancelled the dialog; nothing was stored." : message, true);
     }
     const purpose = notes ? ` --notes ${shellQuote(notes)}` : "";
-    return text(`Ask the user to run this in their own terminal (the value is entered in a masked prompt; it must never be pasted into the chat):\n\n  ${BRAND.bin} add --env ${envName} --item ${shellQuote(itemName)}${purpose}\n\nAfter it reports verified=yes, use secrets_run with $${envName}.`);
+    return text(`No dialog can be shown here. Ask the user to run this in their own terminal (the value is entered in a masked prompt; it must never be pasted into the chat):\n\n  ${BRAND.bin} add --env ${envName} --item ${shellQuote(itemName)}${purpose}\n\nAfter it reports verified=yes, use secrets_run with $${envName}.`);
   }
   if (name === "vault_status") {
     try { await core.ensureSession(); } catch {}

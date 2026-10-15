@@ -17,8 +17,9 @@ in output with `<redacted:NAME>`.
    ```bash
    keyshroud add --env STRIPE_API_KEY --item "Stripe API key" --notes "billing service"
    ```
-   Tell the user a dialog is waiting for them. With the MCP server, call
-   `secrets_request` instead. Over SSH or without a display there is no dialog:
+   Tell the user a dialog is waiting for them, and ask for one secret at a time;
+   if they cancel, do not ask again unprompted. Never ask for the vault master
+   password. With the MCP server, call `secrets_request` instead. Over SSH or without a display there is no dialog:
    then give the user the command to run in their own terminal.
 2. Never print, echo, `cat`, base64, or otherwise transform a secret value.
    `<redacted:NAME>` in output means the secret was used correctly. Do not try

@@ -5,6 +5,34 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+### Security
+Fixes from an independent audit and a multi-model review of 0.5.2.
+- The native dialog could be used by a prompt-injected agent to phish new
+  secrets, including the vault master password. It now says a program asked for
+  it and warns against the master password, refuses multi-line, control or bidi
+  characters and names over 120 characters, refuses a value equal to the master
+  password, opens one at a time with a 30 s pause after a cancel, and is audited.
+  zenity runs with `--no-markup`.
+- Env files could set `PATH`, `NODE_OPTIONS`, `LD_PRELOAD` and other loader
+  variables, so a cloned repo's `.env.refs` could run code. They are rejected
+  in env files, refused by `add`/`wire`/`secrets_request`, and never injected.
+- Streaming redaction leaked most of a secret longer than 4096 characters.
+- `secrets_run` could return a partial secret when output hit the collection
+  limit; the cut tail is now dropped before masking, with per-stream budgets.
+- `import` missed `*_PASS`, URL passwords with no username, hex keys, and known
+  key formats in names containing `PUBLIC`; `.env.refs` is now written `0600`.
+- `inject -o` replaces a planted symlink instead of writing through it; temp
+  files use random names and exclusive creation.
+
+### Changed
+- `add`/`rotate` read stdin only with `--stdin`; a multi-line paste into the
+  `*` prompt is drained and refused instead of reaching the shell.
+- `secrets_request` checks names and existing items before opening the dialog,
+  reports auth.json conflicts instead of claiming success, and returns errors.
+- Item names with leading or trailing spaces are refused (they shadowed
+  existing items). `add`, `rotate` and `secrets_request` refresh the redact
+  index and write to the audit log.
+
 ## [0.5.2] - 2026-10-15
 
 ### Added

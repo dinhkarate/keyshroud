@@ -4,13 +4,14 @@ import { constants, homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import process from "node:process";
 import { BRAND } from "./brand.ts";
 import * as core from "./core.ts";
 import { runClaudeHook } from "./hooks.ts";
 import { serveMcp } from "./mcp.ts";
 import { buildRedactIndex, compileRedactIndex, createRedactor, createRedactStream, type RedactIndex } from "./redact.ts";
-import { ENV_NAME_RE, isRef, looksSecret, parseDotenvStrict, parseRef, type DotenvEntry } from "./refs.ts";
+import { ENV_NAME_RE, isLoaderEnvName, isRef, itemNameProblem, looksSecret, parseDotenvStrict, parseRef, type DotenvEntry } from "./refs.ts";
 
 const usage = `Usage: ${BRAND.bin} <command> [options]
 
@@ -56,17 +57,20 @@ function targetList(value: string | undefined): string[] {
   if (value === "pi") return [targetPaths.pi];
   fail("--target must be omp, pi, or both", 2);
 }
-// Terminal: masked prompt. No terminal (an agent's shell) and no --stdin: a native
-// dialog, so the agent can start the command and the user only pastes.
-async function readSecret(args: string[], prompt: string, label: string, itemName: string): Promise<string> {
-  const forced = args.includes("--dialog");
-  if (forced || (!args.includes("--stdin") && !process.stdin.isTTY)) {
-    const value = await core.readSecretFromDialog({ label, itemName });
-    if (value) return value;
-    if (value === "") throw new Error("Empty secret");
-    if (forced) fail("No dialog available here (SSH or no display). Run the command in a terminal, or pipe the value with --stdin.", 2);
-  }
-  return core.readSecretFromInput({ prompt, stdin: args.includes("--stdin") });
+// --stdin: piped value. Terminal: masked prompt. Otherwise (an agent's shell):
+// a native dialog, so the agent can start the command and the user only pastes.
+async function readSecret(args: string[], prompt: string, itemName: string, envName?: string): Promise<string> {
+  if (args.includes("--stdin")) return core.readSecretFromInput({ prompt, stdin: true });
+  if (process.stdin.isTTY && !args.includes("--dialog")) return core.readSecretFromInput({ prompt, stdin: false });
+  const value = await core.readSecretFromDialog({ itemName, envName });
+  if (value) return value;
+  if (value === "") throw new Error("Empty secret");
+  fail("No terminal and no dialog here (SSH or no display). Run the command in a terminal, or pipe the value with --stdin.", 2);
+}
+function checkNames(envName: string, itemName: string): void {
+  if (isLoaderEnvName(envName)) fail(`${envName} changes what programs load or run; it cannot be wired to a secret`, 2);
+  const problem = itemNameProblem(itemName);
+  if (problem) fail(`Vault item name ${problem}`, 2);
 }
 function shellQuote(value: string): string { return `'${value.replaceAll("'", "'\\''")}'`; }
 function failureCode(error: unknown): number {
@@ -143,9 +147,13 @@ async function inject(args: string[]): Promise<void> {
   await core.audit("inject", refs, output ?? "stdout");
   const rendered = template.replace(pattern, (_match, raw: string) => values.get(raw) ?? "");
   if (!output) { process.stdout.write(rendered); return; }
-  try { await readFile(output); if (!args.includes("--force")) fail(`Refusing to overwrite ${output}; use --force`, 5); } catch {}
-  await writeFile(output, rendered, { mode: 0o600 });
-  await chmod(output, 0o600);
+  // lstat, and a private temp file renamed over the target, so a planted
+  // symlink (even a dangling one) is replaced instead of followed.
+  const exists = await lstat(output).then(() => true, () => false);
+  if (exists && !args.includes("--force")) fail(`Refusing to overwrite ${output}; use --force`, 5);
+  const tmp = join(dirname(resolve(output)), `.${basename(output)}.tmp.${randomBytes(6).toString("hex")}`);
+  await writeFile(tmp, rendered, { mode: 0o600, flag: "wx" });
+  await rename(tmp, output);
   console.error(`rendered ${refs.length} reference(s) into ${output} (mode 0600)`);
 }
 
@@ -261,9 +269,9 @@ async function importCommand(args: string[]): Promise<void> {
   const eol = text.includes("\r\n") ? "\r\n" : "\n";
   const lines = text.split(/\r?\n/);
   for (const row of toStore) lines[row.entry.line - 1] = `${row.entry.exported ? "export " : ""}${row.entry.name}=bw://${row.item}`;
-  const mode = replace ? (await stat(out)).mode & 0o777 : 0o644;
-  const tmp = `${out}.tmp.${process.pid}`;
-  await writeFile(tmp, lines.join(eol), { mode });
+  const mode = replace ? (await stat(out)).mode & 0o777 : 0o600;
+  const tmp = `${out}.tmp.${randomBytes(6).toString("hex")}`;
+  await writeFile(tmp, lines.join(eol), { mode, flag: "wx" });
   await rename(tmp, out);
   await core.audit("import", toStore.map((row) => row.entry.name), "cli");
   console.log(`imported ${toStore.length} secret(s) (${created.length} new); wrote ${out}`);
@@ -328,14 +336,18 @@ async function main(): Promise<void> {
       requireKnownFlags(args, ["--env", "--item", "--notes", "--target"], ["--stdin", "--dialog"]);
       const envName = valueAfter(args, "--env"); const itemName = valueAfter(args, "--item"); const notes = valueAfter(args, "--notes");
       if (!envName || !itemName || !ENV_NAME_RE.test(envName)) fail(usage, 2);
+      checkNames(envName, itemName);
       const reference = core.referenceFor(itemName);
       const targets = targetList(valueAfter(args, "--target"));
       await core.ensureSession();
-      const secret = await readSecret(args, `Paste secret for ${envName}: `, envName, itemName);
+      if ((await core.findItems(itemName)).some((item) => item.name.toLowerCase() === itemName.toLowerCase())) fail(`Vault item already exists: ${itemName}`, 5);
+      const secret = await readSecret(args, `Paste secret for ${envName}: `, itemName, envName);
       await core.createSecretItem({ itemName, secret, envName, notes });
+      await core.audit("add", [envName], "cli");
       let conflict = false;
       for (const path of targets) { const result = await core.writeAuthEntry(path, envName, reference); if (!result.ok) conflict = true; }
       const verified = (await core.resolveShellValue(reference)) !== null;
+      await core.refreshRedactIndex();
       console.log(`created item=${itemName} env=${envName} targets=${targets.join(",")} verified=${verified ? "yes" : "no"}`);
       if (conflict) { console.error("Item created, but one or more auth targets already contained the environment name."); process.exitCode = 5; }
       return;
@@ -344,13 +356,15 @@ async function main(): Promise<void> {
     if (command === "rotate") {
       requireKnownFlags(args, ["--item"], ["--stdin", "--dialog"]);
       const itemName = valueAfter(args, "--item"); if (!itemName) fail(usage, 2);
-      await core.ensureSession(); const secret = await readSecret(args, "Paste replacement secret: ", `the new value of ${itemName}`, itemName);
-      await core.rotateSecretItem({ itemName, secret }); console.log(`rotated item=${itemName}`); return;
+      await core.ensureSession(); const secret = await readSecret(args, "Paste replacement secret: ", itemName);
+      await core.rotateSecretItem({ itemName, secret }); await core.audit("rotate", [itemName], "cli"); await core.refreshRedactIndex();
+      console.log(`rotated item=${itemName}`); return;
     }
     if (command === "wire") {
       requireKnownFlags(args, ["--env", "--item", "--target"], ["--force"]);
       const envName = valueAfter(args, "--env"); const itemName = valueAfter(args, "--item");
       if (!envName || !itemName || !ENV_NAME_RE.test(envName)) fail(usage, 2);
+      if (isLoaderEnvName(envName)) fail(`${envName} changes what programs load or run; it cannot be wired to a secret`, 2);
       const reference = core.referenceFor(itemName);
       const targets = targetList(valueAfter(args, "--target"));
       for (const path of targets) { const result = await core.writeAuthEntry(path, envName, reference, { overwrite: args.includes("--force") }); if (!result.ok) fail(result.message, 5); }

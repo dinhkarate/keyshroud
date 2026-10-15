@@ -55,6 +55,20 @@ export function legacyRefFor(itemName: string): string {
 
 export const ENV_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
 
+// Variables that change what a child process loads or runs. Env files can come
+// from a cloned repo and agents can wire names, so neither may set these.
+const LOADER_ENV_RE = /^(?:PATH|HOME|ZDOTDIR|XDG_CONFIG_HOME|IFS|ENV|BASH_ENV|SHELLOPTS|BASHOPTS|PS4|PROMPT_COMMAND|NODE_OPTIONS|NODE_PATH|NODE_EXTRA_CA_CERTS|PYTHONPATH|PYTHONHOME|PYTHONSTARTUP|PERL5OPT|PERL5LIB|PERLLIB|RUBYOPT|RUBYLIB|JAVA_TOOL_OPTIONS|_JAVA_OPTIONS|JDK_JAVA_OPTIONS|EDITOR|VISUAL|PAGER|LESSOPEN|LESSCLOSE|BROWSER|SSH_ASKPASS|LD_\w*|DYLD_\w*|NPM_CONFIG_\w*|GIT_(?:SSH|SSH_COMMAND|EXEC_PATH|ASKPASS|EDITOR|PAGER|EXTERNAL_DIFF|PROXY_COMMAND|DIR|WORK_TREE|TEMPLATE_DIR|CONFIG\w*))$/i;
+export function isLoaderEnvName(name: string): boolean { return LOADER_ENV_RE.test(name); }
+
+// Item names appear in native dialogs and lookups: one line of printable text,
+// no padding (lookups trim, so a padded name would shadow an existing item).
+export function itemNameProblem(name: string): string | null {
+  if (!name || name !== name.trim()) return "must not be empty or start or end with spaces";
+  if (name.length > 120) return "must be at most 120 characters";
+  if (/[\p{Cc}\p{Cf}\u2028\u2029]/u.test(name)) return "must be one line of printable text";
+  return null;
+}
+
 // Parses dotenv-style files whose values may be references:
 //   GH_TOKEN=bw://GitHub CLI token
 //   export SENTRY_DSN="bw://Sentry/fields/dsn"
@@ -112,14 +126,17 @@ export function parseDotenvStrict(text: string): { entries: DotenvEntry[]; error
   return { entries, errors };
 }
 
-const SECRET_NAME_RE = /(SECRET|TOKEN|PASSW(?:OR)?D|PASSPHRASE|PWD|(?:^|_)KEY(?:$|_)|APIKEY|PRIVATE|CREDENTIAL|AUTH|DSN|WEBHOOK|COOKIE|SIGNING|ENCRYPT|SALT)/i;
+const SECRET_NAME_RE = /(SECRET|TOKEN|PASSW(?:OR)?D|PASSPHRASE|(?:^|_)PASS(?:$|_)|PWD|(?:^|_)KEY(?:$|_)|APIKEY|PRIVATE|CREDENTIAL|(?:^|_)CREDS?(?:$|_)|AUTH|JWT|DSN|WEBHOOK|COOKIE|SIGNING|ENCRYPT|SALT)/i;
 const SECRET_VALUE_RE = /^(?:gh[pousr]_|github_pat_|glpat-|xox[abprs]-|sk-|sk_(?:live|test)_|rk_(?:live|test)_|whsec_|AKIA|ASIA|AIza|npm_|hf_|ya29\.|eyJ)/;
-const URL_PASSWORD_RE = /^[a-z][a-z0-9+.-]*:\/\/[^\s:@/]+:[^\s@/]+@/i;
+const URL_PASSWORD_RE = /^[a-z][a-z0-9+.-]*:\/\/[^\s:@/]*:[^\s@/]+@/i;
 
-// Local heuristic for `import`: never sends anything anywhere. Names that say
-// PUBLIC (NEXT_PUBLIC_*, VITE_PUBLIC_*) are meant to ship to browsers.
+// Local heuristic for `import`: never sends anything anywhere. A known secret
+// format wins over the name; otherwise names with a PUBLIC segment
+// (NEXT_PUBLIC_*, VITE_PUBLIC_*) are meant to ship to browsers.
 export function looksSecret(name: string, value: string): boolean {
-  if (!value || isRef(value) || /PUBLIC/i.test(name)) return false;
-  if (SECRET_VALUE_RE.test(value) || URL_PASSWORD_RE.test(value) || SECRET_NAME_RE.test(name)) return true;
+  if (!value || isRef(value)) return false;
+  if (SECRET_VALUE_RE.test(value) || URL_PASSWORD_RE.test(value)) return true;
+  if (/(?:^|_)PUBLIC(?:$|_)/i.test(name)) return false;
+  if (SECRET_NAME_RE.test(name) || /^[0-9a-f]{32,}$/i.test(value)) return true;
   return value.length >= 24 && !/\s/.test(value) && /[a-z]/.test(value) && /[A-Z]/.test(value) && /\d/.test(value);
 }
