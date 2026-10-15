@@ -11,12 +11,15 @@ in output with `<redacted:NAME>`.
 
 ## Rules
 
-1. Never ask the user to paste a secret into the chat. To store one, give them
-   this command to run in **their own terminal** (masked prompt):
+1. Never ask the user to paste a secret into the chat. To store one, run this
+   yourself; it opens a hidden-input dialog on the user's desktop, and you only
+   see `created … verified=yes`:
    ```bash
    keyshroud add --env STRIPE_API_KEY --item "Stripe API key" --notes "billing service"
    ```
-   With the MCP server, call `secrets_request` instead; it returns the same command.
+   Tell the user a dialog is waiting for them. With the MCP server, call
+   `secrets_request` instead. Over SSH or without a display there is no dialog:
+   then give the user the command to run in their own terminal.
 2. Never print, echo, `cat`, base64, or otherwise transform a secret value.
    `<redacted:NAME>` in output means the secret was used correctly. Do not try
    to recover it.

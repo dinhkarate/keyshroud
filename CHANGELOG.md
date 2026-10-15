@@ -11,6 +11,10 @@ All notable changes are documented here. This project follows
   verified after storing, never printed, and `--replace` rewrites the source
   atomically without a backup.
 
+- `add`/`rotate` without a terminal, and the `secrets_request` MCP tool, open a
+  native hidden-input dialog (macOS `osascript`, Linux `zenity`/`kdialog`), so
+  an agent can start the command and the user only pastes. `--dialog` forces it.
+
 ### Changed
 - The `add` and `rotate` prompts echo `*` per character (a count after 24) so
   typing and pastes are visible without showing the value; Backspace, Ctrl-U

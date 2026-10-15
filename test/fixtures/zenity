@@ -1,0 +1,7 @@
+#!/bin/sh
+# Fake native dialog (osascript, zenity): FAKE_DIALOG_VALUE answers, FAKE_DIALOG_CANCEL cancels,
+# otherwise it fails like a session with no GUI. Logs the label and arguments, never a value.
+[ -n "$FAKE_DIALOG_LOG" ] && printf '%s|%s|%s\n' "$(basename "$0")" "$KEYSHROUD_DIALOG_ENV" "$*" >> "$FAKE_DIALOG_LOG"
+if [ -n "$FAKE_DIALOG_CANCEL" ]; then echo "execution error: User canceled. (-128)" >&2; exit 1; fi
+if [ -n "$FAKE_DIALOG_VALUE" ]; then printf '%s\n' "$FAKE_DIALOG_VALUE"; exit 0; fi
+echo "execution error: No user interaction allowed. (-1713)" >&2; exit 1

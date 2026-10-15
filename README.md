@@ -92,8 +92,9 @@ are done — keyshroud adds no server of its own.
 **"I like `op run` but don't want 1Password."** `keyshroud run` is the same idea —
 references in, masked output out — on a vault you host.
 
-**"My agent needs to add a new key."** It calls `secrets_request` (MCP) or `/secret` (pi);
-you type the value into a masked prompt in your own terminal. It never enters the chat.
+**"My agent needs to add a new key."** It runs `keyshroud add` or calls `secrets_request` (MCP),
+and a hidden-input dialog pops up on your desktop; in pi it is `/secret`. You paste the value
+there. It never enters the chat.
 
 ## Quickstart
 
@@ -256,7 +257,7 @@ OpenCode: `opencode mcp add keyshroud -- keyshroud mcp`.
 |---|---|---|
 | `secrets_list` | Lists wired names (+ optional `env_file`) | resolved / unresolved names |
 | `secrets_run` | Runs a shell command with secrets injected (`only`, `env_file`, `cwd`, `timeout_ms`) | exit code + masked stdout/stderr |
-| `secrets_request` | Asks the human to store a new secret | a `keyshroud add …` command for *their* terminal |
+| `secrets_request` | Opens a hidden-input dialog on the user's desktop and stores the value | `created … verified=yes`, or a `keyshroud add …` command for *their* terminal when no dialog can be shown |
 | `vault_status` | Vault lock state, server, item count | status line |
 
 ## CLI reference
@@ -268,9 +269,9 @@ keyshroud inject [-i template] [-o out] [--force]
 keyshroud redact < log.txt
 keyshroud scan [paths...]
 keyshroud env [--shell]
-keyshroud add --env NAME --item ITEM [--notes TEXT] [--target pi|omp|both] [--stdin]
+keyshroud add --env NAME --item ITEM [--notes TEXT] [--target pi|omp|both] [--stdin|--dialog]
 keyshroud import [--from F|-] [--out F] [--prefix P] [--only A,B] [--skip A,B] [--yes] [--replace] [--force]
-keyshroud rotate --item ITEM [--stdin]
+keyshroud rotate --item ITEM [--stdin|--dialog]
 keyshroud wire --env NAME --item ITEM [--target pi|omp|both] [--force]
 keyshroud unwire --env NAME [--target pi|omp|both]
 keyshroud status | unlock | lock | doctor
@@ -284,6 +285,12 @@ keyshroud link-cli [--dir DIR] [--force]
 `run` masks output whenever stdout is not a terminal (agents, CI, pipes) and
 passes the TTY through untouched for interactive use. Force either way with
 `--mask` / `--no-mask`. `exec` is an alias of `run`.
+
+`add` and `rotate` read the value from a masked prompt that shows `*` per
+character. Without a terminal (an agent's shell), they open a native hidden-input
+dialog instead (`osascript` on macOS, `zenity` or `kdialog` on Linux), so the agent
+can start the command and you only paste. Over SSH or without a display, pipe the
+value with `--stdin`.
 
 `import` reads a `.env` (default `./.env`), decides which lines are secrets (by name, such as
 `*_TOKEN` or `*_KEY`, or by value, such as `sk-…` or a URL with a password), and prints a plan of

@@ -22,11 +22,11 @@ Secrets
   redact                           Copy stdin to stdout with vault secrets masked
   scan [paths...]                  Find vault secret values in files (exit 1 on leaks)
   env [--shell]                    List wired names (or print shell exports)
-  add --env NAME --item ITEM [--notes TEXT] [--target pi|omp|both] [--stdin]
+  add --env NAME --item ITEM [--notes TEXT] [--target pi|omp|both] [--stdin|--dialog]
   import [--from F|-] [--out F] [--prefix P] [--only A,B] [--skip A,B] [--yes] [--replace] [--force]
                                    Move secrets from a .env into the vault and write .env.refs
                                    (dry run unless --yes; prints names only)
-  rotate --item ITEM [--stdin]
+  rotate --item ITEM [--stdin|--dialog]
   wire --env NAME --item ITEM [--target pi|omp|both] [--force]
   unwire --env NAME [--target pi|omp|both]
 
@@ -55,6 +55,18 @@ function targetList(value: string | undefined): string[] {
   if (value === "omp") return [targetPaths.omp];
   if (value === "pi") return [targetPaths.pi];
   fail("--target must be omp, pi, or both", 2);
+}
+// Terminal: masked prompt. No terminal (an agent's shell) and no --stdin: a native
+// dialog, so the agent can start the command and the user only pastes.
+async function readSecret(args: string[], prompt: string, label: string, itemName: string): Promise<string> {
+  const forced = args.includes("--dialog");
+  if (forced || (!args.includes("--stdin") && !process.stdin.isTTY)) {
+    const value = await core.readSecretFromDialog({ label, itemName });
+    if (value) return value;
+    if (value === "") throw new Error("Empty secret");
+    if (forced) fail("No dialog available here (SSH or no display). Run the command in a terminal, or pipe the value with --stdin.", 2);
+  }
+  return core.readSecretFromInput({ prompt, stdin: args.includes("--stdin") });
 }
 function shellQuote(value: string): string { return `'${value.replaceAll("'", "'\\''")}'`; }
 function failureCode(error: unknown): number {
@@ -313,13 +325,13 @@ async function main(): Promise<void> {
       await core.ensureSession(); process.stdout.write(await core.getSecret(item)); return;
     }
     if (command === "add") {
-      requireKnownFlags(args, ["--env", "--item", "--notes", "--target"], ["--stdin"]);
+      requireKnownFlags(args, ["--env", "--item", "--notes", "--target"], ["--stdin", "--dialog"]);
       const envName = valueAfter(args, "--env"); const itemName = valueAfter(args, "--item"); const notes = valueAfter(args, "--notes");
       if (!envName || !itemName || !ENV_NAME_RE.test(envName)) fail(usage, 2);
       const reference = core.referenceFor(itemName);
       const targets = targetList(valueAfter(args, "--target"));
       await core.ensureSession();
-      const secret = await core.readSecretFromInput({ prompt: `Paste secret for ${envName}: `, stdin: args.includes("--stdin") });
+      const secret = await readSecret(args, `Paste secret for ${envName}: `, envName, itemName);
       await core.createSecretItem({ itemName, secret, envName, notes });
       let conflict = false;
       for (const path of targets) { const result = await core.writeAuthEntry(path, envName, reference); if (!result.ok) conflict = true; }
@@ -330,9 +342,9 @@ async function main(): Promise<void> {
     }
     if (command === "import") { await importCommand(args); return; }
     if (command === "rotate") {
-      requireKnownFlags(args, ["--item"], ["--stdin"]);
+      requireKnownFlags(args, ["--item"], ["--stdin", "--dialog"]);
       const itemName = valueAfter(args, "--item"); if (!itemName) fail(usage, 2);
-      await core.ensureSession(); const secret = await core.readSecretFromInput({ prompt: "Paste replacement secret: ", stdin: args.includes("--stdin") });
+      await core.ensureSession(); const secret = await readSecret(args, "Paste replacement secret: ", `the new value of ${itemName}`, itemName);
       await core.rotateSecretItem({ itemName, secret }); console.log(`rotated item=${itemName}`); return;
     }
     if (command === "wire") {

@@ -35,7 +35,7 @@ const TOOLS = [
   },
   {
     name: "secrets_request",
-    description: "Ask the human to store a new secret. Returns a terminal command for the user to run; the value is typed into a masked prompt and never passes through the conversation.",
+    description: "Ask the human to store a new secret. Opens a native hidden-input dialog on the user's desktop and stores the value in the vault; where no dialog can be shown, returns a terminal command for the user to run instead. The value never passes through the conversation.",
     inputSchema: {
       type: "object",
       required: ["env_name", "item_name"],
@@ -132,7 +132,24 @@ async function callTool(name: string, args: Json): Promise<Json> {
     const envName = String(args.env_name ?? "");
     const itemName = String(args.item_name ?? "");
     if (!ENV_NAME_RE.test(envName) || !itemName) return text("env_name must be UPPER_SNAKE_CASE and item_name is required", true);
-    const purpose = typeof args.purpose === "string" && args.purpose ? ` --notes ${shellQuote(args.purpose)}` : "";
+    const notes = typeof args.purpose === "string" && args.purpose ? args.purpose : undefined;
+    try {
+      await core.ensureSession();
+      const secret = await core.readSecretFromDialog({ label: envName, itemName });
+      if (secret === "") return text("The user saved an empty value; nothing was stored.", true);
+      if (secret !== null) {
+        await core.createSecretItem({ itemName, secret, envName, notes });
+        const reference = core.referenceFor(itemName);
+        for (const path of Object.values(core.getAuthTargets())) await core.writeAuthEntry(path, envName, reference);
+        const verified = (await core.resolveShellValue(reference)) !== null;
+        return text(`The user entered the value in a ${BRAND.name} dialog. created item=${itemName} env=${envName} verified=${verified ? "yes" : "no"}. Use secrets_run with $${envName}.`);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message === "Cancelled") return text("The user cancelled the dialog; nothing was stored.", true);
+      if (/already exists/.test(message)) return text(message, true);
+    }
+    const purpose = notes ? ` --notes ${shellQuote(notes)}` : "";
     return text(`Ask the user to run this in their own terminal (the value is entered in a masked prompt; it must never be pasted into the chat):\n\n  ${BRAND.bin} add --env ${envName} --item ${shellQuote(itemName)}${purpose}\n\nAfter it reports verified=yes, use secrets_run with $${envName}.`);
   }
   if (name === "vault_status") {
