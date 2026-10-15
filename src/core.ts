@@ -5,7 +5,6 @@ import { appendFile, chmod, mkdir, readFile, realpath, rename, rm, stat, unlink,
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import process from "node:process";
-import * as readline from "node:readline";
 import { BRAND } from "./brand.ts";
 import { buildRedactIndex, type RedactIndex } from "./redact.ts";
 import { ENV_NAME_RE, legacyRefFor, parseEnvFile, parseRef, type SecretRef } from "./refs.ts";
@@ -573,12 +572,38 @@ export async function readSecretFromInput(opts: { prompt: string; stdin: boolean
     if (!input) throw new Error("Empty secret");
     return input;
   }
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: true });
-  (rl as unknown as { _writeToOutput: (text: string) => void })._writeToOutput = () => {};
-  process.stderr.write(opts.prompt);
-  const value = await new Promise<string>((resolve) => rl.question("", resolve));
-  rl.close();
-  process.stderr.write("\n");
+  const value = await readMasked(opts.prompt);
   if (!value) throw new Error("Empty secret");
   return value;
+}
+
+// Raw-mode prompt that echoes one "*" per character (capped, then a count), so
+// the user sees typing and pastes land without the value ever reaching the screen.
+function readMasked(prompt: string): Promise<string> {
+  const stdin = process.stdin;
+  const chars: string[] = [];
+  const draw = () => {
+    const shown = "*".repeat(Math.min(chars.length, 24)) + (chars.length > 24 ? ` (${chars.length} chars)` : "");
+    process.stderr.write(`\r\x1b[2K${prompt}${shown}`);
+  };
+  return new Promise((resolve, reject) => {
+    const finish = (error?: Error) => {
+      stdin.off("data", onData); stdin.setRawMode(false); stdin.pause();
+      process.stderr.write("\n");
+      if (error) reject(error); else resolve(chars.join(""));
+    };
+    const onData = (chunk: string) => {
+      for (const ch of chunk.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b./g, "")) {
+        if (ch === "\r" || ch === "\n") return finish();
+        if (ch === "\x03") return finish(new Error("Cancelled"));
+        if (ch === "\x04") return chars.length ? finish() : finish(new Error("Cancelled"));
+        if (ch === "\x7f" || ch === "\b") chars.pop();
+        else if (ch === "\x15") chars.length = 0;
+        else if (ch >= " ") chars.push(ch);
+      }
+      draw();
+    };
+    stdin.setRawMode(true); stdin.setEncoding("utf8"); stdin.resume(); stdin.on("data", onData);
+    draw();
+  });
 }
