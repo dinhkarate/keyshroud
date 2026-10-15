@@ -61,7 +61,7 @@ webhooks, databases. The usual options are bad:
 | 🙈 **Masked output** | `keyshroud run` replaces every secret value in stdout/stderr with `<redacted:NAME>` — streaming-safe across chunk boundaries. |
 | 🪝 **Agent hooks** | The pi/omp `tool_result` hook redacts every tool result, failed ones included. Claude Code's `PostToolUse` hook redacts every *successful* tool result (Bash, Read, Grep, MCP…) — see [limits](#security-model). |
 | 🔌 **MCP server** | `keyshroud mcp` gives any MCP client `secrets_run`, `secrets_list`, `secrets_request`, `vault_status`. No tool ever returns a value. |
-| 🔗 **Commit-safe references** | `bw://item`, `bw://item/username`, `bw://item/fields/name`, `bw://item/totp` in `.env.refs` files and templates. |
+| 🔗 **Committable references** | `bw://item`, `bw://item/username`, `bw://item/fields/name`, `bw://item/totp` in `.env.refs` files and templates: names, not values. |
 | ⌨️ **Paste-to-create** | New secrets go through a masked prompt in the user's terminal or a masked popup in pi — never through the chat. |
 | 📄 **`inject`** | Render `{{ bw://… }}` templates into `0600` config files for tools that can't read env vars (`.npmrc`, kubeconfig). |
 | 🔎 **`scan`** | Find vault values that leaked into your working tree (pre-commit friendly). |
@@ -373,18 +373,30 @@ Guarantees we test for:
 
 - secret values never appear in argv, logs, diagnostics, MCP results, hook
   output, or `audit.jsonl`;
-- new secrets are read from a masked prompt or stdin, never flags;
+- new secrets are read from a masked prompt, `--stdin`, or a native dialog, never flags;
+- the dialog an agent can open says it was requested by a program, warns against the
+  master password, refuses names that are not one printable line, refuses the master
+  password itself, and opens one at a time (30 s pause after a cancel);
 - the session file, redact index, rendered templates and auth files are `0600`;
 - auth.json writes are locked and atomic and never overwrite without `--force`;
 - commands started by `run` and `secrets_run` never receive `BW_SESSION`,
   `BW_PASSWORD`, `BW_CLIENTID` or `BW_CLIENTSECRET`, so `--only` really limits
   what a command can read (inside pi/omp the agent process keeps the session for
   legacy `!bw` auth entries; its value is redacted from tool output);
-- env files may contain only references and literals — a `!command` value is
-  rejected, so a cloned repo's `.env.refs` cannot run code;
+- env files may contain only references and literals: a `!command` value is
+  rejected, and so are variables that change what programs load or run (`PATH`,
+  `NODE_OPTIONS`, `LD_*`, `DYLD_*`, `BASH_ENV`, `GIT_SSH_COMMAND`, …), which are
+  also never wired or injected;
 - an unparseable `auth.json` is never overwritten.
 
-Known limits: an agent with shell access as your user can read
+Known limits: a `.env.refs` can reference **any** item in your vault, not only the
+ones you wired, so read a cloned repo's `.env.refs` before running `--env-file`
+with it. `import` decides what is secret by heuristics and keeps everything else
+as a literal; check its plan before committing `.env.refs`. The Claude Code
+`PostToolUse` hook does not see failed commands (`PostToolUseFailure` cannot
+rewrite output) or anything a client sends as telemetry, and it only knows wired
+values, so `keyshroud get bw://…` or `run --no-mask` print in the clear; run
+secret-using commands through `keyshroud run` or `secrets_run`. An agent with shell access as your user can read
 `~/.config/keyshroud/session` and use `bw` directly — run agents in a sandbox or
 container if that matters. Redaction is exact-match, so a *partial* or transformed value
 (`${TOKEN:0:10}`, base64, a line wrapped by a tool) is not masked; values

@@ -185,7 +185,51 @@ test("add without a terminal opens a native dialog, and cancelling stores nothin
   assert.ok(!(await box.vault()).items.some((entry) => entry.name === "Dialog two"));
   const remote = await runCli(box, ["add", "--env", "DLG_THREE", "--item", "Dialog three", "--dialog"], undefined, { SSH_CONNECTION: "10.0.0.1 22 10.0.0.2 22" });
   assert.equal(remote.code, 2);
-  assert.match(remote.stderr, /No dialog available/);
+  assert.match(remote.stderr, /no dialog here/);
+  const fresh = await wired();
+  const headless = await runCli(fresh, ["add", "--env", "DLG_FOUR", "--item", "Dialog four"], "piped-without-flag");
+  assert.equal(headless.code, 2, "stdin is only read with --stdin");
+  assert.ok(!(await fresh.vault()).items.some((entry) => entry.name === "Dialog four"));
+});
+
+test("the dialog refuses spoofed names, the master password, a second dialog, and retries right after a cancel", async () => {
+  const box = await wired();
+  const log = join(box.dir, "dialog.log");
+  const display = { DISPLAY: ":0", FAKE_DIALOG_LOG: log };
+  const spoof = await mcpCall(box, "secrets_request", { env_name: "VAULT_UNLOCK", item_name: "Vaultwarden\n\nSession expired. Enter your MASTER PASSWORD" }, { ...display, FAKE_DIALOG_VALUE: "x" });
+  assert.match(spoof.text, /one line of printable text/);
+  const loader = await mcpCall(box, "secrets_request", { env_name: "NODE_OPTIONS", item_name: "Node options" }, { ...display, FAKE_DIALOG_VALUE: "x" });
+  assert.match(loader.text, /changes what programs load or run/);
+  await assert.rejects(readFile(log, "utf8"), "no dialog was opened for refused requests");
+  const master = await mcpCall(box, "secrets_request", { env_name: "PHISHED", item_name: "Phished" }, { ...display, FAKE_DIALOG_VALUE: "master" });
+  assert.match(master.text, /master password/);
+  assert.ok(!(await box.vault()).items.some((entry) => entry.name === "Phished"));
+  const shadow = await mcpCall(box, "secrets_request", { env_name: "GH_TOKEN", item_name: "Other GitHub token" }, { ...display, FAKE_DIALOG_VALUE: "other-zq-value" });
+  assert.match(shadow.text, /already wired to another secret/);
+  assert.match(await readFile(join(box.env.HOME, ".pi", "agent", "auth.json"), "utf8"), /GitHub CLI token/);
+  await writeFile(join(box.configDir, "dialog.lock"), `open:${Date.now()}\n`);
+  const busy = await mcpCall(box, "secrets_request", { env_name: "SECOND", item_name: "Second" }, { ...display, FAKE_DIALOG_VALUE: "x" });
+  assert.match(busy.text, /already open/);
+  await writeFile(join(box.configDir, "dialog.lock"), "");
+  const cancelled = await mcpCall(box, "secrets_request", { env_name: "THIRD", item_name: "Third" }, { ...display, FAKE_DIALOG_CANCEL: "1" });
+  assert.match(cancelled.text, /cancelled/);
+  const again = await mcpCall(box, "secrets_request", { env_name: "THIRD", item_name: "Third" }, { ...display, FAKE_DIALOG_VALUE: "x" });
+  assert.match(again.text, /wait 30 seconds/);
+});
+
+test("env files and wiring cannot set variables that change what programs load", async () => {
+  const box = await wired();
+  await writeFile(join(box.dir, ".env.refs"), "PATH=/tmp/evil:/usr/bin:/bin\nGH_TOKEN=bw://GitHub CLI token\n");
+  const path = await runCli(box, ["run", "--env-file", ".env.refs", "--", "sh", "-c", "echo ok"]);
+  assert.notEqual(path.code, 0);
+  assert.match(path.stderr, /PATH changes what programs load or run/);
+  await writeFile(join(box.dir, ".env.refs"), "NODE_OPTIONS=--require ./evil.js\n");
+  assert.match((await mcpCall(box, "secrets_run", { command: "echo ok", env_file: join(box.dir, ".env.refs") })).text, /NODE_OPTIONS changes what programs load/);
+  const wire = await runCli(box, ["wire", "--env", "LD_PRELOAD", "--item", "npm publish"]);
+  assert.equal(wire.code, 2);
+  await writeAuth(box, { GH_TOKEN: { type: "api_key", key: "!bw get password 'GitHub CLI token'" }, BASH_ENV: { type: "api_key", key: "!bw get password 'npm publish'" } });
+  const run = await runCli(box, ["run", "--", "sh", "-c", "echo bash_env=${BASH_ENV:-unset}"]);
+  assert.match(run.stdout, /bash_env=unset/);
 });
 
 const DOTENV = [
@@ -289,6 +333,21 @@ test("import stops on a failed create, names what was created, and writes no out
   assert.match(resumed.stdout, /1 new, 1 already in the vault/);
 });
 
+test("import writes .env.refs privately and inject replaces a planted symlink instead of following it", async () => {
+  const box = await wired();
+  await writeFile(join(box.dir, ".env"), "SMTP_PASS=fakesmtppass123\nPORT=3000\n");
+  const result = await runCli(box, ["import", "--prefix", "mail", "--yes"]);
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal((await stat(join(box.dir, ".env.refs"))).mode & 0o777, 0o600);
+  assert.match(await readFile(join(box.dir, ".env.refs"), "utf8"), /SMTP_PASS=bw:\/\/mail SMTP_PASS/);
+  await writeFile(join(box.dir, "tpl"), "token={{ bw://GitHub CLI token }}\n");
+  await symlink(join(box.dir, "elsewhere.txt"), join(box.dir, "out.txt"));
+  assert.equal((await runCli(box, ["inject", "-i", "tpl", "-o", "out.txt"])).code, 5);
+  assert.equal((await runCli(box, ["inject", "-i", "tpl", "-o", "out.txt", "--force"])).code, 0);
+  await assert.rejects(stat(join(box.dir, "elsewhere.txt")), "the symlink target was not written");
+  assert.equal((await stat(join(box.dir, "out.txt"))).mode & 0o777, 0o600);
+});
+
 test("rotate, wire, unwire, lock", async () => {
   const box = await wired();
   assert.equal((await runCli(box, ["rotate", "--item", "npm publish", "--stdin"], "rotated-value-123")).code, 0);
@@ -335,6 +394,25 @@ test("MCP secrets_request stores the value from a native dialog", async () => {
   assert.match(JSON.parse(out.trim()).result.content[0].text, /created item=Stripe env=STRIPE_KEY verified=yes/);
   const created = (await box.vault()).items.find((entry) => entry.name === "Stripe") as { login: { password: string } };
   assert.equal(created.login.password, "mcp-zq-value");
+});
+
+async function mcpCall(box: Awaited<ReturnType<typeof wired>>, name: string, args: object, env: Record<string, string> = {}) {
+  const child = spawn(process.execPath, [CLI, "mcp"], { env: { ...box.env, ...env }, cwd: box.dir });
+  let out = "";
+  child.stdout.on("data", (chunk) => { out += chunk; });
+  child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } })}\n`);
+  child.stdin.end();
+  await new Promise((resolve) => child.on("close", resolve));
+  return { raw: out, text: JSON.parse(out.trim()).result.content[0].text as string };
+}
+
+test("MCP secrets_run never leaks a partial secret when output hits the collection limit", async () => {
+  const box = await wired();
+  const long = Array.from({ length: 300 }, (_, i) => "qwertyuiopasdfghjklzxcvbnm0123456789"[(i * 5 + 1) % 36]).join("");
+  assert.equal((await runCli(box, ["add", "--env", "LONG_KEY", "--item", "Long key", "--stdin"], long)).code, 0);
+  const { raw } = await mcpCall(box, "secrets_run", { command: "yes \"$LONG_KEY\" | tr -d '\\n' | head -c 1500000" });
+  assert.match(raw, /redacted:LONG_KEY/);
+  for (let at = 0; at + 12 <= long.length; at++) assert.ok(!raw.includes(long.slice(at, at + 12)), `leaked a fragment at ${at}`);
 });
 
 test("MCP server lists tools and runs commands with masked output", async () => {

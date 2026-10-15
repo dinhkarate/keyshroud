@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { buildRedactIndex, createRedactor, createRedactStream, redactWithIndex } from "../src/redact.ts";
-import { formatRef, legacyRefFor, parseEnvFile, parseRef } from "../src/refs.ts";
+import { formatRef, isLoaderEnvName, itemNameProblem, legacyRefFor, looksSecret, parseEnvFile, parseRef } from "../src/refs.ts";
 
 test("parseRef handles bw:// fields, custom fields, and encoding", () => {
   assert.deepEqual(parseRef("bw://GitHub CLI token"), { item: "GitHub CLI token", field: "password" });
@@ -99,6 +99,23 @@ test("overlapping secrets: plain, streaming, and index redaction agree and never
   }
 });
 
+test("redact stream never leaks part of a secret longer than the hold limit", async () => {
+  const secret = Array.from({ length: 6000 }, (_, i) => "abcdefghijklmnopqrstuvwxyz0123456789"[(i * 7 + 3) % 36]).join("");
+  const text = `head ${secret} tail`;
+  for (let seed = 1; seed < 40; seed++) {
+    const chunks: string[] = [];
+    let state = seed;
+    for (let position = 0; position < text.length;) {
+      state = (state * 1103515245 + 12345) % 2147483648;
+      const size = 1 + (state % 1500);
+      chunks.push(text.slice(position, position + size));
+      position += size;
+    }
+    const out = await streamThrough({ LONG: secret }, chunks);
+    assert.equal(out, "head <redacted:LONG> tail", `seed ${seed}`);
+  }
+});
+
 test("redact stream keeps flowing on output that repeats a periodic secret", async () => {
   const stream = createRedactStream(createRedactor({ ZEROS: "00000000" }));
   let early = 0;
@@ -120,4 +137,24 @@ test("index redaction matches plaintext redaction without holding values", () =>
   const text = "x sk-abcdef123456 y abcdef z correct horse battery abcdeg";
   assert.equal(redactWithIndex(text, index), createRedactor(values).redact(text));
   assert.equal(redactWithIndex("short", index), "short");
+});
+
+test("looksSecret: known formats beat PUBLIC names, and common credential names are caught", () => {
+  for (const [name, value] of [
+    ["SMTP_PASS", "fakesmtppass123"], ["DB_PASS", "x1"], ["REDIS_URL", "redis://:lowercasepass@cache:6379"],
+    ["NEXT_PUBLIC_STRIPE", "sk_live_FAKE0123456789"], ["PUBLICATION_TOKEN", "abc123"], ["ADMIN_CREDS", "admin:hunter2"],
+    ["SIGNING", "0123456789abcdef0123456789abcdef"], ["SESSION_JWT", "short"],
+  ]) assert.ok(looksSecret(name, value), `${name} should be a secret`);
+  for (const [name, value] of [
+    ["NEXT_PUBLIC_API_URL", "https://api.example.com"], ["PORT", "3000"], ["PASSENGER_COUNT", "4"], ["LOG_LEVEL", "debug"],
+    ["GH_TOKEN", "bw://GitHub CLI token"],
+  ]) assert.ok(!looksSecret(name, value), `${name} should not be a secret`);
+});
+
+test("loader variables and unsafe item names are refused", () => {
+  for (const name of ["PATH", "NODE_OPTIONS", "LD_PRELOAD", "DYLD_INSERT_LIBRARIES", "BASH_ENV", "GIT_SSH_COMMAND", "npm_config_script_shell"]) assert.ok(isLoaderEnvName(name), name);
+  for (const name of ["GH_TOKEN", "GITHUB_TOKEN", "GIT_TOKEN", "DATABASE_URL"]) assert.ok(!isLoaderEnvName(name), name);
+  assert.equal(itemNameProblem("GitHub CLI token"), null);
+  assert.equal(itemNameProblem("kikigaki/RESEND_API_KEY"), null);
+  for (const name of ["", " padded", "padded ", "two\nlines", "bidi\u202Eevil", "x".repeat(121)]) assert.ok(itemNameProblem(name), JSON.stringify(name));
 });

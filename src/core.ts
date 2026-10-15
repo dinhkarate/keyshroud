@@ -1,13 +1,14 @@
 // Runtime-neutral core: no pi/omp/Claude Code imports. Every caller (agent
 // extensions, CLI, MCP server, hooks) goes through these functions.
 import { execFile } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { appendFile, chmod, mkdir, readFile, realpath, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import process from "node:process";
 import { BRAND } from "./brand.ts";
 import { buildRedactIndex, type RedactIndex } from "./redact.ts";
-import { ENV_NAME_RE, legacyRefFor, parseEnvFile, parseRef, type SecretRef } from "./refs.ts";
+import { ENV_NAME_RE, isLoaderEnvName, itemNameProblem, legacyRefFor, parseEnvFile, parseRef, type SecretRef } from "./refs.ts";
 
 const P = BRAND.envPrefix;
 function setting(name: string): string | undefined {
@@ -71,7 +72,8 @@ export const VAULT_ENV_KEYS: readonly string[] = ["BW_SESSION", "BW_PASSWORD", "
 export function childEnv(extra: Record<string, string> = {}): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [name, value] of Object.entries(process.env)) if (value !== undefined && !VAULT_ENV_KEYS.includes(name)) env[name] = value;
-  return { ...env, ...extra };
+  for (const [name, value] of Object.entries(extra)) if (!isLoaderEnvName(name)) env[name] = value;
+  return env;
 }
 
 export async function bw(args: string[], opts: { input?: string; session?: string } = {}): Promise<string> {
@@ -251,8 +253,8 @@ export function ensureSession(): Promise<string> {
 
 async function writePrivateFile(path: string, content: string): Promise<void> {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  const tmp = `${path}.tmp.${process.pid}`;
-  await writeFile(tmp, content, { encoding: "utf8", mode: 0o600 });
+  const tmp = `${path}.tmp.${randomBytes(6).toString("hex")}`;
+  await writeFile(tmp, content, { encoding: "utf8", mode: 0o600, flag: "wx" });
   await chmod(tmp, 0o600);
   await rename(tmp, path);
   await chmod(path, 0o600);
@@ -455,6 +457,7 @@ export async function resolveEntries(entries: Array<{ name: string; raw: string 
 export async function envFileEntries(path: string): Promise<Array<{ name: string; raw: string }>> {
   return parseEnvFile(await readFile(path, "utf8")).map(({ name, value }) => {
     if (value.trim().startsWith("!")) throw new Error(`${path}: ${name} uses a shell command; env files accept only bw:// references and literals`);
+    if (isLoaderEnvName(name)) throw new Error(`${path}: ${name} changes what programs load or run; env files cannot set it`);
     return { name, raw: value };
   });
 }
@@ -504,6 +507,12 @@ export async function writeRedactIndex(values: Record<string, string>): Promise<
   return index;
 }
 
+// Re-index after the wired set changes so hooks mask a new value right away.
+export async function refreshRedactIndex(): Promise<void> {
+  const env = await resolveEntries(await authEnvEntries());
+  await writeRedactIndex(indexValues(env.secrets));
+}
+
 export async function readRedactIndex(): Promise<RedactIndex | null> {
   try {
     const parsed = JSON.parse(await readFile(REDACT_INDEX_FILE, "utf8")) as RedactIndex;
@@ -531,7 +540,16 @@ export async function getSecret(itemName: string): Promise<string> {
   try { return await bw(["get", "password", itemName]); } catch (error) { throw mapItemError(error, itemName); }
 }
 
+// An agent can start add/rotate, so a dialog could be used to phish the master
+// password into an item it can then read; refuse it outright.
+async function refuseMasterPassword(secret: string): Promise<void> {
+  if (secret && secret === await readMasterPassword()) throw new Error("Refusing to store the vault master password as a secret");
+}
+
 export async function createSecretItem(opts: { itemName: string; secret: string; envName?: string; notes?: string }): Promise<{ id: string }> {
+  const problem = itemNameProblem(opts.itemName);
+  if (problem) throw new Error(`Vault item name ${problem}`);
+  await refuseMasterPassword(opts.secret);
   const existing = await findItems(opts.itemName);
   if (existing.some((item) => item.name.toLowerCase() === opts.itemName.toLowerCase())) throw new Error(`Vault item already exists: ${opts.itemName}`);
   const item: Record<string, unknown> = {
@@ -548,6 +566,7 @@ export async function createSecretItem(opts: { itemName: string; secret: string;
 }
 
 export async function rotateSecretItem(opts: { itemName: string; secret: string }): Promise<{ id: string }> {
+  await refuseMasterPassword(opts.secret);
   let parsed: Record<string, unknown>;
   try { parsed = JSON.parse(await bw(["get", "item", opts.itemName])) as Record<string, unknown>; } catch (error) { throw mapItemError(error, opts.itemName); }
   const login = parsed.login && typeof parsed.login === "object" ? parsed.login as Record<string, unknown> : {};
@@ -565,45 +584,82 @@ export async function deleteItem(id: string, permanent = false): Promise<void> {
 }
 
 export async function readSecretFromInput(opts: { prompt: string; stdin: boolean }): Promise<string> {
-  if (opts.stdin || !process.stdin.isTTY) {
+  if (opts.stdin) {
     let input = "";
     for await (const chunk of process.stdin) input += String(chunk);
     input = input.replace(/\r?\n$/, "");
     if (!input) throw new Error("Empty secret");
     return input;
   }
+  if (!process.stdin.isTTY) throw new Error("No terminal to prompt on; pipe the value with --stdin");
   const value = await readMasked(opts.prompt);
   if (!value) throw new Error("Empty secret");
   return value;
 }
 
 // Native hidden-input dialog for callers without a terminal (agent shells, MCP).
-// Names reach the dialog through env vars, so an item name cannot inject
-// AppleScript; the value comes back only on the dialog's stdout. Resolves null
-// when no dialog can be shown (SSH, headless Linux, missing tools).
-export async function readSecretFromDialog(opts: { label: string; itemName: string }): Promise<string | null> {
+// An agent can open it, so the wording is fixed, says who asked, and warns
+// against the master password; names are validated and passed as data (argv),
+// never as script. One dialog at a time, with a pause after a cancel. Resolves
+// null when no dialog can be shown (SSH, headless Linux, missing tools).
+const DIALOG_LOCK = join(CONFIG_DIR, "dialog.lock");
+const DIALOG_COOLDOWN_MS = 30_000;
+const DIALOG_TIMEOUT_MS = 300_000;
+
+export async function readSecretFromDialog(opts: { itemName: string; envName?: string }): Promise<string | null> {
   if (process.env.SSH_CONNECTION || process.env.SSH_TTY) return null;
-  const text = `Paste the secret for ${opts.label}\nVault item: ${opts.itemName}`;
+  const problem = itemNameProblem(opts.itemName);
+  if (problem) throw new Error(`Vault item name ${problem}`);
+  if (opts.envName !== undefined && !ENV_NAME_RE.test(opts.envName)) throw new Error("Variable names must be UPPER_SNAKE_CASE");
+  const text = [
+    opts.envName ? "A program on this computer, usually an AI agent, asked to store a NEW secret." : "A program on this computer, usually an AI agent, asked to REPLACE the value of a secret.",
+    "",
+    ...(opts.envName ? [`Variable: ${opts.envName}`] : []),
+    `Vault item: ${opts.itemName}`,
+    "",
+    "This is not a login prompt. Never enter your vault master password here.",
+  ].join("\n");
   const candidates: Array<[string, string[]]> = process.platform === "darwin"
-    ? [["osascript", ["-e", [
-        'set t to "Paste the secret for " & (system attribute "KEYSHROUD_DIALOG_ENV") & return & "Vault item: " & (system attribute "KEYSHROUD_DIALOG_ITEM")',
-        'activate',
-        'text returned of (display dialog t default answer "" with hidden answer with title "keyshroud" buttons {"Cancel", "Save"} default button "Save" cancel button "Cancel")',
-      ].join("\n")]]]
+    ? [["osascript", ["-e", "on run argv", "-e", 'activate', "-e",
+        'text returned of (display dialog (item 1 of argv) default answer "" with hidden answer with title "keyshroud" buttons {"Cancel", "Save"} default button "Save" cancel button "Cancel" with icon caution)',
+        "-e", "end run", "--", text]]]
     : process.env.DISPLAY || process.env.WAYLAND_DISPLAY
-      ? [["zenity", ["--entry", "--hide-text", "--title=keyshroud", `--text=${text}`]], ["kdialog", ["--title", "keyshroud", "--password", text]]]
+      ? [["zenity", ["--entry", "--hide-text", "--no-markup", "--title=keyshroud", `--text=${text}`]], ["kdialog", ["--title", "keyshroud", "--password", text.replace(/[<>]/g, "")]]]
       : [];
-  for (const [command, args] of candidates) {
-    const result = await new Promise<{ code: number | string | null; stdout: string; stderr: string }>((resolve) => {
-      execFile(command, args, { env: { ...process.env, KEYSHROUD_DIALOG_ENV: opts.label, KEYSHROUD_DIALOG_ITEM: opts.itemName }, timeout: 300_000 },
-        (error, stdout, stderr) => resolve({ code: error ? ((error as NodeJS.ErrnoException).code ?? 1) : 0, stdout: String(stdout), stderr: String(stderr) }));
-    });
-    if (result.code === "ENOENT") continue;
-    if (result.code === 0) return result.stdout.replace(/\r?\n$/, "");
-    if (command !== "osascript" || /-128/.test(result.stderr)) throw new Error("Cancelled");
+  if (!candidates.length) return null;
+  return withDialogLock(async () => {
+    for (const [command, args] of candidates) {
+      const result = await new Promise<{ code: number | string | null; stdout: string; stderr: string }>((resolve) => {
+        execFile(command, args, { timeout: DIALOG_TIMEOUT_MS }, (error, stdout, stderr) => resolve({ code: error ? ((error as NodeJS.ErrnoException).code ?? 1) : 0, stdout: String(stdout), stderr: String(stderr) }));
+      });
+      if (result.code === "ENOENT") continue;
+      if (result.code === 0) return result.stdout.replace(/\r?\n$/, "");
+      if (command !== "osascript" || /-128/.test(result.stderr)) throw new Error("Cancelled");
+      return null;
+    }
     return null;
+  });
+}
+
+async function withDialogLock<T>(fn: () => Promise<T>): Promise<T> {
+  await mkdir(CONFIG_DIR, { recursive: true, mode: 0o700 });
+  let held = "";
+  try { held = await readFile(DIALOG_LOCK, "utf8"); } catch {}
+  const [kind, at] = held.trim().split(":");
+  const age = Date.now() - Number(at);
+  const live = (kind === "open" || kind === "cancelled") && age >= 0 && age < (kind === "cancelled" ? DIALOG_COOLDOWN_MS : DIALOG_TIMEOUT_MS + 30_000);
+  if (!live) await rm(DIALOG_LOCK, { force: true });
+  try { await writeFile(DIALOG_LOCK, `open:${Date.now()}\n`, { flag: "wx", mode: 0o600 }); }
+  catch { throw new Error(kind === "cancelled" ? "The last dialog was cancelled; wait 30 seconds before asking again" : "Another keyshroud dialog is already open"); }
+  try {
+    const value = await fn();
+    await rm(DIALOG_LOCK, { force: true });
+    return value;
+  } catch (error) {
+    if (error instanceof Error && error.message === "Cancelled") await writeFile(DIALOG_LOCK, `cancelled:${Date.now()}\n`, { mode: 0o600 });
+    else await rm(DIALOG_LOCK, { force: true });
+    throw error;
   }
-  return null;
 }
 
 // Raw-mode prompt that echoes one "*" per character (capped, then a count), so
@@ -616,14 +672,25 @@ function readMasked(prompt: string): Promise<string> {
     process.stderr.write(`\r\x1b[2K${prompt}${shown}`);
   };
   return new Promise((resolve, reject) => {
+    // After Enter, keep reading briefly: the rest of a multi-line paste must be
+    // consumed here (or it would reach the parent shell) and is then refused.
+    let ending: ReturnType<typeof setTimeout> | undefined;
+    let multiline = false;
+    const settle = () => {
+      clearTimeout(ending);
+      ending = setTimeout(() => finish(multiline ? new Error("Multi-line values are not supported in the prompt; pipe them with --stdin") : undefined), 100);
+    };
     const finish = (error?: Error) => {
+      clearTimeout(ending);
       stdin.off("data", onData); stdin.setRawMode(false); stdin.pause();
       process.stderr.write("\n");
       if (error) reject(error); else resolve(chars.join(""));
     };
     const onData = (chunk: string) => {
-      for (const ch of chunk.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b./g, "")) {
-        if (ch === "\r" || ch === "\n") return finish();
+      if (ending) { if (/[^\r\n]/.test(chunk)) multiline = true; return settle(); }
+      const clean = [...chunk.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b./g, "")];
+      for (const [index, ch] of clean.entries()) {
+        if (ch === "\r" || ch === "\n") { if (/[^\r\n]/.test(clean.slice(index + 1).join(""))) multiline = true; return settle(); }
         if (ch === "\x03") return finish(new Error("Cancelled"));
         if (ch === "\x04") return chars.length ? finish() : finish(new Error("Cancelled"));
         if (ch === "\x7f" || ch === "\b") chars.pop();

@@ -81,7 +81,7 @@ export function createRedactor(values: Record<string, string>): Redactor {
       if (text.length - cut <= MAX_HOLD) return cut;
       // Bounded fallback: cut near the end, moving forward past any complete
       // secret that straddles it, so whole matches are still replaced.
-      cut = text.length - maxLength;
+      cut = Math.max(0, text.length - maxLength);
       while (cut < text.length && straddling(cut)) cut++;
       return cut;
     },
