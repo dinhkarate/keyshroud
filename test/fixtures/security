@@ -1,5 +1,22 @@
 #!/bin/sh
-# Fake macOS `security`: answers find-generic-password from $FAKE_KEYCHAIN_DIR/<service>.
-service=""; while [ $# -gt 0 ]; do [ "$1" = "-s" ] && service="$2"; shift; done
+# Fake macOS `security`: find-generic-password answers from $FAKE_KEYCHAIN_DIR/<service>;
+# add-generic-password stores the value read from stdin (the real tool prompts),
+# and records an empty -T (ask before every read) as <service>.confirm.
+op="$1"; service=""; confirm=""
+while [ $# -gt 0 ]; do
+  [ "$1" = "-s" ] && service="$2"
+  [ "$1" = "-T" ] && [ -z "$2" ] && confirm=1
+  shift
+done
+if [ "$op" = "delete-generic-password" ]; then
+  rm -f "$FAKE_KEYCHAIN_DIR/$service" "$FAKE_KEYCHAIN_DIR/$service.confirm"
+  exit 0
+fi
+if [ "$op" = "add-generic-password" ]; then
+  IFS= read -r value || [ -n "$value" ] || exit 1
+  printf '%s\n' "$value" > "$FAKE_KEYCHAIN_DIR/$service"
+  [ -n "$confirm" ] && : > "$FAKE_KEYCHAIN_DIR/$service.confirm"
+  exit 0
+fi
 [ -n "$FAKE_KEYCHAIN_DIR" ] && [ -f "$FAKE_KEYCHAIN_DIR/$service" ] && cat "$FAKE_KEYCHAIN_DIR/$service" && exit 0
 exit 44

@@ -135,6 +135,29 @@ Optional: put `vaultwarden-api-client-id` / `vaultwarden-api-client-secret` (fro
 also re-login automatically when the `bw` session expires. Linux keyring commands
 and a headless-server option are in the [vault setup guide](examples/vaultwarden#4-let-keyshroud-unlock-without-prompting).
 
+### Least privilege: a separate agent account
+
+With the steps above, keyshroud holds your master password, so an agent that runs
+`bw` as you can open your whole vault. `setup` gives keyshroud its own `bw` login
+on a dedicated account instead, which holds only the secrets agents need:
+
+```bash
+keyshroud setup --email you+agent@example.com   # opens the signup page, then stores the new
+                                                 # master password in the keychain and logs in
+keyshroud migrate                                # dry run: which wired items would be copied
+keyshroud migrate --yes                          # copy them; references keep working
+```
+
+- The agent login lives in `~/.config/keyshroud/bw` (`BITWARDENCLI_APPDATA_DIR`), its master
+  password in the keychain entry `keyshroud-master-password`. Your own `bw` login is untouched.
+- `migrate` copies the items that wired names (and any `--env-file` / `--item`) reference, with
+  the same names, then locks your personal vault again. Originals stay where they are. It needs
+  your personal master password in the keychain once; delete it afterwards (the command prints how).
+- `--confirm-unlock` (macOS, off by default) creates the keychain entry so macOS asks you before
+  every read, i.e. every vault unlock.
+- Self-hosted Vaultwarden with `SIGNUPS_ALLOWED=false`: invite the address from the admin page
+  (`/admin`), or allow signups for a minute, then pass `--registered` once the account exists.
+
 ## How it works
 
 ```
@@ -274,6 +297,8 @@ keyshroud import [--from F|-] [--out F] [--prefix P] [--only A,B] [--skip A,B] [
 keyshroud rotate --item ITEM [--stdin|--dialog]
 keyshroud wire --env NAME --item ITEM [--target pi|omp|both] [--force]
 keyshroud unwire --env NAME [--target pi|omp|both]
+keyshroud setup --email EMAIL [--server URL] [--confirm-unlock] [--registered]
+keyshroud migrate [--item NAME]... [--env-file F]... [--yes]
 keyshroud status | unlock | lock | doctor
 keyshroud mcp
 keyshroud hook claude <session-start|post-tool-use>
@@ -397,8 +422,8 @@ as a literal; check its plan before committing `.env.refs`. The Claude Code
 rewrite output) or anything a client sends as telemetry, and it only knows wired
 values, so `keyshroud get bw://…` or `run --no-mask` print in the clear; run
 secret-using commands through `keyshroud run` or `secrets_run`. An agent with shell access as your user can read
-`~/.config/keyshroud/session` and use `bw` directly — run agents in a sandbox or
-container if that matters. Redaction is exact-match, so a *partial* or transformed value
+`~/.config/keyshroud/session` and use `bw` directly — after `setup` that reaches
+only the agent account; otherwise run agents in a sandbox or container if that matters. Redaction is exact-match, so a *partial* or transformed value
 (`${TOKEN:0:10}`, base64, a line wrapped by a tool) is not masked; values
 shorter than 6 characters are not redacted (to avoid noise), so don't wire short
 PINs.

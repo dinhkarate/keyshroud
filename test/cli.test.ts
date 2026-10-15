@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { mkdir, readdir, readFile, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
+import { BRAND } from "../src/brand.ts";
 import { CLI, item, runCli, sandbox, writeAuth } from "./helpers.ts";
 
 const GH = "ghp_FAKE0123456789abcdef";
@@ -450,4 +451,58 @@ test("MCP server lists tools and runs commands with masked output", async () => 
   assert.equal(byId.get(6)!.error.code, -32601);
   assert.match(byId.get(7)!.result.content[0].text, /s=none/);
   assert.equal(responses.length, 7);
+});
+
+test("setup gives the CLI its own agent login; migrate copies only the wired items", async () => {
+  const box = await wired();
+  const own = join(box.configDir, "bw");
+  const ownVault = async () => JSON.parse(await readFile(join(own, "fake-vault.json"), "utf8"));
+  await mkdir(own, { recursive: true });
+  await writeFile(join(own, "fake-vault.json"), JSON.stringify({ status: "unauthenticated", registered: "agent@example.test", password: "agent-pw", session: "own-session", items: [] }));
+
+  const before = await runCli(box, ["migrate"]);
+  assert.equal(before.code, 2);
+  assert.match(before.stderr, /setup/);
+
+  const setup = await runCli(box, ["setup", "--email", "agent@example.test", "--registered"], "agent-pw\n");
+  assert.equal(setup.code, 0, setup.stderr);
+  assert.equal((await readFile(join(box.dir, "keychain", `${BRAND.bin}-master-password`), "utf8")).trim(), "agent-pw");
+  assert.equal((await ownVault()).server, "https://vault.example.test");
+  assert.ok(!setup.stdout.includes("agent-pw") && !setup.stdout.includes("own-session"));
+
+  const dry = await runCli(box, ["migrate"]);
+  assert.equal(dry.code, 0, dry.stderr);
+  assert.match(dry.stdout, /GitHub CLI token\s+copy/);
+  assert.match(dry.stdout, /2 to copy, 0 already there/);
+  assert.ok(!dry.stdout.includes(GH));
+  assert.equal((await ownVault()).items.length, 0);
+
+  const yes = await runCli(box, ["migrate", "--yes"]);
+  assert.equal(yes.code, 0, yes.stderr);
+  assert.deepEqual((await ownVault()).items.map((entry: { name: string }) => entry.name).sort(), ["GitHub CLI token", "npm publish"]);
+  assert.equal((await box.vault()).items.length, 4);
+  assert.equal(((await box.vault()) as { status?: string }).status, "locked");
+  assert.ok(!yes.stdout.includes(GH) && !yes.stderr.includes(GH));
+
+  const again = await runCli(box, ["migrate"]);
+  assert.match(again.stdout, /0 to copy, 2 already there/);
+
+  const run = await runCli(box, ["run", "--", "sh", "-c", "test \"$GH_TOKEN\" = \"$EXPECTED\" && echo same"], "", { EXPECTED: GH });
+  assert.equal(run.code, 0, run.stderr);
+  assert.match(run.stdout, /same/);
+  const doctor = await runCli(box, ["doctor"]);
+  assert.match(doctor.stdout, /own agent account/);
+
+  const other = await runCli(box, ["setup", "--email", "someone@example.test", "--registered"]);
+  assert.equal(other.code, 5);
+});
+
+test("setup --confirm-unlock asks the macOS keychain before every read", { skip: process.platform !== "darwin" }, async () => {
+  const box = await sandbox([]);
+  const own = join(box.configDir, "bw");
+  await mkdir(own, { recursive: true });
+  await writeFile(join(own, "fake-vault.json"), JSON.stringify({ status: "unauthenticated", registered: "agent@example.test", password: "agent-pw", items: [] }));
+  const setup = await runCli(box, ["setup", "--email", "agent@example.test", "--registered", "--confirm-unlock"], "agent-pw\n");
+  assert.equal(setup.code, 0, setup.stderr);
+  await stat(join(box.dir, "keychain", `${BRAND.bin}-master-password.confirm`));
 });
