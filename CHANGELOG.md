@@ -11,6 +11,11 @@ All notable changes are documented here. This project follows
   verified after storing, never printed, and `--replace` rewrites the source
   atomically without a backup.
 
+### Changed
+- The `add` and `rotate` prompts echo `*` per character (a count after 24) so
+  typing and pastes are visible without showing the value; Backspace, Ctrl-U
+  and Ctrl-C work as in a password prompt.
+
 ## [0.5.1] - 2026-10-14
 
 ### Added
