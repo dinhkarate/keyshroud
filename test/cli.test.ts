@@ -168,6 +168,26 @@ test("add stores a piped secret, wires both agents, and never prints it", async 
   assert.equal(again.code, 5);
 });
 
+test("add without a terminal opens a native dialog, and cancelling stores nothing", async () => {
+  const box = await wired();
+  const log = join(box.dir, "dialog.log");
+  const display = { DISPLAY: ":0", FAKE_DIALOG_LOG: log }; // Linux needs a display; macOS uses the osascript fake
+  const result = await runCli(box, ["add", "--env", "DLG_KEY", "--item", "Dialog key"], undefined, { ...display, FAKE_DIALOG_VALUE: "dlg-zq-value" });
+  assert.equal(result.code, 0, result.stderr);
+  assert.match(result.stdout, /created item=Dialog key env=DLG_KEY .* verified=yes/);
+  assert.ok(!(result.stdout + result.stderr).includes("dlg-zq-value"));
+  const created = (await box.vault()).items.find((entry) => entry.name === "Dialog key") as { login: { password: string } };
+  assert.equal(created.login.password, "dlg-zq-value");
+  assert.match(await readFile(log, "utf8"), /DLG_KEY/);
+  const cancelled = await runCli(box, ["add", "--env", "DLG_TWO", "--item", "Dialog two"], undefined, { ...display, FAKE_DIALOG_CANCEL: "1" });
+  assert.notEqual(cancelled.code, 0);
+  assert.match(cancelled.stderr, /Cancelled/);
+  assert.ok(!(await box.vault()).items.some((entry) => entry.name === "Dialog two"));
+  const remote = await runCli(box, ["add", "--env", "DLG_THREE", "--item", "Dialog three", "--dialog"], undefined, { SSH_CONNECTION: "10.0.0.1 22 10.0.0.2 22" });
+  assert.equal(remote.code, 2);
+  assert.match(remote.stderr, /No dialog available/);
+});
+
 const DOTENV = [
   "# app config",
   "PORT=3000",
@@ -301,6 +321,20 @@ test("Claude Code hooks: session-start writes the index, post-tool-use redacts",
   assert.equal(clean.stdout, "");
   const broken = await runCli(box, ["hook", "claude", "post-tool-use"], "not json");
   assert.equal(broken.code, 0);
+});
+
+test("MCP secrets_request stores the value from a native dialog", async () => {
+  const box = await wired();
+  const child = spawn(process.execPath, [CLI, "mcp"], { env: { ...box.env, DISPLAY: ":0", FAKE_DIALOG_VALUE: "mcp-zq-value" }, cwd: box.dir });
+  let out = "";
+  child.stdout.on("data", (chunk) => { out += chunk; });
+  child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "secrets_request", arguments: { env_name: "STRIPE_KEY", item_name: "Stripe" } } })}\n`);
+  child.stdin.end();
+  await new Promise((resolve) => child.on("close", resolve));
+  assert.ok(!out.includes("mcp-zq-value"));
+  assert.match(JSON.parse(out.trim()).result.content[0].text, /created item=Stripe env=STRIPE_KEY verified=yes/);
+  const created = (await box.vault()).items.find((entry) => entry.name === "Stripe") as { login: { password: string } };
+  assert.equal(created.login.password, "mcp-zq-value");
 });
 
 test("MCP server lists tools and runs commands with masked output", async () => {

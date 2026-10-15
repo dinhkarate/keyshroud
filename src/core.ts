@@ -577,6 +577,35 @@ export async function readSecretFromInput(opts: { prompt: string; stdin: boolean
   return value;
 }
 
+// Native hidden-input dialog for callers without a terminal (agent shells, MCP).
+// Names reach the dialog through env vars, so an item name cannot inject
+// AppleScript; the value comes back only on the dialog's stdout. Resolves null
+// when no dialog can be shown (SSH, headless Linux, missing tools).
+export async function readSecretFromDialog(opts: { label: string; itemName: string }): Promise<string | null> {
+  if (process.env.SSH_CONNECTION || process.env.SSH_TTY) return null;
+  const text = `Paste the secret for ${opts.label}\nVault item: ${opts.itemName}`;
+  const candidates: Array<[string, string[]]> = process.platform === "darwin"
+    ? [["osascript", ["-e", [
+        'set t to "Paste the secret for " & (system attribute "KEYSHROUD_DIALOG_ENV") & return & "Vault item: " & (system attribute "KEYSHROUD_DIALOG_ITEM")',
+        'activate',
+        'text returned of (display dialog t default answer "" with hidden answer with title "keyshroud" buttons {"Cancel", "Save"} default button "Save" cancel button "Cancel")',
+      ].join("\n")]]]
+    : process.env.DISPLAY || process.env.WAYLAND_DISPLAY
+      ? [["zenity", ["--entry", "--hide-text", "--title=keyshroud", `--text=${text}`]], ["kdialog", ["--title", "keyshroud", "--password", text]]]
+      : [];
+  for (const [command, args] of candidates) {
+    const result = await new Promise<{ code: number | string | null; stdout: string; stderr: string }>((resolve) => {
+      execFile(command, args, { env: { ...process.env, KEYSHROUD_DIALOG_ENV: opts.label, KEYSHROUD_DIALOG_ITEM: opts.itemName }, timeout: 300_000 },
+        (error, stdout, stderr) => resolve({ code: error ? ((error as NodeJS.ErrnoException).code ?? 1) : 0, stdout: String(stdout), stderr: String(stderr) }));
+    });
+    if (result.code === "ENOENT") continue;
+    if (result.code === 0) return result.stdout.replace(/\r?\n$/, "");
+    if (command !== "osascript" || /-128/.test(result.stderr)) throw new Error("Cancelled");
+    return null;
+  }
+  return null;
+}
+
 // Raw-mode prompt that echoes one "*" per character (capped, then a count), so
 // the user sees typing and pastes land without the value ever reaching the screen.
 function readMasked(prompt: string): Promise<string> {

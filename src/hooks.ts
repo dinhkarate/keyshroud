@@ -22,8 +22,8 @@ async function sessionStart(): Promise<string> {
     await core.writeRedactIndex(core.indexValues(env.secrets));
     const names = Object.keys(env.values);
     context = names.length
-      ? `${BRAND.name}: vault secrets are available by name only: ${names.join(", ")}. Run every command that uses one through \`${BRAND.bin} run -- <command>\` (or the secrets_run MCP tool): its output is masked as <redacted:NAME> even when the command fails. Never print a secret. Never ask the user to paste a secret into chat; use \`${BRAND.bin} add\` in their terminal instead.`
-      : `${BRAND.name}: no secrets are wired yet. Ask the user to run \`${BRAND.bin} add --env NAME --item "Item"\` in their own terminal.`;
+      ? `${BRAND.name}: vault secrets are available by name only: ${names.join(", ")}. Run every command that uses one through \`${BRAND.bin} run -- <command>\` (or the secrets_run MCP tool): its output is masked as <redacted:NAME> even when the command fails. Never print a secret. Never ask the user to paste a secret into chat. To store a new one, run \`${BRAND.bin} add --env NAME --item "Item"\` (or call secrets_request): it opens a dialog on the user's desktop for the value.`
+      : `${BRAND.name}: no secrets are wired yet. To store one, run \`${BRAND.bin} add --env NAME --item "Item"\` (or call secrets_request): it opens a dialog on the user's desktop for the value.`;
   } catch (error) {
     context = `${BRAND.name}: the vault could not be unlocked (${error instanceof Error ? error.message : String(error)}), so tool-output redaction may be incomplete this session. Do not print or inspect secrets; ask the user to run \`${BRAND.bin} unlock\`.`;
   }
