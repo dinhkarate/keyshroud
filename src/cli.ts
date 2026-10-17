@@ -269,17 +269,26 @@ async function migrateCommand(args: string[]): Promise<void> {
   await core.ensureSession();
   const own = await core.findItems("");
   const personal = await core.readPersonalItems();
-  type Row = { name: string; state: "copy" | "present" | "missing" | "ambiguous"; item?: Record<string, unknown> };
+  const personalMaster = await core.readKeychain(core.PERSONAL_KEYCHAIN_MASTER_SERVICE);
+  // An item that holds the personal master password would hand the agent account the whole vault.
+  const holdsMaster = (item: Record<string, unknown>) => {
+    const login = (item.login ?? {}) as { password?: unknown };
+    const values = [login.password, item.notes, ...((item.fields ?? []) as Array<{ value?: unknown }>).map((field) => field.value)];
+    return Boolean(personalMaster) && values.some((value) => typeof value === "string" && value.includes(personalMaster!));
+  };
+  type Row = { name: string; state: "copy" | "present" | "missing" | "ambiguous" | "refused"; item?: Record<string, unknown> };
   const rows: Row[] = [...names.values()].sort().map((name) => {
     if (own.some((item) => item.name.toLowerCase() === name.toLowerCase() || item.id === name)) return { name, state: "present" };
     const matches = personal.filter((item) => String(item.name ?? "").toLowerCase() === name.toLowerCase() || item.id === name);
+    if (matches.length === 1 && holdsMaster(matches[0])) return { name, state: "refused" };
     return matches.length === 1 ? { name, state: "copy", item: matches[0] } : { name, state: matches.length ? "ambiguous" : "missing" };
   });
   const width = Math.max(4, ...rows.map((row) => row.name.length));
   console.log("migrate plan (personal vault -> agent account):");
-  for (const row of rows) console.log(`  ${row.name.padEnd(width)}  ${row.state === "present" ? "already in the agent account" : row.state}`);
+  const label = { present: "already in the agent account", refused: "refused: holds your personal master password" } as Record<string, string>;
+  for (const row of rows) console.log(`  ${row.name.padEnd(width)}  ${label[row.state] ?? row.state}`);
   const count = (state: Row["state"]) => rows.filter((row) => row.state === state).length;
-  console.log(`${count("copy")} to copy, ${count("present")} already there, ${count("missing")} missing, ${count("ambiguous")} ambiguous`);
+  console.log(`${count("copy")} to copy, ${count("present")} already there, ${count("missing")} missing, ${count("ambiguous")} ambiguous${count("refused") ? `, ${count("refused")} refused` : ""}`);
   if (!args.includes("--yes")) { console.log("Dry run: nothing copied. Re-run with --yes."); return; }
   const copied: string[] = [];
   for (const row of rows.filter((entry) => entry.state === "copy")) {
@@ -295,7 +304,7 @@ async function migrateCommand(args: string[]): Promise<void> {
   const cut = process.platform === "darwin" ? `security delete-generic-password -s ${core.PERSONAL_KEYCHAIN_MASTER_SERVICE}` : `secret-tool clear service ${core.PERSONAL_KEYCHAIN_MASTER_SERVICE} account "$USER"`;
   console.log(`Your personal master password is still in the keychain, where any program running as you can read it. Once you no longer need it there: ${cut}`);
   if (unverified.length) fail(`Not found after copying: ${unverified.join(", ")}`, 4);
-  if (count("missing") || count("ambiguous")) process.exitCode = 4;
+  if (count("missing") || count("ambiguous") || count("refused")) process.exitCode = 4;
 }
 
 async function importCommand(args: string[]): Promise<void> {

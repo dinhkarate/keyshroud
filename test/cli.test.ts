@@ -487,6 +487,15 @@ test("setup gives the CLI its own agent login; migrate copies only the wired ite
   const again = await runCli(box, ["migrate"]);
   assert.match(again.stdout, /0 to copy, 2 already there/);
 
+  // An item holding the personal master password is never copied.
+  const personal = await box.vault();
+  personal.items.push(item("id-9", "Vault login", "master"));
+  await writeFile(box.vaultFile, JSON.stringify(personal));
+  const refused = await runCli(box, ["migrate", "--item", "Vault login", "--yes"]);
+  assert.equal(refused.code, 4);
+  assert.match(refused.stdout, /Vault login\s+refused/);
+  assert.ok(!(await ownVault()).items.some((entry: { name: string }) => entry.name === "Vault login"));
+
   const run = await runCli(box, ["run", "--", "sh", "-c", "test \"$GH_TOKEN\" = \"$EXPECTED\" && echo same"], "", { EXPECTED: GH });
   assert.equal(run.code, 0, run.stderr);
   assert.match(run.stdout, /same/);
