@@ -32,6 +32,7 @@
 }
 </script>
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="llms" href="/llms.txt">
 <meta name="color-scheme" content="light dark">
 <style>
 :root {
@@ -88,6 +89,12 @@ h2 { font-size: 28px; letter-spacing: -0.02em; margin: 0 0 8px; }
 .step h3::before { counter-increment: s; content: counter(s); display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: var(--accent); color: var(--accent-ink); font-size: 13px; margin-right: 8px; }
 .step pre { margin: 0; background: var(--term-bg); color: var(--term-text); border-radius: 8px; padding: 12px; font-size: 13px; overflow-x: auto; }
 .step p { margin: 10px 0 0; color: var(--muted); font-size: 14px; }
+.agent-setup { margin-top: 16px; background: var(--surface); border: 1px dashed var(--accent); border-radius: 10px; padding: 18px; }
+.agent-setup h3 { margin: 0 0 4px; font-size: 16px; }
+.agent-setup p { margin: 0 0 12px; color: var(--muted); font-size: 14px; }
+.prompt { display: flex; gap: 8px; align-items: stretch; }
+.prompt pre { flex: 1; min-width: 0; margin: 0; background: var(--term-bg); color: var(--term-text); border-radius: 8px; padding: 12px; font-size: 13px; overflow-x: auto; }
+.prompt button { font: 600 14px/1 inherit; padding: 0 16px; border-radius: 8px; border: 1px solid var(--accent); background: var(--accent); color: var(--accent-ink); cursor: pointer; }
 .grid { display: grid; gap: 16px; grid-template-columns: 1fr; }
 @media (min-width: 640px) { .grid { grid-template-columns: repeat(2, 1fr); } }
 @media (min-width: 960px) { .grid { grid-template-columns: repeat(3, 1fr); } }
@@ -205,8 +212,23 @@ keyshroud doctor</code></pre>
         <p>Or install the Claude Code plugin: <code>/plugin marketplace add dinhkarate/keyshroud</code></p>
       </div>
     </div>
+    <div class="agent-setup">
+      <h3>Or let your agent set it up</h3>
+      <p>Paste this into Claude Code, Codex, Cursor, OpenCode or pi. The agent follows <a href="/install.md">install.md</a> and leaves vault login and the master password to you.</p>
+      <div class="prompt">
+        <pre><code id="agent-prompt">Read https://keyshroud.dev/install.md and set up keyshroud for me.</code></pre>
+        <button type="button" id="copy-prompt">Copy</button>
+      </div>
+    </div>
   </div>
 </section>
+<script>
+document.getElementById('copy-prompt').addEventListener('click', async (e) => {
+  try { await navigator.clipboard.writeText(document.getElementById('agent-prompt').textContent); e.target.textContent = 'Copied'; }
+  catch { e.target.textContent = 'Select & copy'; }
+  setTimeout(() => { e.target.textContent = 'Copy'; }, 1600);
+});
+</script>
 
 <section>
   <div class="wrap">
