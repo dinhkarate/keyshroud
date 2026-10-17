@@ -5,6 +5,8 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-17
+
 ### Added
 - `setup --email`: keyshroud gets its own `bw` login on a dedicated agent account
   (`~/.config/keyshroud/bw`, keychain entry `keyshroud-master-password`), so agents
