@@ -1,0 +1,3 @@
+#!/bin/sh
+# Fake URL opener: records the URL instead of starting a browser.
+printf "%s\n" "$1" >> "$FAKE_OPENED"

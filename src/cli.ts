@@ -220,8 +220,24 @@ async function setupCommand(args: string[]): Promise<void> {
   if (loggedOut) await core.bw(["config", "server", server]);
   await unlink(core.SESSION_FILE).catch(() => {});
   console.log(`${BRAND.name} now keeps its own bw login in ${core.OWN_BW_DIR}; your personal bw login is untouched.`);
+  const signupUrl = `${server.replace(/\/$/, "")}/#/signup?email=${encodeURIComponent(email)}`;
+  if (!process.stdin.isTTY) {
+    // An agent's shell: nothing can be typed, so keyshroud picks the password.
+    const hasEntry = Boolean(await core.readKeychain(core.KEYCHAIN_MASTER_SERVICE));
+    if (!loggedOut && (confirm || !hasEntry)) fail(`The agent account is already logged in; run \`${BRAND.bin} setup\` in a terminal to store its password`, 2);
+    if (loggedOut && !args.includes("--registered")) {
+      if (!hasEntry && !(await core.generateKeychainSecret(core.KEYCHAIN_MASTER_SERVICE, `${BRAND.name} agent account`, confirm))) fail("Could not store a generated password (needs macOS security or Linux secret-tool)", 3);
+      const master = await core.readKeychain(core.KEYCHAIN_MASTER_SERVICE);
+      if (!master || !(await core.copyToClipboard(master))) fail(`No clipboard tool; run \`${BRAND.bin} setup\` in a terminal instead`, 3);
+      spawn(process.platform === "darwin" ? "open" : "xdg-open", [signupUrl], { stdio: "ignore" }).on("error", () => {});
+      console.log(`A random master password for ${email} is in the keychain (${core.KEYCHAIN_MASTER_SERVICE}) and on the clipboard.`);
+      console.log(`Create the account at ${signupUrl} and paste it into both password fields.`);
+      console.log(`Then: ${BRAND.bin} setup --email ${email} --registered`);
+      return;
+    }
+  }
   if (loggedOut && !args.includes("--registered")) {
-    const url = `${server.replace(/\/$/, "")}/#/signup?email=${encodeURIComponent(email)}`;
+    const url = signupUrl;
     console.log(`1. Create the agent account ${email}: ${url}`);
     console.log("   Pick a new master password, not your personal one.");
     spawn(process.platform === "darwin" ? "open" : "xdg-open", [url], { stdio: "ignore" }).on("error", () => {});
@@ -235,6 +251,7 @@ async function setupCommand(args: string[]): Promise<void> {
   const master = await core.readKeychain(core.KEYCHAIN_MASTER_SERVICE);
   if (!master) fail(`The keychain entry ${core.KEYCHAIN_MASTER_SERVICE} is missing or access was denied`, 3);
   if (loggedOut) await core.loginOwnAccount(email, master); else await core.ensureSession();
+  await core.clearClipboardIf(master);
   await core.audit("setup", [], "cli");
   console.log(`ready: bw login=${email} (own). Next: \`${BRAND.bin} migrate\` copies the wired secrets from your personal vault.`);
 }

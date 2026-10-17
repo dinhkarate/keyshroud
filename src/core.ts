@@ -334,6 +334,46 @@ export async function storeKeychainInteractive(service: string, label: string, c
   return false;
 }
 
+// `setup` from an agent's shell (no terminal): a random master password for the
+// new agent account, written to the keychain over stdin. Nobody types it and it
+// never reaches argv or output; the user gets it via the clipboard for signup.
+export async function generateKeychainSecret(service: string, label: string, confirm: boolean): Promise<boolean> {
+  const secret = randomBytes(24).toString("base64url");
+  const user = process.env.USER || process.env.LOGNAME || "";
+  const opts = { timeout: 30000, maxBuffer: 1024 * 1024 };
+  try {
+    if (process.platform === "darwin") {
+      // `security -i` reads the command from stdin, so the value is not in argv.
+      await runFile("security", ["-i"], opts, `add-generic-password -U -a "${user}" -s "${service}" -l "${label}"${confirm ? ' -T ""' : ""} -w "${secret}"\n`);
+      await runFile("security", ["find-generic-password", "-a", user, "-s", service], opts);
+    } else {
+      await runFile("secret-tool", ["store", `--label=${label}`, "service", service, "account", user], opts, secret);
+    }
+    return true;
+  } catch { return false; }
+}
+
+const CLIPBOARD_TOOLS: Array<[string, string[], string, string[]]> = process.platform === "darwin"
+  ? [["pbcopy", [], "pbpaste", []]]
+  : [["wl-copy", [], "wl-paste", ["--no-newline"]], ["xclip", ["-selection", "clipboard"], "xclip", ["-selection", "clipboard", "-o"]]];
+
+export async function copyToClipboard(text: string): Promise<boolean> {
+  for (const [copy, args] of CLIPBOARD_TOOLS) {
+    try { await runFile(copy, args, { timeout: 10000, maxBuffer: 1024 * 1024 }, text); return true; } catch {}
+  }
+  return false;
+}
+
+// Empty the clipboard only if it still holds `text`.
+export async function clearClipboardIf(text: string): Promise<void> {
+  for (const [copy, copyArgs, paste, pasteArgs] of CLIPBOARD_TOOLS) {
+    try {
+      if ((await runFile(paste, pasteArgs, { timeout: 10000, maxBuffer: 1024 * 1024 })).stdout.trim() === text) await runFile(copy, copyArgs, { timeout: 10000, maxBuffer: 1024 * 1024 }, "");
+      return;
+    } catch {}
+  }
+}
+
 // `setup`: log keyshroud's own bw login in to the agent account. stdin and
 // stderr stay on the terminal so bw can ask for a two-step login code.
 export async function loginOwnAccount(email: string, master: string): Promise<string> {
