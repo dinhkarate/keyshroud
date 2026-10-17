@@ -153,6 +153,9 @@ keyshroud migrate --yes                          # copy them; references keep wo
 - `migrate` copies the items that wired names (and any `--env-file` / `--item`) reference, with
   the same names, then locks your personal vault again. Originals stay where they are. It needs
   your personal master password in the keychain once; delete it afterwards (the command prints how).
+- An agent can run `setup` too. Without a terminal, keyshroud generates the agent account's
+  master password, writes it to the keychain over stdin and puts it on the clipboard; you paste
+  it into the signup page, then the agent runs `setup --registered`, which clears the clipboard.
 - `--confirm-unlock` (macOS, off by default) creates the keychain entry so macOS asks you before
   every read, i.e. every vault unlock.
 - Self-hosted Vaultwarden with `SIGNUPS_ALLOWED=false`: invite the address from the admin page

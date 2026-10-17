@@ -1,0 +1,3 @@
+#!/bin/sh
+# Fake clipboard: $FAKE_CLIPBOARD -> stdout.
+cat "$FAKE_CLIPBOARD" 2>/dev/null

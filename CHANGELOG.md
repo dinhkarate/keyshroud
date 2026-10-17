@@ -9,7 +9,9 @@ All notable changes are documented here. This project follows
 - `setup --email`: keyshroud gets its own `bw` login on a dedicated agent account
   (`~/.config/keyshroud/bw`, keychain entry `keyshroud-master-password`), so agents
   can no longer unlock your personal vault. `--confirm-unlock` (macOS) makes the
-  keychain ask before every unlock.
+  keychain ask before every unlock. Run from an agent's shell, it generates the
+  agent account's password, stores it over stdin, and hands it to you on the
+  clipboard for the signup page.
 - `migrate`: copies the items your wired names reference from the personal vault
   into the agent account (dry run unless `--yes`, names only, originals kept).
 

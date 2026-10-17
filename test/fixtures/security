@@ -2,10 +2,13 @@
 # Fake macOS `security`: find-generic-password answers from $FAKE_KEYCHAIN_DIR/<service>;
 # add-generic-password stores the value read from stdin (the real tool prompts),
 # and records an empty -T (ask before every read) as <service>.confirm.
-op="$1"; service=""; confirm=""
+# `security -i` reads one such command line from stdin; -w VALUE is then inline.
+if [ "$1" = "-i" ]; then IFS= read -r line; eval "set -- $line"; fi
+op="$1"; service=""; confirm=""; inline=""; want_value=""
 while [ $# -gt 0 ]; do
   [ "$1" = "-s" ] && service="$2"
   [ "$1" = "-T" ] && [ -z "$2" ] && confirm=1
+  [ "$1" = "-w" ] && want_value=1 && [ $# -gt 1 ] && inline="$2"
   shift
 done
 if [ "$op" = "delete-generic-password" ]; then
@@ -13,10 +16,11 @@ if [ "$op" = "delete-generic-password" ]; then
   exit 0
 fi
 if [ "$op" = "add-generic-password" ]; then
-  IFS= read -r value || [ -n "$value" ] || exit 1
+  if [ -n "$inline" ]; then value="$inline"; else IFS= read -r value || [ -n "$value" ] || exit 1; fi
   printf '%s\n' "$value" > "$FAKE_KEYCHAIN_DIR/$service"
   [ -n "$confirm" ] && : > "$FAKE_KEYCHAIN_DIR/$service.confirm"
   exit 0
 fi
+[ "$op" = "find-generic-password" ] && [ -z "$want_value" ] && [ -f "$FAKE_KEYCHAIN_DIR/$service" ] && exit 0
 [ -n "$FAKE_KEYCHAIN_DIR" ] && [ -f "$FAKE_KEYCHAIN_DIR/$service" ] && cat "$FAKE_KEYCHAIN_DIR/$service" && exit 0
 exit 44

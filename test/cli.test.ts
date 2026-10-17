@@ -506,3 +506,26 @@ test("setup --confirm-unlock asks the macOS keychain before every read", { skip:
   assert.equal(setup.code, 0, setup.stderr);
   await stat(join(box.dir, "keychain", `${BRAND.bin}-master-password.confirm`));
 });
+
+test("setup from an agent's shell generates the password; the agent never sees it", async () => {
+  const box = await sandbox([]);
+  const own = join(box.configDir, "bw");
+  await mkdir(own, { recursive: true });
+  const first = await runCli(box, ["setup", "--email", "agent@example.test"]);
+  assert.equal(first.code, 0, first.stderr);
+  const generated = (await readFile(join(box.dir, "keychain", `${BRAND.bin}-master-password`), "utf8")).trim();
+  assert.ok(generated.length >= 32);
+  assert.equal(await readFile(box.env.FAKE_CLIPBOARD, "utf8"), generated);
+  assert.match(await readFile(box.env.FAKE_OPENED, "utf8"), /#\/signup\?email=agent%40example\.test/);
+  assert.ok(!first.stdout.includes(generated) && !first.stderr.includes(generated));
+  assert.match(first.stdout, /--registered/);
+
+  // The user signs up with the pasted password.
+  const state = JSON.parse(await readFile(join(own, "fake-vault.json"), "utf8"));
+  await writeFile(join(own, "fake-vault.json"), JSON.stringify({ ...state, registered: "agent@example.test", password: generated }));
+  const second = await runCli(box, ["setup", "--email", "agent@example.test", "--registered"]);
+  assert.equal(second.code, 0, second.stderr);
+  assert.match(second.stdout, /ready: bw login=agent@example\.test/);
+  assert.equal(await readFile(box.env.FAKE_CLIPBOARD, "utf8"), "");
+  assert.ok(!second.stdout.includes(generated) && !second.stderr.includes(generated));
+});
