@@ -82,7 +82,7 @@ async function runTool(args: Json): Promise<Json> {
   // Own process group so a timeout kills everything the command started
   // (Windows: cmd.exe, and taskkill for the tree).
   const windows = process.platform === "win32";
-  const child = spawn(windows ? process.env.ComSpec ?? "cmd.exe" : "/bin/sh", windows ? ["/d", "/s", "/c", `"${args.command}"`] : ["-c", args.command], {
+  const child = spawn(windows ? process.env.ComSpec ?? join(core.SYSTEM32, "cmd.exe") : "/bin/sh", windows ? ["/d", "/s", "/c", `"${args.command}"`] : ["-c", args.command], {
     cwd: typeof args.cwd === "string" && args.cwd ? args.cwd : process.cwd(),
     env: core.childEnv(env.values),
     stdio: ["ignore", "pipe", "pipe"],

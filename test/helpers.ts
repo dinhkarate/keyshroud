@@ -72,12 +72,15 @@ export function runCli(box: Sandbox, args: string[], input?: string, extraEnv: R
 // Runs the CLI on a pseudo-terminal (python3 pty) and types `typed` plus Enter
 // once `waitFor` appears. Output is merged, as on a terminal.
 const PTY_SCRIPT = `
-import os, pty, sys, time
+import os, pty, select, signal, sys, time
 pid, fd = pty.fork()
 if pid == 0:
     os.execvp(sys.argv[3], sys.argv[3:])
 out, typed, deadline = b"", False, time.time() + 30
-while time.time() < deadline:
+while True:
+    if not select.select([fd], [], [], max(0, deadline - time.time()))[0]:
+        os.kill(pid, signal.SIGKILL)
+        break
     try:
         chunk = os.read(fd, 4096)
     except OSError:

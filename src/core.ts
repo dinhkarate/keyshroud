@@ -69,7 +69,9 @@ const POWERSHELL = join(SYSTEM32, "WindowsPowerShell", "v1.0", "powershell.exe")
 export function invocation(command: string, args: string[]): Invocation {
   if (process.platform !== "win32") return { command, args };
   if (!windowsResolved.has(command)) {
-    const exts = /\.[^\\/.]+$/.test(command) ? [""] : (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean);
+    const pathext = (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean);
+    // `python3.12` still needs `.exe`; `npm.cmd` does not.
+    const exts = pathext.some((ext) => command.toLowerCase().endsWith(ext.toLowerCase())) ? [""] : pathext;
     const dirs = /[\\/]/.test(command) ? [""] : (process.env.PATH ?? "").split(";").map((dir) => dir.replace(/^"(.*)"$/, "$1")).filter(Boolean);
     let found: { file: string; script?: string } | null = null;
     search: for (const dir of dirs) for (const ext of exts) {
@@ -89,8 +91,9 @@ export function invocation(command: string, args: string[]): Invocation {
   }
   if (found.script) return { command: process.execPath, args: [found.script, ...args] };
   if (!/\.(cmd|bat)$/i.test(found.file)) return { command: found.file, args };
-  const quote = (value: string) => `"${value.replaceAll('"', '""').replace(/(\\+)$/, "$1$1")}"`;
-  return { command: process.env.ComSpec ?? "cmd.exe", args: ["/d", "/s", "/c", `"${[found.file, ...args].map(quote).join(" ")}"`], verbatim: true };
+  // Backslashes before a quote, or at the end, are doubled for the C runtime's parser.
+  const quote = (value: string) => `"${value.replace(/(\\*)"/g, '$1$1""').replace(/(\\+)$/, "$1$1")}"`;
+  return { command: process.env.ComSpec ?? join(SYSTEM32, "cmd.exe"), args: ["/d", "/s", "/c", `"${[found.file, ...args].map(quote).join(" ")}"`], verbatim: true };
 }
 
 function bwCommand(args: string[]): [string, string[], boolean] {
@@ -442,13 +445,17 @@ async function useStoredSession(): Promise<string | null> {
 // dialog closed without one (a wrong password, or a Save dialog), so ask again.
 async function waitForSession(): Promise<string | null> {
   const deadline = Date.now() + DIALOG_TIMEOUT_MS + 30_000;
+  let closedAt = 0;
   while (Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 1000));
     const token = await useStoredSession();
     if (token) return token;
     const held = await readFile(DIALOG_LOCK, "utf8").catch(() => "");
     if (held.startsWith("cancelled:")) throw new Error("Cancelled");
-    if (!held.startsWith("open:")) return null;
+    // The dialog closes before its bw unlock (up to 20 s) writes the session.
+    if (held.startsWith("open:")) closedAt = 0;
+    else if (!closedAt) closedAt = Date.now();
+    else if (Date.now() - closedAt > 25_000) return null;
   }
   throw new Error(DIALOG_BUSY);
 }
@@ -507,7 +514,7 @@ export async function askMasterPassword(opts: { email?: string; unattended?: boo
   const span = opts.unattended ? "with no time limit (unattended)" : `for ${Math.round(SESSION_TTL_MS / 60000)} minutes`;
   const tty = process.stdin.isTTY && process.stderr.isTTY;
   // A session without an end is opened by the person at a terminal, never from a dialog an agent opened.
-  if (opts.unattended && !tty) throw new Error(`An unattended session needs a terminal: run \`${BRAND.bin} unlock --unattended\` there`);
+  if (opts.unattended && !tty) throw new Error("An unattended session needs a terminal: run this command in one");
   if (tty) {
     process.stderr.write(`${BRAND.name}: unlocking ${account} ${span}.\n`);
     const value = await readMasked(`Master password of ${account}: `);
@@ -632,8 +639,8 @@ export async function clearClipboardIf(text: string): Promise<void> {
 // stderr stay on the terminal so bw can ask for a two-step login code.
 export async function loginOwnAccount(email: string, master: string, unattended = false): Promise<string> {
   const token = await new Promise<string>((resolve, reject) => {
-    const [command, args] = bwCommand(["login", email, "--passwordenv", "BW_PASSWORD", "--raw"]);
-    const child = spawn(command, args, { env: { ...process.env, BW_PASSWORD: master }, stdio: ["inherit", "pipe", "inherit"] });
+    const [command, args, verbatim] = bwCommand(["login", email, "--passwordenv", "BW_PASSWORD", "--raw"]);
+    const child = spawn(command, args, { env: { ...process.env, BW_PASSWORD: master }, stdio: ["inherit", "pipe", "inherit"], windowsVerbatimArguments: verbatim });
     let out = "";
     child.stdout.on("data", (chunk: Buffer) => { out += chunk; });
     child.on("error", reject);
@@ -931,8 +938,9 @@ export async function getSecret(itemName: string): Promise<string> {
 // password into an item it can then read; refuse it outright.
 async function refuseMasterPassword(secret: string): Promise<void> {
   if (!secret) return;
-  const match = secret === await readMasterPassword() || await matchesMasterVerifier(secret);
-  if (match === true || (match === null && await unlocksVault(secret))) throw new Error("Refusing to store the vault master password as a secret");
+  // The verifier only short-cuts a match: an agent can replace it with the hash of another value.
+  const stored = await readMasterPassword();
+  if (secret === stored || await matchesMasterVerifier(secret) || (!stored && await unlocksVault(secret))) throw new Error("Refusing to store the vault master password as a secret");
 }
 
 export async function createSecretItem(opts: { itemName: string; secret: string; envName?: string; notes?: string }): Promise<{ id: string }> {
