@@ -1,8 +1,10 @@
-name: Pages
+name: Site
+# keyshroud.dev is served by Cloudflare Workers (wrangler.jsonc). GitHub Pages gets the
+# same site/ as a standby: to fail back, point the apex A records at GitHub Pages again.
 on:
   push:
     branches: [main]
-    paths: ["site/**", ".github/workflows/pages.yml"]
+    paths: ["site/**", "wrangler.jsonc", ".github/workflows/pages.yml"]
   workflow_dispatch:
 permissions:
   contents: read
@@ -10,6 +12,18 @@ permissions:
   id-token: write
 concurrency: { group: pages, cancel-in-progress: true }
 jobs:
+  cloudflare:
+    runs-on: ubuntu-latest
+    # Skipped until the CLOUDFLARE_API_TOKEN repo secret exists; deploy by hand with `npx wrangler deploy`.
+    env: { CF_TOKEN: "${{ secrets.CLOUDFLARE_API_TOKEN }}" }
+    steps:
+      - uses: actions/checkout@v5
+        if: env.CF_TOKEN != ''
+      - uses: cloudflare/wrangler-action@v3
+        if: env.CF_TOKEN != ''
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          command: deploy
   deploy:
     runs-on: ubuntu-latest
     environment: { name: github-pages, url: "${{ steps.deploy.outputs.page_url }}" }
