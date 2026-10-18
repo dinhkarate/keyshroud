@@ -6,20 +6,21 @@ To install it for a user, follow https://keyshroud.dev/install.md step by step. 
 
 Key facts for agents:
 
-- Run secret-using commands as `keyshroud run -- <command>`, or with the `secrets_run` MCP tool. Output is masked even when the command fails.
+- Run secret-using commands as `keyshroud run -- <command>`. Output is masked even when the command fails. Agents with a shell use the CLI; the `secrets_run` MCP tool is for clients without one.
 - Never ask the user to paste a secret into chat. To store one, run `keyshroud add --env NAME --item "Item"` or call `secrets_request`; the user types the value into a hidden-input dialog or terminal prompt.
 - Never run `keyshroud get`, `bw get`, or `bw unlock`, and never read the vault master password from the keychain.
 - Projects commit `.env.refs` files with references like `GH_TOKEN=bw://GitHub token`; `keyshroud import` converts an existing `.env` (names-only dry run by default).
-- MCP server: `keyshroud mcp` (stdio). Tools: `secrets_run`, `secrets_list`, `secrets_request`, `vault_status`. None returns a secret value.
+- MCP server (for clients without a shell): `keyshroud mcp` (stdio). Tools: `secrets_run`, `secrets_list`, `secrets_request`, `vault_status`. None returns a secret value.
 - Requirements: Node.js 22.18+, the Bitwarden CLI (`bw`), and a Vaultwarden or Bitwarden account.
 
 ## Docs
 
 - [Agent setup guide](https://keyshroud.dev/install.md): step-by-step install for AI agents
 - [README](https://github.com/dinhkarate/keyshroud#readme): features, supported agents, quickstart
-- [Claude Code plugin](https://github.com/dinhkarate/keyshroud#claude-code): hooks, MCP tools, skill
+- [Claude Code plugin](https://github.com/dinhkarate/keyshroud#claude-code): hooks, skill
 - [pi / omp extension](https://github.com/dinhkarate/keyshroud#pi--omp)
-- [Any MCP client](https://github.com/dinhkarate/keyshroud#any-mcp-client): Codex, Cursor, Claude Desktop, Cline, OpenCode, Gemini CLI
+- [Other agents with a shell](https://github.com/dinhkarate/keyshroud#other-agents-with-a-shell): Codex, OpenCode, Gemini CLI, Cursor (skill + CLI)
+- [MCP clients without a shell](https://github.com/dinhkarate/keyshroud#mcp-clients-without-a-shell): Claude Desktop and chat-only clients
 - [CLI reference](https://github.com/dinhkarate/keyshroud#cli-reference)
 - [Security model](https://github.com/dinhkarate/keyshroud#security-model): what keyshroud does and does not protect against
 - [Vault setup](https://github.com/dinhkarate/keyshroud/tree/main/examples/vaultwarden#readme): self-host Vaultwarden or use Bitwarden cloud

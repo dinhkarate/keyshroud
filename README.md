@@ -60,7 +60,7 @@ webhooks, databases. The usual options are bad:
 |---|---|
 | 🙈 **Masked output** | `keyshroud run` replaces every secret value in stdout/stderr with `<redacted:NAME>` — streaming-safe across chunk boundaries. |
 | 🪝 **Agent hooks** | The pi/omp `tool_result` hook redacts every tool result, failed ones included. Claude Code's `PostToolUse` hook redacts every *successful* tool result (Bash, Read, Grep, MCP…) — see [limits](#security-model). |
-| 🔌 **MCP server** | `keyshroud mcp` gives any MCP client `secrets_run`, `secrets_list`, `secrets_request`, `vault_status`. No tool ever returns a value. |
+| 🔌 **MCP server** | For clients without a shell: `keyshroud mcp` gives them `secrets_run`, `secrets_list`, `secrets_request`, `vault_status`. No tool ever returns a value. |
 | 🔗 **Committable references** | `bw://item`, `bw://item/username`, `bw://item/fields/name`, `bw://item/totp` in `.env.refs` files and templates: names, not values. |
 | ⌨️ **Paste-to-create** | New secrets go through a masked prompt in the user's terminal or a masked popup in pi — never through the chat. |
 | 📄 **`inject`** | Render `{{ bw://… }}` templates into `0600` config files for tools that can't read env vars (`.npmrc`, kubeconfig). |
@@ -73,12 +73,15 @@ webhooks, databases. The usual options are bad:
 
 | Agent | Install | What you get |
 |---|---|---|
-| **Claude Code** | [plugin](#claude-code) | SessionStart + PostToolUse redaction hooks, MCP tools, skill |
+| **Claude Code** | [plugin](#claude-code) | SessionStart + PostToolUse redaction hooks, skill |
 | **pi / omp** | [`pi install npm:keyshroud`](#pi--omp) | env hydration, `tool_result` redaction (failed calls too), `/secret` |
-| **Codex** | [`codex mcp add keyshroud -- keyshroud mcp`](#any-mcp-client) | MCP tools with masked output |
-| **Cursor, Claude Desktop, Cline, Gemini CLI** | [`mcpServers` JSON](#any-mcp-client) | MCP tools with masked output |
-| **OpenCode** | [`opencode mcp add keyshroud -- keyshroud mcp`](#any-mcp-client) | MCP tools with masked output |
+| **Codex, OpenCode, Gemini CLI, Cursor agent** | [`npx skills add dinhkarate/keyshroud`](#other-agents-with-a-shell) | skill + CLI with masked output |
+| **Claude Desktop, chat-only clients** | [`mcpServers` JSON](#mcp-clients-without-a-shell) | MCP tools with masked output |
 | **Any shell or CI** | `keyshroud run -- <cmd>` | env injection + masked output |
+
+Agents with a shell use the CLI: it costs no tool schemas in the context, and
+`keyshroud run` masks output whatever the exit code. The MCP server is for
+clients that cannot run commands.
 
 ## Use cases
 
@@ -192,7 +195,7 @@ keyshroud migrate --yes                          # copy them; references keep wo
 
 ## Claude Code
 
-Install the CLI, then the plugin (MCP server + redaction hooks + skill):
+Install the CLI, then the plugin (redaction hooks + skill):
 
 ```bash
 npm install -g keyshroud
@@ -211,10 +214,12 @@ What you get:
   Code's `updatedToolOutput` (tested with Claude Code 2.1.296).
   **Limit:** when a command fails, Claude Code fires `PostToolUseFailure`, which
   cannot rewrite output. The skill and session context therefore tell Claude to
-  run every secret-using command through `keyshroud run` (or `secrets_run`),
-  which masks inside the process regardless of the exit code.
-- **MCP tools** — `secrets_run`, `secrets_list`, `secrets_request`, `vault_status`.
+  run every secret-using command through `keyshroud run`, which masks inside
+  the process regardless of the exit code.
 - **Skill** — teaches Claude to use names and references, never values.
+
+Claude uses the CLI from its Bash tool, so the plugin adds no MCP server (since
+0.6.1). To add one anyway: `claude mcp add keyshroud -- keyshroud mcp`.
 
 The plugin calls `keyshroud` from `PATH`. If Claude Code is launched from a GUI
 that doesn't see your npm/nvm bin directory, run `keyshroud link-cli` (links it
@@ -261,15 +266,27 @@ export KEYSHROUD_PLANNER_MODEL=qwen3-4b
 
 Without a planner, names are derived from the description and you can edit them.
 
-## Any MCP client
+## Other agents with a shell
 
-Codex, Cursor, Claude Desktop, Cline, Gemini CLI and any other client that speaks MCP over stdio:
+Codex, OpenCode, Gemini CLI, Cursor's agent and anything else that can run commands: install the
+CLI and the skill, which teaches the agent to run secret-using commands as `keyshroud run -- …`
+and to store new secrets with `keyshroud add`:
+
+```bash
+npm install -g keyshroud
+npx skills add dinhkarate/keyshroud
+```
+
+## MCP clients without a shell
+
+Claude Desktop, chat-only clients, or an agent you do not allow to run commands. Any client that
+speaks MCP over stdio:
 
 ```json
 { "mcpServers": { "keyshroud": { "command": "keyshroud", "args": ["mcp"] } } }
 ```
 
-Codex: `codex mcp add keyshroud -- keyshroud mcp`. Non-interactive `codex exec` refuses MCP calls that need approval; allow keyshroud's tools explicitly:
+Codex, if you want MCP there too: `codex mcp add keyshroud -- keyshroud mcp`. Non-interactive `codex exec` refuses MCP calls that need approval; allow keyshroud's tools explicitly:
 
 ```toml
 # ~/.codex/config.toml
