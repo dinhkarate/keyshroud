@@ -26,7 +26,7 @@ do not need a Vaultwarden account. Never use real secrets in tests or issues.
 | `src/hooks.ts` | Claude Code hooks. |
 | `extensions/pi/` | pi / omp extension (loaded as TypeScript by the host). |
 | `skills/keyshroud/` | Agent skill (Claude Code plugin, skills.sh). |
-| `.claude-plugin/`, `hooks/`, `.mcp.json` | Claude Code plugin + marketplace. |
+| `.claude-plugin/`, `hooks/` | Claude Code plugin + marketplace (hooks + skill, no MCP server). |
 
 ## Rules
 

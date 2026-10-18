@@ -5,6 +5,17 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-10-18
+
+### Changed
+- CLI first. The Claude Code plugin no longer starts an MCP server: Claude runs
+  `keyshroud` from its Bash tool, the hooks still mask tool results, and no tool
+  schemas sit in the context. Add the server yourself with
+  `claude mcp add keyshroud -- keyshroud mcp` if you want it.
+- Codex, OpenCode, Gemini CLI and Cursor's agent are set up with the skill
+  (`npx skills add dinhkarate/keyshroud`) and the CLI instead of MCP. The MCP
+  server stays for clients without a shell, such as Claude Desktop.
+
 ## [0.6.0] - 2026-10-17
 
 ### Added

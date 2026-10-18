@@ -23,7 +23,7 @@
   "url": "https://keyshroud.dev/",
   "applicationCategory": "DeveloperApplication",
   "operatingSystem": "macOS, Linux",
-  "softwareVersion": "0.6.0",
+  "softwareVersion": "0.6.1",
   "license": "https://opensource.org/licenses/MIT",
   "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
   "downloadUrl": "https://www.npmjs.com/package/keyshroud",
@@ -198,7 +198,7 @@ footer a { color: var(--muted); }
       <div class="step">
         <h3>Install</h3>
         <pre><code>npm i -g keyshroud @bitwarden/cli</code></pre>
-        <p>One CLI, plus plugins for Claude Code and pi, and an MCP server.</p>
+        <p>One CLI that agents call from their shell, plus plugins for Claude Code and pi. An MCP server covers clients without a shell.</p>
       </div>
       <div class="step">
         <h3>Point at your vault</h3>
@@ -237,7 +237,7 @@ document.getElementById('copy-prompt').addEventListener('click', async (e) => {
     <div class="grid">
       <div class="card"><h3>Masked output</h3><p><code>keyshroud run</code> streams stdout and stderr through a redactor. A secret is never split across chunks and slips through, and masking is on by default when output isn't going to a terminal.</p></div>
       <div class="card"><h3>Hooks on tool output</h3><p>pi <code>tool_result</code> and Claude Code <code>PostToolUse</code> hooks scrub tool results, including commands the agent ran without keyshroud. (Claude Code can't rewrite failed calls, so secret-using commands go through <code>keyshroud run</code>.)</p></div>
-      <div class="card"><h3>MCP server</h3><p><code>keyshroud mcp</code> gives Codex, Cursor and any MCP client <code>secrets_run</code>, <code>secrets_list</code> and <code>secrets_request</code>. None of them return values.</p></div>
+      <div class="card"><h3>MCP server</h3><p>For clients without a shell, <code>keyshroud mcp</code> gives them <code>secrets_run</code>, <code>secrets_list</code> and <code>secrets_request</code>. None of them return values.</p></div>
       <div class="card"><h3><code>bw://</code> references</h3><p>Write <code>GH_TOKEN=bw://GitHub/fields/token</code> in a <code>.env.refs</code> file you can commit. References cover passwords, usernames, notes, TOTP codes, URIs and custom fields.</p></div>
       <div class="card"><h3>Inject &amp; scan</h3><p><code>inject</code> renders <code>{{ bw://… }}</code> templates into files only you can read (mode 0600). <code>scan</code> finds leaked values in your repo before you commit.</p></div>
       <div class="card"><h3>Self-hosted, free</h3><p>Runs on the Vaultwarden you already host. No SaaS, no account with us, no telemetry. Adding a secret uses a masked prompt, so the value never enters the chat.</p></div>
@@ -250,11 +250,10 @@ document.getElementById('copy-prompt').addEventListener('click', async (e) => {
     <h2>Works with your agent</h2>
     <p class="sub">One vault, every coding agent you use. Setup for each is in the docs.</p>
     <div class="agents">
-      <a class="agent" href="https://github.com/dinhkarate/keyshroud#claude-code"><span class="via">Plugin</span><b>Claude Code</b><span>SessionStart and PostToolUse hooks mask tool results; MCP tools and a skill included.</span></a>
+      <a class="agent" href="https://github.com/dinhkarate/keyshroud#claude-code"><span class="via">Plugin</span><b>Claude Code</b><span>SessionStart and PostToolUse hooks mask tool results; a skill teaches Claude the CLI.</span></a>
       <a class="agent" href="https://github.com/dinhkarate/keyshroud#pi--omp"><span class="via">Extension</span><b>pi / omp</b><span>Hydrates env before provider auth and masks every tool result, failed ones too.</span></a>
-      <a class="agent" href="https://github.com/dinhkarate/keyshroud#any-mcp-client"><span class="via">MCP</span><b>Codex</b><span><code>codex mcp add keyshroud -- keyshroud mcp</code></span></a>
-      <a class="agent" href="https://github.com/dinhkarate/keyshroud#any-mcp-client"><span class="via">MCP</span><b>Cursor &amp; Claude Desktop</b><span>One <code>mcpServers</code> entry. <code>secrets_run</code> returns masked output.</span></a>
-      <a class="agent" href="https://github.com/dinhkarate/keyshroud#any-mcp-client"><span class="via">MCP</span><b>Cline, OpenCode, Gemini CLI</b><span>Any client that speaks MCP over stdio.</span></a>
+      <a class="agent" href="https://github.com/dinhkarate/keyshroud#other-agents-with-a-shell"><span class="via">Skill</span><b>Codex, OpenCode, Gemini CLI, Cursor</b><span><code>npx skills add dinhkarate/keyshroud</code>, then the agent uses the CLI.</span></a>
+      <a class="agent" href="https://github.com/dinhkarate/keyshroud#mcp-clients-without-a-shell"><span class="via">MCP</span><b>Claude Desktop &amp; chat clients</b><span>One <code>mcpServers</code> entry. <code>secrets_run</code> returns masked output.</span></a>
       <a class="agent" href="https://github.com/dinhkarate/keyshroud#quickstart"><span class="via">CLI</span><b>Any shell or CI</b><span><code>keyshroud run -- &lt;cmd&gt;</code> injects env and masks stdout/stderr.</span></a>
     </div>
   </div>

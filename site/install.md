@@ -42,20 +42,22 @@ Pick the line for the agent you are running in:
 | Agent | Do this |
 |---|---|
 | Claude Code | Ask the user to type `/plugin marketplace add dinhkarate/keyshroud`, then `/plugin install keyshroud@keyshroud`, then restart Claude Code. You cannot run slash commands yourself. |
-| Codex | `codex mcp add keyshroud -- keyshroud mcp` |
-| OpenCode | `opencode mcp add keyshroud -- keyshroud mcp` |
+| Codex | `npx skills add dinhkarate/keyshroud -g -a codex -y` |
+| OpenCode | `npx skills add dinhkarate/keyshroud -g -a opencode -y` |
+| Gemini CLI | `npx skills add dinhkarate/keyshroud -g -a gemini-cli -y` |
+| Cursor (agent) | `npx skills add dinhkarate/keyshroud -g -a cursor -y` |
 | pi / omp | `pi install npm:keyshroud` (or `omp install npm:keyshroud`) |
-| Cursor | Add the JSON below to `~/.cursor/mcp.json` |
-| Claude Desktop | Add the JSON below to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) |
-| Gemini CLI | Add the JSON below to `~/.gemini/settings.json` |
-| Cline, others | Add the JSON below to the client's MCP settings |
+| Claude Desktop, chat-only clients | Add the MCP JSON below to the client's settings (`~/Library/Application Support/Claude/claude_desktop_config.json` for Claude Desktop on macOS) |
+
+If you can run shell commands, use the CLI (`keyshroud run`, `keyshroud add`): it needs no
+tool schemas in your context. The MCP server is only for clients that cannot run commands:
 
 ```json
 { "mcpServers": { "keyshroud": { "command": "keyshroud", "args": ["mcp"] } } }
 ```
 
 Merge it into an existing `mcpServers` object instead of replacing the file.
-For non-interactive `codex exec`, also allow the tool in `~/.codex/config.toml`:
+If you do use MCP from non-interactive `codex exec`, also allow the tool in `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.keyshroud.tools.secrets_run]
