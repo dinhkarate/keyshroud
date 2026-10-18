@@ -5,6 +5,8 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-19
+
 ### Changed
 - keyshroud no longer needs a stored master password. When the vault is locked
   and a command needs a secret, it asks: a masked prompt in a terminal, a native
