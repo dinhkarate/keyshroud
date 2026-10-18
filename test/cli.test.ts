@@ -4,7 +4,7 @@ import { mkdir, readdir, readFile, stat, symlink, unlink, utimes, writeFile } fr
 import { join } from "node:path";
 import { test } from "node:test";
 import { BRAND } from "../src/brand.ts";
-import { CLI, item, runCli, sandbox, writeAuth } from "./helpers.ts";
+import { CLI, item, runCli, runCliTty, sandbox, writeAuth } from "./helpers.ts";
 
 const GH = "ghp_FAKE0123456789abcdef";
 const NPM = "npm_FAKEabcdefghijklmnop";
@@ -628,6 +628,15 @@ test("without a stored master password keyshroud asks, and the session ends afte
   const phished = await runCli(box, ["add", "--env", "PHISHED", "--item", "Phished", "--stdin"], "master");
   assert.match(phished.stderr, /master password/);
   assert.ok(!(await box.vault()).items.some((entry) => entry.name === "Phished"));
+  // Removing or forging the hash does not help: keyshroud then tries the value as the master password.
+  for (const forged of [null, "scrypt$2$1$1$AAAA$AA==\n"]) {
+    if (forged === null) await unlink(join(box.configDir, "master-password.scrypt")); else await writeFile(join(box.configDir, "master-password.scrypt"), forged);
+    const again = await runCli(box, ["add", "--env", "PHISHED", "--item", "Phished", "--stdin"], "master");
+    assert.match(again.stderr, /master password/);
+    assert.ok(!(await box.vault()).items.some((entry) => entry.name === "Phished"));
+  }
+  const other = await runCli(box, ["add", "--env", "OTHER", "--item", "Other", "--stdin"], "not-the-master");
+  assert.equal(other.code, 0, other.stderr);
 
   // An ended session is locked, and the next use asks again.
   await writeFile(join(box.configDir, "session"), `fake-session\nexpires=${Date.now() - 1}\n`);
@@ -649,12 +658,16 @@ test("the lock timer ends a session even when nothing calls keyshroud", { skip: 
   await assert.rejects(stat(join(box.configDir, "session")));
 });
 
-test("unlock --unattended always asks and opens a session without an end", async () => {
+test("unlock --unattended always asks in a terminal and opens a session without an end", { skip: process.platform === "win32" }, async () => {
   const box = await wired();
   const refused = await runCli(box, ["unlock", "--unattended"]);
   assert.notEqual(refused.code, 0, "a stored master password is not enough");
-  const opened = await runCli(box, ["unlock", "--unattended"], "", { DISPLAY: ":0", FAKE_DIALOG_VALUE: "master" });
-  assert.equal(opened.code, 0, opened.stderr);
+  const dialog = await runCli(box, ["unlock", "--unattended"], "", { DISPLAY: ":0", FAKE_DIALOG_VALUE: "master" });
+  assert.match(dialog.stderr, /needs a terminal/, "an agent cannot open an endless session through a dialog");
+  const wrong = await runCliTty(box, ["unlock", "--unattended"], "Master password of", "not-the-master");
+  assert.match(wrong.stdout, /Wrong master password/);
+  const opened = await runCliTty(box, ["unlock", "--unattended"], "Master password of", "master");
+  assert.equal(opened.code, 0, opened.stdout);
   assert.match(opened.stdout, /no time limit/);
   assert.equal((await readFile(join(box.configDir, "session"), "utf8")).split("\n")[1], "expires=never");
   assert.match((await runCli(box, ["doctor"])).stdout, /session expires=never/);

@@ -69,6 +69,41 @@ export function runCli(box: Sandbox, args: string[], input?: string, extraEnv: R
   });
 }
 
+// Runs the CLI on a pseudo-terminal (python3 pty) and types `typed` plus Enter
+// once `waitFor` appears. Output is merged, as on a terminal.
+const PTY_SCRIPT = `
+import os, pty, sys, time
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvp(sys.argv[3], sys.argv[3:])
+out, typed, deadline = b"", False, time.time() + 30
+while time.time() < deadline:
+    try:
+        chunk = os.read(fd, 4096)
+    except OSError:
+        break
+    if not chunk:
+        break
+    out += chunk
+    if not typed and sys.argv[1].encode() in out:
+        os.write(fd, sys.argv[2].encode() + b"\\r")
+        typed = True
+sys.stdout.write(out.decode(errors="replace"))
+sys.exit(os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1]))
+`;
+
+export function runCliTty(box: Sandbox, args: string[], waitFor: string, typed: string, extraEnv: Record<string, string> = {}): Promise<RunResult> {
+  return new Promise((resolve) => {
+    const child = spawn("python3", ["-c", PTY_SCRIPT, waitFor, typed, process.execPath, CLI, ...args], { env: { ...box.env, ...extraEnv }, cwd: box.dir });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.on("close", (code) => resolve({ code, stdout, stderr }));
+    child.on("error", () => resolve({ code: null, stdout, stderr: "python3 missing" }));
+  });
+}
+
 export async function writeAuth(box: Sandbox, entries: Record<string, unknown>): Promise<void> {
   for (const path of [join(box.env.HOME, ".pi", "agent"), box.env.PI_CODING_AGENT_DIR]) {
     await mkdir(path, { recursive: true });
