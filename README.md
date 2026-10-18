@@ -118,9 +118,8 @@ npm install -g keyshroud @bitwarden/cli    # or: brew install bitwarden-cli
 bw config server https://vault.example.com
 bw login
 
-# 2. Let keyshroud unlock without prompting (stored in the OS keychain)
-security add-generic-password -a "$USER" -s vaultwarden-master-password -w      # macOS: prompts for the value
-# Linux: secret-tool store --label=vaultwarden service vaultwarden-master-password account "$USER"
+# 2. Unlock for 30 minutes (asks for the master password; nothing is stored)
+keyshroud unlock
 
 # 3. Check everything
 keyshroud doctor
@@ -133,34 +132,45 @@ keyshroud run -- gh auth status
 keyshroud run -- claude          # start an agent with every wired secret available
 ```
 
-Optional: put `vaultwarden-api-client-id` / `vaultwarden-api-client-secret` (from
-*Settings → Security → Keys → API key*) in the keychain too, and keyshroud will
-also re-login automatically when the `bw` session expires. Linux keyring commands
-and a headless-server option are in the [vault setup guide](examples/vaultwarden#4-let-keyshroud-unlock-without-prompting).
+keyshroud never stores the master password unless you do. When the vault is locked
+and a command needs a secret, it asks: a masked prompt in a terminal, a native dialog
+on the desktop (so an agent's command waits for you), and over SSH it tells you to run
+`keyshroud unlock`. A session ends after 30 minutes (`KEYSHROUD_SESSION_TTL_MS`): a timer
+runs `bw lock`, so a copied session token stops working too. On a host nobody sits at,
+`keyshroud unlock --unattended` asks once and opens a session without an end.
+
+To unlock without being asked, store the master password in the OS keychain
+(`security add-generic-password -a "$USER" -s vaultwarden-master-password -w`, or
+`secret-tool store` on Linux; see the [vault setup guide](examples/vaultwarden#optional-unlock-without-being-asked)).
+Any program running as you can then read it, agents included.
 
 ### Least privilege: a separate agent account
 
-With the steps above, keyshroud holds your master password, so an agent that runs
-`bw` as you can open your whole vault. `setup` gives keyshroud its own `bw` login
-on a dedicated account instead, which holds only the secrets agents need:
+With the steps above, an unlocked session opens your whole vault, and an agent that
+runs `bw` as you can use it. `setup` gives keyshroud its own `bw` login on a dedicated
+account instead, which holds only the secrets agents need:
 
 ```bash
-keyshroud setup --email you+agent@example.com   # opens the signup page, then stores the new
-                                                 # master password in the keychain and logs in
+keyshroud setup --email you+agent@example.com   # opens the signup page, then logs in with the
+                                                 # new master password (asked, not stored)
 keyshroud migrate                                # dry run: which wired items would be copied
 keyshroud migrate --yes                          # copy them; references keep working
 ```
 
-- The agent login lives in `~/.config/keyshroud/bw` (`BITWARDENCLI_APPDATA_DIR`), its master
-  password in the keychain entry `keyshroud-master-password`. Your own `bw` login is untouched.
+- The agent login lives in `~/.config/keyshroud/bw` (`BITWARDENCLI_APPDATA_DIR`). Your own `bw`
+  login is untouched. Its master password is not stored: keyshroud asks for it when a session
+  ends and keeps only a scrypt hash, so `add` can refuse it as a secret.
 - `migrate` copies the items that wired names (and any `--env-file` / `--item`) reference, with
   the same names, then locks your personal vault again. Originals stay where they are. It needs
   your personal master password in the keychain once; delete it afterwards (the command prints how).
 - An agent can run `setup` too. Without a terminal, keyshroud generates the agent account's
-  master password, writes it to the keychain over stdin and puts it on the clipboard; you paste
-  it into the signup page, then the agent runs `setup --registered`, which clears the clipboard.
-- `--confirm-unlock` (macOS, off by default) creates the keychain entry so macOS asks you before
-  every read, i.e. every vault unlock.
+  master password and puts it on the clipboard; you paste it into the signup page and into your
+  own password manager, then the agent runs `setup --registered`, which asks for it in a dialog
+  and clears the clipboard.
+- `--confirm-unlock` (macOS) stores the master password in the keychain entry
+  `keyshroud-master-password` so that macOS asks you before every read, i.e. every unlock.
+- `--unattended` (hosts nobody sits at, e.g. over `ssh -t`) logs in with a session without an
+  end. Unlock it again with `keyshroud unlock --unattended`.
 - Self-hosted Vaultwarden with `SIGNUPS_ALLOWED=false`: invite the address from the admin page
   (`/admin`), or allow signups for a minute, then pass `--registered` once the account exists.
 
@@ -180,8 +190,9 @@ keyshroud migrate --yes                          # copy them; references keep wo
 1. **Wiring.** A secret is wired by *name*: `GH_TOKEN → bw://GitHub CLI token`.
    Wiring lives in `~/.pi/agent/auth.json` / `~/.omp/agent/auth.json`
    (shared with pi/omp) and in project `.env.refs` files. Both are safe to read.
-2. **Unlock.** `bw` is unlocked from the OS keychain; the session token is cached
-   in `~/.config/keyshroud/session` (`0600`).
+2. **Unlock.** keyshroud asks for the master password (or reads one you stored in the
+   OS keychain); the session token is cached in `~/.config/keyshroud/session` (`0600`)
+   and locked again after 30 minutes.
 3. **Resolve.** All references resolve from one `bw list items` snapshot held in
    memory for `KEYSHROUD_CACHE_TTL_MS` (default 1 h).
 4. **Inject.** Values go into the child process environment — never into argv
@@ -317,9 +328,10 @@ keyshroud import [--from F|-] [--out F] [--prefix P] [--only A,B] [--skip A,B] [
 keyshroud rotate --item ITEM [--stdin|--dialog]
 keyshroud wire --env NAME --item ITEM [--target pi|omp|both] [--force]
 keyshroud unwire --env NAME [--target pi|omp|both]
-keyshroud setup --email EMAIL [--server URL] [--confirm-unlock] [--registered]
+keyshroud setup --email EMAIL [--server URL] [--confirm-unlock | --unattended] [--registered]
 keyshroud migrate [--item NAME]... [--env-file F]... [--yes]
-keyshroud status | unlock | lock | doctor
+keyshroud unlock [--unattended]
+keyshroud status | lock | doctor
 keyshroud mcp
 keyshroud hook claude <session-start|post-tool-use>
 keyshroud claude-setup --item ITEM [--settings PATH] [--ttl-ms N] [--force]
@@ -375,6 +387,8 @@ closed (exit `4`) instead of guessing.
 | Variable | Default | |
 |---|---|---|
 | `KEYSHROUD_CACHE_TTL_MS` | `3600000` | in-memory vault snapshot + session check lifetime; `0` disables |
+| `KEYSHROUD_SESSION_TTL_MS` | `1800000` | how long an unlocked session lasts before `bw lock` |
+| `KEYSHROUD_LOCK_TIMER` | on | `0` skips the background timer (sessions then end on the next call) |
 | `KEYSHROUD_CONFIG_DIR` | `$XDG_CONFIG_HOME/keyshroud` | session, redact index, audit log |
 | `KEYSHROUD_KEYCHAIN_MASTER` | `vaultwarden-master-password` | keychain service names… |
 | `KEYSHROUD_KEYCHAIN_CLIENT_ID` | `vaultwarden-api-client-id` | |
@@ -442,8 +456,10 @@ as a literal; check its plan before committing `.env.refs`. The Claude Code
 rewrite output) or anything a client sends as telemetry, and it only knows wired
 values, so `keyshroud get bw://…` or `run --no-mask` print in the clear; run
 secret-using commands through `keyshroud run` or `secrets_run`. An agent with shell access as your user can read
-`~/.config/keyshroud/session` and use `bw` directly — after `setup` that reaches
-only the agent account; otherwise run agents in a sandbox or container if that matters. Redaction is exact-match, so a *partial* or transformed value
+`~/.config/keyshroud/session` and use `bw` directly until the session ends — after `setup`
+that reaches only the agent account; a stored master password (keychain entry or
+`~/.config/keyshroud/master-password`) it can read at any time, which is why keyshroud asks
+instead by default; otherwise run agents in a sandbox or container if that matters. Redaction is exact-match, so a *partial* or transformed value
 (`${TOKEN:0:10}`, base64, a line wrapped by a tool) is not masked; values
 shorter than 6 characters are not redacted (to avoid noise), so don't wire short
 PINs.

@@ -464,9 +464,10 @@ test("setup gives the CLI its own agent login; migrate copies only the wired ite
   assert.equal(before.code, 2);
   assert.match(before.stderr, /setup/);
 
-  const setup = await runCli(box, ["setup", "--email", "agent@example.test", "--registered"], "agent-pw\n");
+  const setup = await runCli(box, ["setup", "--email", "agent@example.test", "--registered"], "", { DISPLAY: ":0", FAKE_DIALOG_VALUE: "agent-pw" });
   assert.equal(setup.code, 0, setup.stderr);
-  assert.equal((await readFile(join(box.dir, "keychain", `${BRAND.bin}-master-password`), "utf8")).trim(), "agent-pw");
+  await assert.rejects(stat(join(box.dir, "keychain", `${BRAND.bin}-master-password`)), "the master password is not stored");
+  assert.ok(!(await readFile(join(box.configDir, "master-password.scrypt"), "utf8")).includes("agent-pw"));
   assert.equal((await ownVault()).server, "https://vault.example.test");
   assert.ok(!setup.stdout.includes("agent-pw") && !setup.stdout.includes("own-session"));
 
@@ -522,9 +523,9 @@ test("setup from an agent's shell generates the password; the agent never sees i
   await mkdir(own, { recursive: true });
   const first = await runCli(box, ["setup", "--email", "agent@example.test"]);
   assert.equal(first.code, 0, first.stderr);
-  const generated = (await readFile(join(box.dir, "keychain", `${BRAND.bin}-master-password`), "utf8")).trim();
+  const generated = await readFile(box.env.FAKE_CLIPBOARD, "utf8");
   assert.ok(generated.length >= 32);
-  assert.equal(await readFile(box.env.FAKE_CLIPBOARD, "utf8"), generated);
+  await assert.rejects(stat(join(box.dir, "keychain", `${BRAND.bin}-master-password`)), "the generated password is not stored");
   assert.match(await readFile(box.env.FAKE_OPENED, "utf8"), /#\/signup\?email=agent%40example\.test/);
   assert.ok(!first.stdout.includes(generated) && !first.stderr.includes(generated));
   assert.match(first.stdout, /--registered/);
@@ -534,7 +535,7 @@ test("setup from an agent's shell generates the password; the agent never sees i
 
   // The user signs up with the pasted password.
   await writeFile(join(own, "fake-vault.json"), JSON.stringify({ status: "unauthenticated", items: [], registered: "agent@example.test", password: generated }));
-  const second = await runCli(box, ["setup", "--email", "agent@example.test", "--registered"]);
+  const second = await runCli(box, ["setup", "--email", "agent@example.test", "--registered"], "", { DISPLAY: ":0", FAKE_DIALOG_VALUE: generated });
   assert.equal(second.code, 0, second.stderr);
   assert.match(second.stdout, /ready: bw login=agent@example\.test/);
   assert.equal(await readFile(box.env.FAKE_CLIPBOARD, "utf8"), "");
@@ -598,4 +599,73 @@ test("session-start says wired secrets are unresolved instead of claiming none a
   const context = JSON.parse(start.stdout).hookSpecificOutput.additionalContext as string;
   assert.match(context, /could not be resolved from the vault: GH_TOKEN/);
   assert.doesNotMatch(context, /no secrets are wired/);
+});
+
+test("without a stored master password keyshroud asks, and the session ends after 30 minutes", async () => {
+  const box = await wired();
+  await unlink(join(box.dir, "keychain", "vaultwarden-master-password"));
+  const log = join(box.dir, "dialog.log");
+  const display = { DISPLAY: ":0", FAKE_DIALOG_LOG: log };
+  const same = ["run", "--", "sh", "-c", "test \"$GH_TOKEN\" = \"$EXPECTED\" && echo same"];
+
+  const nobody = await runCli(box, same, "", { EXPECTED: GH });
+  assert.match(nobody.stderr, /no master password is stored: run `keyshroud unlock`/);
+  assert.doesNotMatch(nobody.stdout, /same/);
+
+  const asked = await runCli(box, same, "", { ...display, EXPECTED: GH, FAKE_DIALOG_VALUE: "master" });
+  assert.equal(asked.code, 0, asked.stderr);
+  assert.match(asked.stdout, /same/);
+  assert.match(await readFile(log, "utf8"), /Unlock .* for 30 minutes/);
+  const [, meta] = (await readFile(join(box.configDir, "session"), "utf8")).split("\n");
+  const left = Number(meta.replace("expires=", "")) - Date.now();
+  assert.ok(left > 29 * 60 * 1000 && left <= 30 * 60 * 1000, meta);
+  assert.match((await runCli(box, ["doctor"])).stdout, /master password=not stored/);
+
+  // The typed master password is not stored, but add still refuses it.
+  const verifier = await readFile(join(box.configDir, "master-password.scrypt"), "utf8");
+  assert.match(verifier, /^scrypt\$/);
+  assert.ok(!verifier.includes("master\n"));
+  const phished = await runCli(box, ["add", "--env", "PHISHED", "--item", "Phished", "--stdin"], "master");
+  assert.match(phished.stderr, /master password/);
+  assert.ok(!(await box.vault()).items.some((entry) => entry.name === "Phished"));
+
+  // An ended session is locked, and the next use asks again.
+  await writeFile(join(box.configDir, "session"), `fake-session\nexpires=${Date.now() - 1}\n`);
+  const ended = await runCli(box, same, "", { EXPECTED: GH });
+  assert.doesNotMatch(ended.stdout, /same/);
+  assert.equal(((await box.vault()) as { status?: string }).status, "locked");
+  await assert.rejects(stat(join(box.configDir, "session")));
+});
+
+test("the lock timer ends a session even when nothing calls keyshroud", { skip: process.platform === "win32" }, async () => {
+  const box = await wired();
+  const timer = { [`${BRAND.envPrefix}_LOCK_TIMER`]: "1", [`${BRAND.envPrefix}_SESSION_TTL_MS`]: "1000" };
+  const unlocked = await runCli(box, ["unlock"], "", timer);
+  assert.equal(unlocked.code, 0, unlocked.stderr);
+  assert.match(unlocked.stdout, /unlocked until/);
+  const deadline = Date.now() + 8000;
+  while (((await box.vault()) as { status?: string }).status !== "locked" && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(((await box.vault()) as { status?: string }).status, "locked");
+  await assert.rejects(stat(join(box.configDir, "session")));
+});
+
+test("unlock --unattended always asks and opens a session without an end", async () => {
+  const box = await wired();
+  const refused = await runCli(box, ["unlock", "--unattended"]);
+  assert.notEqual(refused.code, 0, "a stored master password is not enough");
+  const opened = await runCli(box, ["unlock", "--unattended"], "", { DISPLAY: ":0", FAKE_DIALOG_VALUE: "master" });
+  assert.equal(opened.code, 0, opened.stderr);
+  assert.match(opened.stdout, /no time limit/);
+  assert.equal((await readFile(join(box.configDir, "session"), "utf8")).split("\n")[1], "expires=never");
+  assert.match((await runCli(box, ["doctor"])).stdout, /session expires=never/);
+});
+
+test("run masks a master password file that a command reads", async () => {
+  const box = await wired();
+  await mkdir(box.configDir, { recursive: true });
+  await writeFile(join(box.configDir, "master-password"), "file-master-zq-1\n", { mode: 0o600 });
+  const run = await runCli(box, ["run", "--", "cat", join(box.configDir, "master-password")]);
+  assert.equal(run.code, 0, run.stderr);
+  assert.ok(!run.stdout.includes("file-master-zq-1"));
+  assert.match(run.stdout, /<redacted:MASTER_PASSWORD>/);
 });

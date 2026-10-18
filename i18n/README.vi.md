@@ -79,9 +79,8 @@ npm install -g keyshroud @bitwarden/cli    # hoặc: brew install bitwarden-cli
 bw config server https://vault.example.com
 bw login
 
-# 2. Cho keyshroud tự unlock (lưu trong keychain của hệ điều hành)
-security add-generic-password -a "$USER" -s vaultwarden-master-password -w      # macOS: sẽ hỏi giá trị
-# Linux: secret-tool store --label=vaultwarden service vaultwarden-master-password account "$USER"
+# 2. Mở khoá 30 phút (hỏi master password; keyshroud không lưu gì)
+keyshroud unlock
 
 # 3. Kiểm tra
 keyshroud doctor

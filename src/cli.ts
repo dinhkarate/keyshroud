@@ -33,12 +33,15 @@ Secrets
   unwire --env NAME [--target pi|omp|both]
 
 Vault
-  setup --email EMAIL [--server URL] [--confirm-unlock] [--registered]
+  setup --email EMAIL [--server URL] [--confirm-unlock | --unattended] [--registered]
                                    Give ${BRAND.name} its own bw login on a dedicated agent account
   migrate [--item NAME]... [--env-file F]... [--yes]
                                    Copy the wired items from your personal vault to that account
                                    (dry run unless --yes; prints names only)
-  status | unlock | lock | doctor
+  unlock [--unattended]            Unlock now (asks unless a master password is stored);
+                                   the session ends after 30 minutes
+                                   (--unattended: no end, for hosts nobody sits at)
+  status | lock | doctor
 
 Agents
   mcp                              Serve the MCP tools over stdio
@@ -114,7 +117,7 @@ async function runCommand(args: string[]): Promise<void> {
   // Later sources win: env files override auth.json.
   const deduped = [...new Map(selected.map((entry) => [entry.name, entry])).values()];
   let vaultError = "";
-  try { await core.ensureSession(); } catch (error) { vaultError = error instanceof Error ? error.message : String(error); }
+  try { await core.ensureSession({ prompt: true }); } catch (error) { vaultError = error instanceof Error ? error.message : String(error); }
   const env = await core.resolveEntries(deduped);
   await core.audit("run", Object.keys(env.secrets), command);
   if (env.missing.length) console.error(`${BRAND.bin}: unresolved (names only): ${env.missing.join(", ")}${vaultError ? ` (${vaultError})` : ""}`);
@@ -142,13 +145,15 @@ async function inject(args: string[]): Promise<void> {
   const input = valueAfter(args, "-i");
   const output = valueAfter(args, "-o");
   const template = input ? await readFile(input, "utf8") : await readStdin();
+  let vaultError = "";
+  try { await core.ensureSession({ prompt: true }); } catch (error) { vaultError = error instanceof Error ? error.message : String(error); }
   const pattern = /\{\{\s*(bw:\/\/[^\s}]+(?:\s+[^\s}]+)*?)\s*\}\}/g;
   const refs = [...new Set([...template.matchAll(pattern)].map((match) => match[1]))];
   const values = new Map<string, string>();
   await Promise.all(refs.map(async (raw) => {
     const ref = parseRef(raw);
     const value = ref ? await core.resolveRef(ref) : null;
-    if (value === null) throw new Error(`Secret reference unresolved: ${raw}`);
+    if (value === null) throw new Error(`Secret reference unresolved: ${raw}${vaultError ? ` (${vaultError})` : ""}`);
     values.set(raw, value);
   }));
   await core.audit("inject", refs, output ?? "stdout");
@@ -206,13 +211,15 @@ interface ImportRow { entry: DotenvEntry; kind: "new" | "reuse" | "conflict" | "
 // setup: keyshroud gets its own bw login (CONFIG_DIR/bw) on a separate agent
 // account, so agents never get a session for the user's personal vault.
 async function setupCommand(args: string[]): Promise<void> {
-  requireKnownFlags(args, ["--email", "--server"], ["--confirm-unlock", "--registered"]);
+  requireKnownFlags(args, ["--email", "--server"], ["--confirm-unlock", "--unattended", "--registered"]);
   const email = valueAfter(args, "--email");
   if (!email || !/^[^\s@]+@[^\s@]+$/.test(email)) fail("setup needs --email for a separate agent account (not your personal one)", 2);
   let server = valueAfter(args, "--server");
   if (!server) { try { server = (JSON.parse(await core.bw(["status"])) as { serverUrl?: string }).serverUrl ?? undefined; } catch {} }
   if (!server || !/^https:\/\//.test(server)) fail("setup needs --server https://… (no bw server is configured)", 2);
   const confirm = args.includes("--confirm-unlock");
+  const unattended = args.includes("--unattended");
+  if (confirm && unattended) fail("--confirm-unlock keeps the password for later unlocks; --unattended keeps one session open instead. Pick one.", 2);
   if (confirm && process.platform !== "darwin") fail("--confirm-unlock needs the macOS keychain; Linux secret-tool cannot ask before each read", 2);
   core.useOwnBwLogin();
   // bw writes data.json on its first call there, and that file switches every
@@ -224,16 +231,24 @@ async function setupCommand(args: string[]): Promise<void> {
   if (status.userEmail && status.userEmail.toLowerCase() !== email.toLowerCase()) fail(`${BRAND.name}'s bw login already belongs to ${status.userEmail}; remove ${core.OWN_BW_DIR} to start over`, 5);
   const loggedOut = !status.status || status.status === "unauthenticated";
   const signupUrl = `${server.replace(/\/$/, "")}/#/signup?email=${encodeURIComponent(email)}`;
+  // Only --confirm-unlock (or an entry from an earlier release) keeps the master
+  // password in the keychain; otherwise keyshroud asks for it when a session ends.
+  let master = await core.readKeychain(core.KEYCHAIN_MASTER_SERVICE);
   if (!process.stdin.isTTY) {
     // An agent's shell: nothing can be typed, so keyshroud picks the password.
-    const hasEntry = Boolean(await core.readKeychain(core.KEYCHAIN_MASTER_SERVICE));
-    if (!loggedOut && (confirm || !hasEntry)) fail(`The agent account is already logged in; run \`${BRAND.bin} setup\` in a terminal to store its password`, 2);
+    if (!loggedOut && confirm && !master) fail(`The agent account is already logged in; run \`${BRAND.bin} setup --confirm-unlock\` in a terminal to store its password`, 2);
     if (loggedOut && !args.includes("--registered")) {
-      if (!hasEntry && !(await core.generateKeychainSecret(core.KEYCHAIN_MASTER_SERVICE, `${BRAND.name} agent account`, confirm))) fail("Could not store a generated password (needs macOS security or Linux secret-tool)", 3);
-      const master = await core.readKeychain(core.KEYCHAIN_MASTER_SERVICE);
-      if (!master || !(await core.copyToClipboard(master))) fail(`No clipboard here (SSH or no display); run \`${BRAND.bin} setup --email ${email}\` in a terminal instead`, 3);
+      const kept = Boolean(master) || confirm;
+      if (!master && confirm) {
+        if (!(await core.generateKeychainSecret(core.KEYCHAIN_MASTER_SERVICE, `${BRAND.name} agent account`, confirm))) fail("Could not store a generated password (needs macOS security or Linux secret-tool)", 3);
+        master = await core.readKeychain(core.KEYCHAIN_MASTER_SERVICE);
+      }
+      master ??= randomBytes(24).toString("base64url");
+      if (!(await core.copyToClipboard(master))) fail(`No clipboard here (SSH or no display); run \`${BRAND.bin} setup --email ${email}\` in a terminal instead`, 3);
       spawn(process.platform === "darwin" ? "open" : "xdg-open", [signupUrl], { stdio: "ignore" }).on("error", () => {});
-      console.log(`A random master password for ${email} is in the keychain (${core.KEYCHAIN_MASTER_SERVICE}) and on the clipboard.`);
+      console.log(kept
+        ? `A random master password for ${email} is in the keychain (${core.KEYCHAIN_MASTER_SERVICE}) and on the clipboard.`
+        : `A random master password for ${email} is on the clipboard. Save it in your own password manager too: ${BRAND.name} does not store it and asks for it when a session ends.`);
       console.log(`Create the account at ${signupUrl} and paste it into both password fields.`);
       console.log(`Then: ${BRAND.bin} setup --email ${email} --registered`);
       return;
@@ -247,12 +262,18 @@ async function setupCommand(args: string[]): Promise<void> {
     process.stdout.write("   Press Enter once the account exists. ");
     await new Promise((resolve) => process.stdin.once("data", resolve)); process.stdin.pause();
   }
-  if (confirm || !(await core.readKeychain(core.KEYCHAIN_MASTER_SERVICE))) {
-    console.log(`2. Type the agent account's master password for the keychain entry ${core.KEYCHAIN_MASTER_SERVICE}${confirm ? " (macOS will ask before every unlock)" : ""}:`);
+  if (confirm) {
+    console.log(`2. Type the agent account's master password for the keychain entry ${core.KEYCHAIN_MASTER_SERVICE} (macOS will ask before every unlock):`);
     if (!(await core.storeKeychainInteractive(core.KEYCHAIN_MASTER_SERVICE, `${BRAND.name} agent account`, confirm))) fail("Could not store it (needs macOS security or Linux secret-tool)", 3);
+    master = await core.readKeychain(core.KEYCHAIN_MASTER_SERVICE);
+    if (!master) fail(`The keychain entry ${core.KEYCHAIN_MASTER_SERVICE} is missing or access was denied`, 3);
   }
-  const master = await core.readKeychain(core.KEYCHAIN_MASTER_SERVICE);
-  if (!master) fail(`The keychain entry ${core.KEYCHAIN_MASTER_SERVICE} is missing or access was denied`, 3);
+  const kept = Boolean(master);
+  if (loggedOut && !master) {
+    if (process.stdin.isTTY) console.log(`2. Log in to the agent account. ${BRAND.name} does not store its master password; it asks again when a session ends.`);
+    master = await core.askMasterPassword({ email, unattended });
+    if (!master) fail("No terminal and no dialog here (SSH or no display). Run the command in a terminal.", 2);
+  }
   if (loggedOut) {
     await mkdir(core.OWN_BW_DIR, { recursive: true, mode: 0o700 });
     await core.bw(["config", "server", server]);
@@ -260,15 +281,17 @@ async function setupCommand(args: string[]): Promise<void> {
   await unlink(core.SESSION_FILE).catch(() => {});
   console.log(`${BRAND.name} now keeps its own bw login in ${core.OWN_BW_DIR}; your personal bw login is untouched.`);
   try {
-    if (loggedOut) await core.loginOwnAccount(email, master); else await core.ensureSession();
+    if (loggedOut) await core.loginOwnAccount(email, master!, unattended); else await core.ensureSession({ prompt: true, unattended });
   } catch (error) {
     // A failed first login must not leave keyshroud switched to a logged-out account.
     if (fresh) await unlink(ownData).catch(() => {});
     throw error;
   }
-  await core.clearClipboardIf(master);
+  if (master) await core.clearClipboardIf(master);
   await core.audit("setup", [], "cli");
-  console.log(`ready: bw login=${email} (own). Next: \`${BRAND.bin} migrate\` copies the wired secrets from your personal vault.`);
+  const minutes = Math.round(core.SESSION_TTL_MS / 60000);
+  console.log(`ready: bw login=${email} (own). ${unattended ? "The session stays open (unattended)." : `Sessions end after ${minutes} minutes; then ${kept ? "keyshroud unlocks again from the keychain" : "keyshroud asks for the master password again"}.`}`);
+  console.log(`Next: \`${BRAND.bin} migrate\` copies the wired secrets from your personal vault.`);
 }
 
 // migrate: copy the items that wired names (and env files) reference from the
@@ -281,7 +304,7 @@ async function migrateCommand(args: string[]): Promise<void> {
   const names = new Map<string, string>();
   for (const entry of entries) { try { const ref = parseRef(entry.raw); if (ref) names.set(ref.item.toLowerCase(), ref.item); } catch {} }
   for (const name of valuesAfter(args, "--item")) names.set(name.toLowerCase(), name);
-  await core.ensureSession();
+  await core.ensureSession({ prompt: true });
   const own = await core.findItems("");
   const personal = await core.readPersonalItems();
   const personalMaster = await core.readKeychain(core.PERSONAL_KEYCHAIN_MASTER_SERVICE);
@@ -344,7 +367,7 @@ async function importCommand(args: string[]): Promise<void> {
   }
   for (const name of [...only, ...skip]) if (!entries.some((entry) => entry.name === name)) fail(`--only/--skip name not in ${from}: ${name}`, 2);
 
-  await core.ensureSession();
+  await core.ensureSession({ prompt: true });
   const existing = await core.findItems(prefix);
   const rows: ImportRow[] = [];
   for (const entry of entries) {
@@ -419,7 +442,13 @@ async function main(): Promise<void> {
       if (s.status !== "unlocked") process.exitCode = 3;
       return;
     }
-    if (command === "unlock") { await core.ensureSession(); console.log("unlocked"); return; }
+    if (command === "unlock") {
+      requireKnownFlags(args, [], ["--unattended"]);
+      await core.ensureSession({ prompt: true, unattended: args.includes("--unattended") });
+      const expiresAt = (await core.readSession())?.expiresAt;
+      console.log(expiresAt ? `unlocked until ${new Date(expiresAt).toLocaleTimeString()}` : "unlocked (no time limit)");
+      return;
+    }
     if (command === "lock") { requireKnownFlags(args, []); await core.lock(); console.log("locked"); return; }
     if (command === "scan") { await scan(args); return; }
     if (command === "env") {
@@ -432,8 +461,10 @@ async function main(): Promise<void> {
     if (command === "get") {
       if (args.length !== 1) fail(usage, 2);
       const ref = parseRef(args[0]);
+      let vaultError = "";
+      try { await core.ensureSession({ prompt: true }); } catch (error) { vaultError = error instanceof Error ? error.message : String(error); }
       const value = ref ? await core.resolveRef(ref) : await authValue(args[0]);
-      if (value === null) fail(`Secret unresolved: ${args[0]}`, 4);
+      if (value === null) fail(`Secret unresolved: ${args[0]}${vaultError ? ` (${vaultError})` : ""}`, 4);
       await core.audit("get", [args[0]], "cli");
       process.stdout.write(value); return;
     }
@@ -456,7 +487,7 @@ async function main(): Promise<void> {
     if (command === "api-key") {
       requireKnownFlags(args, ["--item"]);
       const item = valueAfter(args, "--item"); if (!item) fail(usage, 2);
-      await core.ensureSession(); process.stdout.write(await core.getSecret(item)); return;
+      await core.ensureSession({ prompt: true }); process.stdout.write(await core.getSecret(item)); return;
     }
     if (command === "add") {
       requireKnownFlags(args, ["--env", "--item", "--notes", "--target"], ["--stdin", "--dialog"]);
@@ -465,7 +496,7 @@ async function main(): Promise<void> {
       checkNames(envName, itemName);
       const reference = core.referenceFor(itemName);
       const targets = targetList(valueAfter(args, "--target"));
-      await core.ensureSession();
+      await core.ensureSession({ prompt: true });
       if ((await core.findItems(itemName)).some((item) => item.name.toLowerCase() === itemName.toLowerCase())) fail(`Vault item already exists: ${itemName}`, 5);
       const secret = await readSecret(args, `Paste secret for ${envName}: `, itemName, envName);
       await core.createSecretItem({ itemName, secret, envName, notes });
@@ -484,7 +515,7 @@ async function main(): Promise<void> {
     if (command === "rotate") {
       requireKnownFlags(args, ["--item"], ["--stdin", "--dialog"]);
       const itemName = valueAfter(args, "--item"); if (!itemName) fail(usage, 2);
-      await core.ensureSession(); const secret = await readSecret(args, "Paste replacement secret: ", itemName);
+      await core.ensureSession({ prompt: true }); const secret = await readSecret(args, "Paste replacement secret: ", itemName);
       await core.rotateSecretItem({ itemName, secret }); await core.audit("rotate", [itemName], "cli"); await core.refreshRedactIndex();
       console.log(`rotated item=${itemName}`); return;
     }
@@ -531,6 +562,10 @@ async function main(): Promise<void> {
       requireKnownFlags(args, []);
       try { await core.ensureSession(); } catch {}
       const s = await core.getStatus(); console.log(`bw login=${core.OWN_BW_LOGIN ? `own agent account (${core.OWN_BW_DIR})` : `shared with your personal bw (run: ${BRAND.bin} setup)`}`); console.log(`bw version=${s.version ?? "missing (install @bitwarden/cli)"}`); console.log(`bw server=${s.serverUrl ?? "unconfigured (run: bw config server <url>)"}`); console.log(`session=${s.status}`);
+      const session = await core.readSession();
+      if (session) console.log(`session expires=${session.expiresAt === null ? "never (unattended)" : new Date(session.expiresAt).toISOString()}`);
+      const source = await core.storedMasterSource();
+      console.log(`master password=${source === "keychain" ? `stored in the keychain (${core.KEYCHAIN_MASTER_SERVICE}): unlocks without asking` : source === "file" ? `stored in ${core.MASTER_PASSWORD_FILE}: any program running as you can read it` : `not stored (${BRAND.bin} asks for it)`}`);
       const presence = Object.entries(await core.keychainPresence());
       const locked = presence.some(([, present]) => !present) && await core.keychainLocked();
       for (const [service, present] of presence) console.log(`keychain ${service}=${present ? "present" : locked ? "unknown (keyring locked)" : "missing"}`);
