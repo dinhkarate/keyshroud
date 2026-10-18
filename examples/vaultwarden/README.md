@@ -52,9 +52,21 @@ bw config server https://vault.example.com  # Bitwarden cloud: skip this (EU: ht
 bw login                                    # once, interactively: email + master password (+ 2FA)
 ```
 
-## 4. Let keyshroud unlock without prompting
+## 4. Unlock
 
-keyshroud reads unlock material from the OS keychain, so agents never ask you for the master password.
+By default keyshroud stores nothing. When the vault is locked and a command needs a secret, it asks
+for the master password (a masked prompt in a terminal, a native dialog on the desktop) and opens a
+session that `bw lock` ends after 30 minutes. Over SSH, run it yourself:
+
+```bash
+keyshroud unlock                 # 30 minutes
+ssh -t host keyshroud unlock --unattended   # a host nobody sits at: one session without an end
+```
+
+### Optional: unlock without being asked
+
+Any program running as you, an agent included, can read what you store here, and with it open
+the vault at any time. Prefer a separate agent account (`keyshroud setup`) if you do this.
 Each command below prompts for the value; nothing lands in shell history.
 
 ```bash
@@ -65,9 +77,8 @@ security add-generic-password -a "$USER" -s vaultwarden-master-password -w
 secret-tool store --label=vaultwarden service vaultwarden-master-password account "$USER"
 ```
 
-Recommended: also store the account's API key (web vault: **Settings → Security → Keys → View API key**).
-With it, keyshroud logs `bw` back in by itself when the login expires, and `bw login` is no longer needed
-on new machines.
+Also store the account's API key (web vault: **Settings → Security → Keys → View API key**) and
+keyshroud logs `bw` back in by itself when the login expires.
 
 ```bash
 # macOS
@@ -79,8 +90,8 @@ secret-tool store --label=vaultwarden service vaultwarden-api-client-id account 
 secret-tool store --label=vaultwarden service vaultwarden-api-client-secret account "$USER"
 ```
 
-Headless server without a keyring? Put the master password in `~/.config/keyshroud/master-password`
-(mode `0600`). Anyone who can read that file can open your vault.
+A plaintext `~/.config/keyshroud/master-password` (mode `0600`) still works for old setups, but
+anyone who can read that file can open your vault; `keyshroud unlock --unattended` replaces it.
 
 ## 5. Check it
 
@@ -88,7 +99,7 @@ Headless server without a keyring? Put the master password in `~/.config/keyshro
 keyshroud doctor
 ```
 
-You want to see `session=unlocked` and `keychain vaultwarden-master-password=present`.
+You want to see `session=unlocked` and `master password=not stored`.
 Then store your first secret and use it:
 
 ```bash

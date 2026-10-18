@@ -79,11 +79,12 @@ bw config server https://vault.example.com
 
 bw login
 
-# Let keyshroud unlock without prompting. macOS:
-security add-generic-password -a "$USER" -s vaultwarden-master-password -w
-# Linux:
-# secret-tool store --label=vaultwarden service vaultwarden-master-password account "$USER"
+# Unlock for 30 minutes (asks for the master password; keyshroud stores nothing)
+keyshroud unlock
 ```
+
+Later, when a session has ended, a command that needs a secret opens a dialog on
+the user's desktop and waits; over SSH it says to run `keyshroud unlock`.
 
 Wait until the user says they are done.
 

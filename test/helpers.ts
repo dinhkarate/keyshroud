@@ -44,6 +44,8 @@ export async function sandbox(items: Array<Record<string, unknown>>, opts: { loc
     FAKE_CLIPBOARD: join(dir, "clipboard"),
     FAKE_OPENED: join(dir, "opened"),
     [`${BRAND.envPrefix}_CONFIG_DIR`]: configDir,
+    // No background lock timers outliving the test run; one test turns it back on.
+    [`${BRAND.envPrefix}_LOCK_TIMER`]: "0",
     PI_CODING_AGENT_DIR: join(home, ".omp", "agent"),
   };
   return {

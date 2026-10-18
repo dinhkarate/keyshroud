@@ -79,9 +79,8 @@ npm install -g keyshroud @bitwarden/cli    # 或：brew install bitwarden-cli
 bw config server https://vault.example.com
 bw login
 
-# 2. 让 keyshroud 无需交互即可解锁（保存在操作系统的钥匙串中）
-security add-generic-password -a "$USER" -s vaultwarden-master-password -w      # macOS：会提示输入值
-# Linux: secret-tool store --label=vaultwarden service vaultwarden-master-password account "$USER"
+# 2. 解锁 30 分钟（询问主密码；keyshroud 不保存任何内容）
+keyshroud unlock
 
 # 3. 检查所有配置
 keyshroud doctor

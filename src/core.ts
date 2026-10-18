@@ -1,12 +1,13 @@
 // Runtime-neutral core: no pi/omp/Claude Code imports. Every caller (agent
 // extensions, CLI, MCP server, hooks) goes through these functions.
 import { execFile, spawn } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { randomBytes, scrypt, timingSafeEqual, type ScryptOptions } from "node:crypto";
 import { existsSync } from "node:fs";
 import { appendFile, chmod, mkdir, readFile, realpath, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import process from "node:process";
+import { promisify } from "node:util";
 import { BRAND } from "./brand.ts";
 import { buildRedactIndex, type RedactIndex } from "./redact.ts";
 import { ENV_NAME_RE, isLoaderEnvName, itemNameProblem, legacyRefFor, parseEnvFile, parseRef, type SecretRef } from "./refs.ts";
@@ -20,6 +21,7 @@ function setting(name: string): string | undefined {
 export const CONFIG_DIR = setting("CONFIG_DIR") ?? join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), BRAND.configDirName);
 export const SESSION_FILE = join(CONFIG_DIR, "session");
 export const MASTER_PASSWORD_FILE = join(CONFIG_DIR, "master-password");
+export const MASTER_VERIFIER_FILE = join(CONFIG_DIR, "master-password.scrypt");
 export const REDACT_INDEX_FILE = join(CONFIG_DIR, "redact-index.json");
 export const AUDIT_FILE = join(CONFIG_DIR, "audit.jsonl");
 
@@ -111,6 +113,14 @@ export const SECRET_CACHE_TTL_MS = (() => {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 60 * 60 * 1000;
 })();
 
+// A session keyshroud opens ends after this long: a timer locks bw, so a copied
+// token stops working too. `unlock --unattended` opens one without an end.
+export const SESSION_TTL_MS = (() => {
+  const raw = setting("SESSION_TTL_MS");
+  const parsed = raw === undefined ? NaN : Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 30 * 60 * 1000;
+})();
+
 export interface VaultItem {
   id: string;
   name: string;
@@ -129,6 +139,7 @@ let vaultPending: Promise<VaultIndex> | null = null;
 let vaultMisses: Map<string, number> | null = null;
 let sessionPending: Promise<string> | null = null;
 let sessionVerifiedAt = 0;
+let sessionExpiresAt: number | null = null;
 
 function normalizeItemName(name: string): string { return name.trim().toLowerCase(); }
 
@@ -258,26 +269,45 @@ async function readMasterPassword(): Promise<string | null> {
   } catch { return null; }
 }
 
+// Where a master password that unlocks without asking is kept, if anywhere.
+export async function storedMasterSource(): Promise<"keychain" | "file" | null> {
+  if (await readKeychain(KEYCHAIN_MASTER_SERVICE)) return "keychain";
+  try { if ((await readFile(MASTER_PASSWORD_FILE, "utf8")).trim()) return "file"; } catch {}
+  return null;
+}
+
 export async function keychainPresence(): Promise<Record<string, boolean>> {
   const out: Record<string, boolean> = {};
   for (const service of [KEYCHAIN_MASTER_SERVICE, KEYCHAIN_CLIENT_ID_SERVICE, KEYCHAIN_CLIENT_SECRET_SERVICE]) out[service] = (await readKeychain(service)) !== null;
   return out;
 }
 
-async function rawStatus(session?: string): Promise<{ status: string; serverUrl: string | null }> {
+async function rawStatus(session?: string): Promise<{ status: string; serverUrl: string | null; email: string | null }> {
   try {
-    const parsed = JSON.parse(await bw(["status"], { session })) as { status?: unknown; serverUrl?: unknown };
-    return { status: typeof parsed.status === "string" ? parsed.status : "unknown", serverUrl: typeof parsed.serverUrl === "string" ? parsed.serverUrl : null };
+    const parsed = JSON.parse(await bw(["status"], { session })) as { status?: unknown; serverUrl?: unknown; userEmail?: unknown };
+    return { status: typeof parsed.status === "string" ? parsed.status : "unknown", serverUrl: typeof parsed.serverUrl === "string" ? parsed.serverUrl : null, email: typeof parsed.userEmail === "string" ? parsed.userEmail : null };
   } catch {
-    return { status: "unavailable", serverUrl: null };
+    return { status: "unavailable", serverUrl: null, email: null };
   }
 }
 
-export function ensureSession(): Promise<string> {
-  if (sessionPending) return sessionPending;
+export interface SessionOptions {
+  // Ask the person at the keyboard when no master password is stored.
+  prompt?: boolean;
+  // Always ask, and open a session without an end (hosts nobody sits at).
+  unattended?: boolean;
+}
+
+export function ensureSession(opts: SessionOptions = {}): Promise<string> {
+  if (sessionPending) return opts.prompt || opts.unattended ? sessionPending.catch(() => ensureSession(opts)) : sessionPending;
+  if (sessionExpiresAt !== null && Date.now() >= sessionExpiresAt) {
+    delete process.env.BW_SESSION;
+    invalidateSecretCache();
+    sessionExpiresAt = null;
+  }
   const existing = process.env.BW_SESSION?.trim();
-  if (existing && Date.now() - sessionVerifiedAt < SECRET_CACHE_TTL_MS) return Promise.resolve(existing);
-  sessionPending = ensureSessionInner(existing)
+  if (!opts.unattended && existing && Date.now() - sessionVerifiedAt < SECRET_CACHE_TTL_MS) return Promise.resolve(existing);
+  sessionPending = ensureSessionInner(existing, opts)
     .then((token) => { sessionVerifiedAt = Date.now(); return token; })
     .finally(() => { sessionPending = null; });
   return sessionPending;
@@ -292,19 +322,89 @@ async function writePrivateFile(path: string, content: string): Promise<void> {
   await chmod(path, 0o600);
 }
 
-async function ensureSessionInner(existing: string | undefined): Promise<string> {
-  if (existing && (await rawStatus(existing)).status === "unlocked") return existing;
-
+// The session file holds the token, then `expires=<epoch ms>` or `expires=never`.
+// A file written before sessions could end counts from its mtime.
+export async function readSession(): Promise<{ token: string; expiresAt: number | null } | null> {
   try {
-    const cached = (await readFile(SESSION_FILE, "utf8")).trim();
-    if (cached && (await rawStatus(cached)).status === "unlocked") {
-      process.env.BW_SESSION = cached;
-      return cached;
-    }
-  } catch {}
+    const [token = "", meta = ""] = (await readFile(SESSION_FILE, "utf8")).split("\n").map((line) => line.trim());
+    if (!token) return null;
+    if (meta === "expires=never") return { token, expiresAt: null };
+    const at = Number(meta.slice("expires=".length));
+    return { token, expiresAt: meta.startsWith("expires=") && Number.isFinite(at) ? at : (await stat(SESSION_FILE)).mtimeMs + SESSION_TTL_MS };
+  } catch { return null; }
+}
 
-  const master = await readMasterPassword();
-  if (!master) throw new Error(await keychainLocked() ? `Vaultwarden master password not available: ${KEYRING_LOCKED}` : "Vaultwarden master password not available (see `doctor`)");
+async function writeSession(token: string, unattended: boolean): Promise<void> {
+  const expiresAt = unattended ? null : Date.now() + SESSION_TTL_MS;
+  await writePrivateFile(SESSION_FILE, `${token}\nexpires=${expiresAt ?? "never"}\n`);
+  process.env.BW_SESSION = token;
+  sessionExpiresAt = expiresAt;
+  if (expiresAt !== null) armLockTimer(token);
+}
+
+// Locks bw when the session ends, even if nothing calls keyshroud then. A
+// session that a later unlock replaced is left alone. The token reaches the
+// timer through its environment, never argv.
+function armLockTimer(token: string): void {
+  if (process.platform === "win32" || setting("LOCK_TIMER") === "0") return;
+  const tokenVar = `${P}_LOCK_TOKEN`;
+  const script = `sleep "$1"; t=$(head -n 1 "$2" 2>/dev/null); if [ -z "$t" ] || [ "$t" = "$${tokenVar}" ]; then rm -f "$2"; bw lock >/dev/null 2>&1; fi`;
+  const env: Record<string, string> = {};
+  for (const [name, value] of Object.entries(process.env)) if (value !== undefined && name !== "BW_SESSION" && name !== "BW_PASSWORD") env[name] = value;
+  const child = spawn("/bin/sh", ["-c", script, "sh", String(Math.ceil(SESSION_TTL_MS / 1000)), SESSION_FILE], {
+    detached: true, stdio: "ignore", env: { ...env, [tokenVar]: token, BW_NOINTERACTION: "true" },
+  });
+  child.on("error", () => {});
+  child.unref();
+}
+
+async function lockedError(): Promise<Error> {
+  const keyring = await keychainLocked() ? " (the Linux keyring is locked, so a stored one could not be read)" : "";
+  return new Error(`The vault is locked and no master password is stored: run \`${BRAND.bin} unlock\` in a terminal${keyring}`);
+}
+
+async function useStoredSession(): Promise<string | null> {
+  const stored = await readSession();
+  if (!stored) return null;
+  if (stored.expiresAt !== null && Date.now() >= stored.expiresAt) { await lock(); return null; }
+  if ((await rawStatus(stored.token)).status !== "unlocked") return null;
+  process.env.BW_SESSION = stored.token;
+  sessionExpiresAt = stored.expiresAt;
+  return stored.token;
+}
+
+// Another process is already asking: use the session it opens.
+async function waitForSession(): Promise<string> {
+  const deadline = Date.now() + DIALOG_TIMEOUT_MS + 30_000;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    const token = await useStoredSession();
+    if (token) return token;
+    if ((await readFile(DIALOG_LOCK, "utf8").catch(() => "")).startsWith("cancelled:")) throw new Error("Cancelled");
+  }
+  throw new Error(DIALOG_BUSY);
+}
+
+async function ensureSessionInner(existing: string | undefined, opts: SessionOptions): Promise<string> {
+  if (!opts.unattended) {
+    if (existing && (await rawStatus(existing)).status === "unlocked") return existing;
+    const stored = await useStoredSession();
+    if (stored) return stored;
+  }
+
+  // A stored master password unlocks without asking; --unattended always asks.
+  let master = opts.unattended ? null : await readMasterPassword();
+  const asked = !master;
+  if (!master) {
+    if (!opts.prompt && !opts.unattended) throw await lockedError();
+    try { master = await askMasterPassword({ unattended: opts.unattended }); } catch (error) {
+      if (error instanceof Error && error.message === DIALOG_BUSY) return waitForSession();
+      throw error;
+    }
+    if (master === null) throw await lockedError();
+  }
+  // A fresh token, so copies of the old one stop working.
+  if (opts.unattended) await lock();
 
   const beforeLogin = await rawStatus();
   if (beforeLogin.status === "unauthenticated") {
@@ -319,11 +419,55 @@ async function ensureSessionInner(existing: string | undefined): Promise<string>
   });
   const token = unlocked.stdout.trim();
   if (!token) throw new Error("Vaultwarden unlock returned no session");
-  await writePrivateFile(SESSION_FILE, `${token}\n`);
-  process.env.BW_SESSION = token;
+  await writeSession(token, Boolean(opts.unattended));
+  if (asked) await writeMasterVerifier(master);
   try { await bw(["sync", "--quiet"], { session: token }); } catch {}
   invalidateSecretCache();
   return token;
+}
+
+// Ask the person at the keyboard: a masked prompt on a terminal, else a native
+// dialog. null when nobody can be asked (SSH without a terminal, no display).
+export async function askMasterPassword(opts: { email?: string; unattended?: boolean } = {}): Promise<string | null> {
+  const account = opts.email ?? (await rawStatus()).email ?? "the vault account";
+  const span = opts.unattended ? "with no time limit (unattended)" : `for ${Math.round(SESSION_TTL_MS / 60000)} minutes`;
+  if (process.stdin.isTTY && process.stderr.isTTY) {
+    process.stderr.write(`${BRAND.name}: unlocking ${account} ${span}.\n`);
+    const value = await readMasked(`Master password of ${account}: `);
+    if (!value) throw new Error("Cancelled");
+    return value;
+  }
+  const value = await nativePasswordDialog([
+    "A program on this computer, usually an AI agent, needs a secret and the vault is locked.",
+    "",
+    `Unlock ${account} ${span}?`,
+    "",
+    `Enter the master password of ${account}.`,
+  ].join("\n"), "Unlock");
+  if (value === "") throw new Error("Cancelled");
+  return value;
+}
+
+// A scrypt hash of a master password that was typed, so add/rotate can refuse
+// it when it is not stored. No easier to guess from than bw's own data.json.
+const SCRYPT_PARAMS = { N: 2 ** 17, r: 8, p: 1 };
+const SCRYPT_MAXMEM = 256 * 1024 * 1024;
+const scryptAsync = promisify(scrypt) as (password: string, salt: Buffer, keylen: number, options: ScryptOptions) => Promise<Buffer>;
+
+async function writeMasterVerifier(master: string): Promise<void> {
+  const salt = randomBytes(16);
+  const hash = await scryptAsync(master, salt, 32, { ...SCRYPT_PARAMS, maxmem: SCRYPT_MAXMEM });
+  await writePrivateFile(MASTER_VERIFIER_FILE, `scrypt$${SCRYPT_PARAMS.N}$${SCRYPT_PARAMS.r}$${SCRYPT_PARAMS.p}$${salt.toString("base64")}$${hash.toString("base64")}\n`);
+}
+
+async function matchesMasterVerifier(secret: string): Promise<boolean> {
+  try {
+    const [kind, N, r, p, salt, hash] = (await readFile(MASTER_VERIFIER_FILE, "utf8")).trim().split("$");
+    if (kind !== "scrypt") return false;
+    const expected = Buffer.from(hash, "base64");
+    const actual = await scryptAsync(secret, Buffer.from(salt, "base64"), expected.length, { N: Number(N), r: Number(r), p: Number(p), maxmem: SCRYPT_MAXMEM });
+    return timingSafeEqual(actual, expected);
+  } catch { return false; }
 }
 
 // Store a keychain entry by letting the OS tool prompt for the value on the
@@ -391,7 +535,7 @@ export async function clearClipboardIf(text: string): Promise<void> {
 
 // `setup`: log keyshroud's own bw login in to the agent account. stdin and
 // stderr stay on the terminal so bw can ask for a two-step login code.
-export async function loginOwnAccount(email: string, master: string): Promise<string> {
+export async function loginOwnAccount(email: string, master: string, unattended = false): Promise<string> {
   const token = await new Promise<string>((resolve, reject) => {
     const child = spawn("bw", ["login", email, "--passwordenv", "BW_PASSWORD", "--raw"], { env: { ...process.env, BW_PASSWORD: master }, stdio: ["inherit", "pipe", "inherit"] });
     let out = "";
@@ -399,8 +543,8 @@ export async function loginOwnAccount(email: string, master: string): Promise<st
     child.on("error", reject);
     child.on("exit", (exit) => (exit === 0 && out.trim() ? resolve(out.trim()) : reject(new Error("bw login failed"))));
   });
-  await writePrivateFile(SESSION_FILE, `${token}\n`);
-  process.env.BW_SESSION = token;
+  await writeSession(token, unattended);
+  await writeMasterVerifier(master);
   try { await bw(["sync", "--quiet"], { session: token }); } catch {}
   invalidateSecretCache();
   return token;
@@ -437,11 +581,12 @@ export async function copyItemToOwnVault(item: Record<string, unknown>): Promise
 export async function syncOwnVault(): Promise<void> { await bw(["sync", "--quiet"]); invalidateSecretCache(); }
 
 // Forget the cached session and lock the bw CLI. The next resolve unlocks
-// again from the keychain.
+// again from the keychain, or asks.
 export async function lock(): Promise<void> {
   try { await unlink(SESSION_FILE); } catch {}
   try { await bw(["lock"]); } catch {}
   delete process.env.BW_SESSION;
+  sessionExpiresAt = null;
   invalidateSecretCache();
 }
 
@@ -625,9 +770,11 @@ export async function buildEnvMap(): Promise<Record<string, string>> {
 }
 
 // Values to redact in-process: wired secrets (labelled by variable name), the
-// vault session token, and every other login password in the snapshot.
+// vault session token, a master password file, and every other login password
+// in the snapshot.
 export async function redactionValues(wired: Record<string, string> = {}): Promise<Record<string, string>> {
   const values = indexValues(wired);
+  try { const master = (await readFile(MASTER_PASSWORD_FILE, "utf8")).trim(); if (master) values.MASTER_PASSWORD = master; } catch {}
   try {
     for (const item of (await vaultIndex()).byId.values()) if (item.password && !Object.hasOwn(values, item.name)) values[item.name] = item.password;
   } catch {}
@@ -687,7 +834,7 @@ export async function getSecret(itemName: string): Promise<string> {
 // An agent can start add/rotate, so a dialog could be used to phish the master
 // password into an item it can then read; refuse it outright.
 async function refuseMasterPassword(secret: string): Promise<void> {
-  if (secret && secret === await readMasterPassword()) throw new Error("Refusing to store the vault master password as a secret");
+  if (secret && (secret === await readMasterPassword() || await matchesMasterVerifier(secret))) throw new Error("Refusing to store the vault master password as a secret");
 }
 
 export async function createSecretItem(opts: { itemName: string; secret: string; envName?: string; notes?: string }): Promise<{ id: string }> {
@@ -749,6 +896,7 @@ export async function readSecretFromInput(opts: { prompt: string; stdin: boolean
 const DIALOG_LOCK = join(CONFIG_DIR, "dialog.lock");
 const DIALOG_COOLDOWN_MS = 30_000;
 const DIALOG_TIMEOUT_MS = 300_000;
+const DIALOG_BUSY = "Another keyshroud dialog is already open";
 
 export async function readSecretFromDialog(opts: { itemName: string; envName?: string }): Promise<string | null> {
   if (process.env.SSH_CONNECTION || process.env.SSH_TTY) return null;
@@ -763,9 +911,14 @@ export async function readSecretFromDialog(opts: { itemName: string; envName?: s
     "",
     "This is not a login prompt. Never enter your vault master password here.",
   ].join("\n");
+  return nativePasswordDialog(text, "Save");
+}
+
+async function nativePasswordDialog(text: string, button: "Save" | "Unlock"): Promise<string | null> {
+  if (process.env.SSH_CONNECTION || process.env.SSH_TTY) return null;
   const candidates: Array<[string, string[]]> = process.platform === "darwin"
     ? [["osascript", ["-e", "on run argv", "-e", 'activate', "-e",
-        'text returned of (display dialog (item 1 of argv) default answer "" with hidden answer with title "keyshroud" buttons {"Cancel", "Save"} default button "Save" cancel button "Cancel" with icon caution)',
+        `text returned of (display dialog (item 1 of argv) default answer "" with hidden answer with title "keyshroud" buttons {"Cancel", "${button}"} default button "${button}" cancel button "Cancel" with icon caution)`,
         "-e", "end run", "--", text]]]
     : process.env.DISPLAY || process.env.WAYLAND_DISPLAY
       ? [["zenity", ["--entry", "--hide-text", "--no-markup", "--title=keyshroud", `--text=${text}`]], ["kdialog", ["--title", "keyshroud", "--password", text.replace(/[<>]/g, "")]]]
@@ -794,7 +947,7 @@ async function withDialogLock<T>(fn: () => Promise<T>): Promise<T> {
   const live = (kind === "open" || kind === "cancelled") && age >= 0 && age < (kind === "cancelled" ? DIALOG_COOLDOWN_MS : DIALOG_TIMEOUT_MS + 30_000);
   if (!live) await rm(DIALOG_LOCK, { force: true });
   try { await writeFile(DIALOG_LOCK, `open:${Date.now()}\n`, { flag: "wx", mode: 0o600 }); }
-  catch { throw new Error(kind === "cancelled" ? "The last dialog was cancelled; wait 30 seconds before asking again" : "Another keyshroud dialog is already open"); }
+  catch { throw new Error(kind === "cancelled" ? "The last dialog was cancelled; wait 30 seconds before asking again" : DIALOG_BUSY); }
   try {
     const value = await fn();
     await rm(DIALOG_LOCK, { force: true });

@@ -79,9 +79,8 @@ npm install -g keyshroud @bitwarden/cli    # または：brew install bitwarden-
 bw config server https://vault.example.com
 bw login
 
-# 2. keyshroud がプロンプトなしでアンロックできるようにする（OS のキーチェーンに保存）
-security add-generic-password -a "$USER" -s vaultwarden-master-password -w      # macOS: 値の入力を求められる
-# Linux: secret-tool store --label=vaultwarden service vaultwarden-master-password account "$USER"
+# 2. 30 分間アンロック（マスターパスワードを尋ねる。keyshroud は何も保存しない）
+keyshroud unlock
 
 # 3. 全体をチェック
 keyshroud doctor

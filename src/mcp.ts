@@ -73,7 +73,7 @@ async function runTool(args: Json): Promise<Json> {
     entries = entries.filter((entry) => only.includes(entry.name));
   }
   let vaultError = "";
-  try { await core.ensureSession(); } catch (error) { vaultError = error instanceof Error ? error.message : String(error); }
+  try { await core.ensureSession({ prompt: true }); } catch (error) { vaultError = error instanceof Error ? error.message : String(error); }
   const env = await core.resolveEntries(entries);
   await core.audit("run", Object.keys(env.secrets), "mcp");
   const redactor = createRedactor(await core.redactionValues(env.secrets));
@@ -141,7 +141,7 @@ async function callTool(name: string, args: Json): Promise<Json> {
     const notes = typeof args.purpose === "string" && args.purpose ? args.purpose.slice(0, 500) : undefined;
     try {
       const reference = core.referenceFor(itemName);
-      await core.ensureSession();
+      await core.ensureSession({ prompt: true });
       if ((await core.findItems(itemName)).some((item) => item.name.toLowerCase() === itemName.toLowerCase())) return text(`Vault item already exists: ${itemName}`, true);
       const secret = await core.readSecretFromDialog({ itemName, envName });
       if (secret === "") return text("The user saved an empty value; nothing was stored.", true);

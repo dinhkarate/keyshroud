@@ -5,6 +5,33 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+### Changed
+- keyshroud no longer needs a stored master password. When the vault is locked
+  and a command needs a secret, it asks: a masked prompt in a terminal, a native
+  dialog on the desktop (a waiting agent command continues once you unlock), or,
+  over SSH, a message to run `keyshroud unlock`. A master password already in the
+  keychain or in `~/.config/keyshroud/master-password` still unlocks without asking.
+- Sessions end after 30 minutes (`KEYSHROUD_SESSION_TTL_MS`). A background timer
+  runs `bw lock` then, so a copied session token stops working too.
+- `setup` no longer stores the agent account's master password unless you pass
+  `--confirm-unlock`; from an agent's shell the generated password goes to the
+  clipboard only, and `setup --registered` asks for it in a dialog.
+
+### Added
+- `unlock --unattended` and `setup --unattended` for hosts nobody sits at: they
+  always ask, then open a session without an end. Unlike a master-password file,
+  a leaked session cannot log in elsewhere or change the password.
+- `doctor` reports where the master password is stored, if anywhere, and when the
+  session ends.
+
+### Fixed
+- `add` and `rotate` still refuse the master password as a secret when it is not
+  stored: keyshroud keeps a scrypt hash of a typed master password for that check.
+- `run` and `secrets_run` mask a `~/.config/keyshroud/master-password` file that a
+  command prints.
+- `setup` works on a host whose keyring is locked (SSH): it no longer needs the
+  keychain.
+
 ## [0.6.2] - 2026-10-18
 
 ### Fixed
