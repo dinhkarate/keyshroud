@@ -14,5 +14,5 @@ body:
     attributes: { label: keyshroud doctor output, description: Names and states only, render: text }
   - type: input
     id: env
-    attributes: { label: Environment, placeholder: "keyshroud 0.6.2, bw 2026.8.0, macOS 15, Claude Code / pi / omp / MCP client" }
+    attributes: { label: Environment, placeholder: "keyshroud 0.7.0, bw 2026.8.0, macOS 15, Claude Code / pi / omp / MCP client" }
     validations: { required: true }
