@@ -345,7 +345,7 @@ passes the TTY through untouched for interactive use. Force either way with
 
 `add` and `rotate` read the value from a masked prompt that shows `*` per
 character. Without a terminal (an agent's shell), they open a native hidden-input
-dialog instead (`osascript` on macOS, `zenity` or `kdialog` on Linux), so the agent
+dialog instead (`osascript` on macOS, `zenity` or `kdialog` on Linux, PowerShell on Windows), so the agent
 can start the command and you only paste. Over SSH or without a display, pipe the
 value with `--stdin`.
 
@@ -413,7 +413,16 @@ agent can still exfiltrate a value it can use — see the [security model](#secu
 **Why not just `.gitignore` my `.env`?** That stops commits, not reads. Agents read `.env`
 to debug, and whatever they read goes to the model provider.
 
-**Does it work on Windows?** Not tested yet. macOS and Linux are supported.
+**Does it work on Windows?** Yes, tested on Windows 10 with Node 22: `bw` and other npm
+CLIs (`.cmd` shims) run without a shell, the unlock dialog is a small PowerShell window,
+and sessions end after 30 minutes like elsewhere. Files in `%USERPROFILE%\.config\keyshroud`
+are protected by your profile's ACL (you, SYSTEM, Administrators), not by `0600`. One gap:
+over an SSH session with a terminal (`ssh -t`), Windows ends the lock timer when the SSH
+session closes, so that session ends on the next keyshroud call instead.
+
+**`bw login` fails with `KeyIdBackfillError`?** `bw` 2026.9 and later call an endpoint
+Vaultwarden does not have yet ([vaultwarden#7750](https://github.com/dani-garcia/vaultwarden/issues/7750)).
+Install `npm i -g @bitwarden/cli@2026.8.0` until Vaultwarden supports it; `doctor` warns about it.
 
 ## Security model
 

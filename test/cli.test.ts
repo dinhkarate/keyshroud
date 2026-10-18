@@ -658,6 +658,8 @@ test("unlock --unattended always asks and opens a session without an end", async
   assert.match(opened.stdout, /no time limit/);
   assert.equal((await readFile(join(box.configDir, "session"), "utf8")).split("\n")[1], "expires=never");
   assert.match((await runCli(box, ["doctor"])).stdout, /session expires=never/);
+  // The fake bw is 2026.1.0, so no Vaultwarden warning.
+  assert.doesNotMatch((await runCli(box, ["doctor"])).stdout, /2026\.8\.0/);
 });
 
 test("run masks a master password file that a command reads", async () => {

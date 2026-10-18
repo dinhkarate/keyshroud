@@ -23,6 +23,14 @@ All notable changes are documented here. This project follows
   a leaked session cannot log in elsewhere or change the password.
 - `doctor` reports where the master password is stored, if anywhere, and when the
   session ends.
+- Windows support (tested on Windows 10, Node 22): `bw`, `npm` and other npm CLIs
+  installed as `.cmd` shims run without a shell (other `.cmd`/`.bat` files through
+  `cmd.exe`), the unlock and secret dialogs are a PowerShell window, the lock timer is
+  a detached Node process, `secrets_run` uses `cmd.exe`, and the clipboard and signup
+  page work. Over `ssh -t`, Windows ends the timer with the SSH session; that session
+  then ends on the next call.
+- `doctor` warns when `bw` 2026.9 or later talks to a self-hosted server: those
+  releases cannot log in to Vaultwarden yet (`KeyIdBackfillError`, vaultwarden#7750).
 
 ### Fixed
 - `add` and `rotate` still refuse the master password as a secret when it is not
@@ -31,6 +39,7 @@ All notable changes are documented here. This project follows
   command prints.
 - `setup` works on a host whose keyring is locked (SSH): it no longer needs the
   keychain.
+- A wrong master password says so instead of printing bw's decryption errors.
 
 ## [0.6.2] - 2026-10-18
 
