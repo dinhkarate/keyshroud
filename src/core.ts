@@ -62,40 +62,51 @@ interface ExecResult { stdout: string; stderr: string }
 // .cmd/.bat files go through cmd.exe, each argument quoted.
 export interface Invocation { command: string; args: string[]; verbatim?: boolean }
 const windowsResolved = new Map<string, { file: string; script?: string } | null>();
+// Windows system tools by absolute path: a bare name is looked up in the current directory first.
+export const SYSTEM32 = join(process.env.SystemRoot ?? "C:\\Windows", "System32");
+const POWERSHELL = join(SYSTEM32, "WindowsPowerShell", "v1.0", "powershell.exe");
 
 export function invocation(command: string, args: string[]): Invocation {
   if (process.platform !== "win32") return { command, args };
   if (!windowsResolved.has(command)) {
     const exts = /\.[^\\/.]+$/.test(command) ? [""] : (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean);
-    const dirs = /[\\/]/.test(command) ? [""] : (process.env.PATH ?? "").split(";").filter(Boolean);
+    const dirs = /[\\/]/.test(command) ? [""] : (process.env.PATH ?? "").split(";").map((dir) => dir.replace(/^"(.*)"$/, "$1")).filter(Boolean);
     let found: { file: string; script?: string } | null = null;
     search: for (const dir of dirs) for (const ext of exts) {
       const file = dir ? join(dir, command + ext) : command + ext;
       if (!existsSync(file)) continue;
-      const script = /\.cmd$/i.test(file) ? /"%dp0%\\([^"]+\.js)"/i.exec(readFileSync(file, "utf8"))?.[1] : undefined;
+      const script = /\.cmd$/i.test(file) ? /"%~?dp0%?\\([^"]+\.[cm]?js)"/i.exec(readFileSync(file, "utf8"))?.[1] : undefined;
       found = { file, script: script && join(dirname(file), script) };
       break search;
     }
     windowsResolved.set(command, found);
   }
   const found = windowsResolved.get(command);
-  if (!found) return { command, args };
+  // Not on PATH: fail instead of letting spawn find a file in the current directory.
+  if (!found) {
+    if (/[\\/]/.test(command)) return { command, args };
+    throw Object.assign(new Error(`${command}: not found on PATH`), { code: "ENOENT" });
+  }
   if (found.script) return { command: process.execPath, args: [found.script, ...args] };
   if (!/\.(cmd|bat)$/i.test(found.file)) return { command: found.file, args };
-  const quote = (value: string) => `"${value.replaceAll('"', '""')}"`;
+  const quote = (value: string) => `"${value.replaceAll('"', '""').replace(/(\\+)$/, "$1$1")}"`;
   return { command: process.env.ComSpec ?? "cmd.exe", args: ["/d", "/s", "/c", `"${[found.file, ...args].map(quote).join(" ")}"`], verbatim: true };
 }
 
-function bwCommand(args: string[]): [string, string[]] {
-  const { command, args: resolved } = invocation("bw", args);
-  return [command, resolved];
+function bwCommand(args: string[]): [string, string[], boolean] {
+  const { command, args: resolved, verbatim } = invocation("bw", args);
+  return [command, resolved, Boolean(verbatim)];
 }
 
 function runFile(command: string, args: string[], options: Record<string, unknown> = {}, input?: string): Promise<ExecResult> {
   // Without it a locked bw waits on a hidden master-password prompt nobody can answer.
   if (command === "bw") {
     options = { ...options, env: { ...((options.env as NodeJS.ProcessEnv | undefined) ?? process.env), BW_NOINTERACTION: "true" } };
-    [command, args] = bwCommand(args);
+    try {
+      let verbatim: boolean;
+      [command, args, verbatim] = bwCommand(args);
+      options = { ...options, windowsVerbatimArguments: verbatim };
+    } catch (error) { return Promise.reject(error); }
   }
   return new Promise((resolve, reject) => {
     const child = execFile(command, args, options as never, (error, stdout, stderr) => {
@@ -107,6 +118,8 @@ function runFile(command: string, args: string[], options: Record<string, unknow
       resolve({ stdout: String(stdout ?? ""), stderr: String(stderr ?? "") });
     });
     if (input !== undefined && child.stdin) {
+      // A child that exits before reading (a failing clipboard tool) must not crash us with EPIPE.
+      child.stdin.on("error", () => {});
       child.stdin.end(input);
     }
   });
@@ -371,37 +384,40 @@ export async function readSession(): Promise<{ token: string; expiresAt: number 
   } catch { return null; }
 }
 
-async function writeSession(token: string, unattended: boolean): Promise<void> {
-  const expiresAt = unattended ? null : Date.now() + SESSION_TTL_MS;
+async function writeSession(token: string, unattended: boolean, expiresAt: number | null = unattended ? null : Date.now() + SESSION_TTL_MS): Promise<void> {
   await writePrivateFile(SESSION_FILE, `${token}\nexpires=${expiresAt ?? "never"}\n`);
   process.env.BW_SESSION = token;
   sessionExpiresAt = expiresAt;
-  if (expiresAt !== null) armLockTimer(token);
+  if (expiresAt !== null) armLockTimer(token, expiresAt);
 }
 
 // Locks bw when the session ends, even if nothing calls keyshroud then. A
 // session that a later unlock replaced is left alone. The token reaches the
 // timer through its environment, never argv.
-function armLockTimer(token: string): void {
+function armLockTimer(token: string, expiresAt: number): void {
   if (setting("LOCK_TIMER") === "0") return;
+  // bw lock needs only its data directory, not the session or API key.
   const env: Record<string, string> = {};
-  for (const [name, value] of Object.entries(process.env)) if (value !== undefined && name !== "BW_SESSION" && name !== "BW_PASSWORD") env[name] = value;
-  const seconds = String(Math.ceil(SESSION_TTL_MS / 1000));
-  const vars = { token: `${P}_LOCK_TOKEN`, file: `${P}_LOCK_FILE`, bw: `${P}_LOCK_BW`, args: `${P}_LOCK_BW_ARGS` };
+  for (const [name, value] of Object.entries(process.env)) if (value !== undefined && (name === "BITWARDENCLI_APPDATA_DIR" || !VAULT_ENV_KEYS.includes(name))) env[name] = value;
+  const vars = { token: `${P}_LOCK_TOKEN`, file: `${P}_LOCK_FILE`, bw: `${P}_LOCK_BW`, args: `${P}_LOCK_BW_ARGS`, verbatim: `${P}_LOCK_BW_VERBATIM` };
+  let bwPath: string, bwArgs: string[], verbatim: boolean;
+  try { [bwPath, bwArgs, verbatim] = bwCommand(["lock"]); } catch { return; }
+  // The wait checks the wall clock, so time asleep (a closed laptop) counts.
   // Windows: a detached Node, since powershell does not start without a console
   // and children that are not detached die with this process.
-  const [bwPath, bwArgs] = bwCommand(["lock"]);
   const timer: [string, string[]] = process.platform === "win32"
     ? [process.execPath, ["-e", [
         `const fs = require("fs"), e = process.env;`,
-        `setTimeout(() => { let t = ""; try { t = fs.readFileSync(e.${vars.file}, "utf8").split("\\n")[0].trim(); } catch {}`,
+        `const tick = () => { const left = ${expiresAt} - Date.now(); if (left > 0) return setTimeout(tick, Math.min(left, 30000));`,
+        `  let t = ""; try { t = fs.readFileSync(e.${vars.file}, "utf8").split("\\n")[0].trim(); } catch {}`,
         `  if (t && t !== e.${vars.token}) return; fs.rmSync(e.${vars.file}, { force: true });`,
-        `  require("child_process").execFile(e.${vars.bw}, JSON.parse(e.${vars.args}), { windowsHide: true }, () => {}); }, ${seconds} * 1000);`,
+        `  require("child_process").execFile(e.${vars.bw}, JSON.parse(e.${vars.args}), { windowsHide: true, windowsVerbatimArguments: e.${vars.verbatim} === "1" }, () => {}); };`,
+        `tick();`,
       ].join("\n")]]
-    : ["/bin/sh", ["-c", `sleep "$1"; t=$(head -n 1 "$2" 2>/dev/null); if [ -z "$t" ] || [ "$t" = "$${vars.token}" ]; then rm -f "$2"; bw lock >/dev/null 2>&1; fi`, "sh", seconds, SESSION_FILE]];
+    : ["/bin/sh", ["-c", `while now=$(date +%s); [ "$now" -lt "$1" ]; do left=$(($1 - now)); sleep $((left < 30 ? left : 30)); done; t=$(head -n 1 "$2" 2>/dev/null); if [ -z "$t" ] || [ "$t" = "$${vars.token}" ]; then rm -f "$2"; bw lock >/dev/null 2>&1; fi`, "sh", String(Math.ceil(expiresAt / 1000)), SESSION_FILE]];
   const child = spawn(timer[0], timer[1], {
     detached: true, stdio: "ignore", windowsHide: true,
-    env: { ...env, [vars.token]: token, [vars.file]: SESSION_FILE, [vars.bw]: bwPath, [vars.args]: JSON.stringify(bwArgs), BW_NOINTERACTION: "true" },
+    env: { ...env, [vars.token]: token, [vars.file]: SESSION_FILE, [vars.bw]: bwPath, [vars.args]: JSON.stringify(bwArgs), [vars.verbatim]: verbatim ? "1" : "0", BW_NOINTERACTION: "true" },
   });
   child.on("error", () => {});
   child.unref();
@@ -422,14 +438,17 @@ async function useStoredSession(): Promise<string | null> {
   return stored.token;
 }
 
-// Another process is already asking: use the session it opens.
-async function waitForSession(): Promise<string> {
+// Another process is already asking: use the session it opens. null when that
+// dialog closed without one (a wrong password, or a Save dialog), so ask again.
+async function waitForSession(): Promise<string | null> {
   const deadline = Date.now() + DIALOG_TIMEOUT_MS + 30_000;
   while (Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 1000));
     const token = await useStoredSession();
     if (token) return token;
-    if ((await readFile(DIALOG_LOCK, "utf8").catch(() => "")).startsWith("cancelled:")) throw new Error("Cancelled");
+    const held = await readFile(DIALOG_LOCK, "utf8").catch(() => "");
+    if (held.startsWith("cancelled:")) throw new Error("Cancelled");
+    if (!held.startsWith("open:")) return null;
   }
   throw new Error(DIALOG_BUSY);
 }
@@ -446,14 +465,17 @@ async function ensureSessionInner(existing: string | undefined, opts: SessionOpt
   const asked = !master;
   if (!master) {
     if (!opts.prompt && !opts.unattended) throw await lockedError();
-    try { master = await askMasterPassword({ unattended: opts.unattended }); } catch (error) {
-      if (error instanceof Error && error.message === DIALOG_BUSY) return waitForSession();
-      throw error;
+    for (;;) {
+      try { master = await askMasterPassword({ unattended: opts.unattended }); break; } catch (error) {
+        if (!(error instanceof Error && error.message === DIALOG_BUSY)) throw error;
+        const token = await waitForSession();
+        if (token) return token;
+      }
     }
     if (master === null) throw await lockedError();
   }
-  // A fresh token, so copies of the old one stop working.
-  if (opts.unattended) await lock();
+  // bw unlock replaces the token, so copies of the old one stop working; a
+  // wrong password leaves the open session alone.
 
   const beforeLogin = await rawStatus();
   if (beforeLogin.status === "unauthenticated") {
@@ -483,7 +505,10 @@ async function ensureSessionInner(existing: string | undefined, opts: SessionOpt
 export async function askMasterPassword(opts: { email?: string; unattended?: boolean } = {}): Promise<string | null> {
   const account = opts.email ?? (await rawStatus()).email ?? "the vault account";
   const span = opts.unattended ? "with no time limit (unattended)" : `for ${Math.round(SESSION_TTL_MS / 60000)} minutes`;
-  if (process.stdin.isTTY && process.stderr.isTTY) {
+  const tty = process.stdin.isTTY && process.stderr.isTTY;
+  // A session without an end is opened by the person at a terminal, never from a dialog an agent opened.
+  if (opts.unattended && !tty) throw new Error(`An unattended session needs a terminal: run \`${BRAND.bin} unlock --unattended\` there`);
+  if (tty) {
     process.stderr.write(`${BRAND.name}: unlocking ${account} ${span}.\n`);
     const value = await readMasked(`Master password of ${account}: `);
     if (!value) throw new Error("Cancelled");
@@ -512,14 +537,30 @@ async function writeMasterVerifier(master: string): Promise<void> {
   await writePrivateFile(MASTER_VERIFIER_FILE, `scrypt$${SCRYPT_PARAMS.N}$${SCRYPT_PARAMS.r}$${SCRYPT_PARAMS.p}$${salt.toString("base64")}$${hash.toString("base64")}\n`);
 }
 
-async function matchesMasterVerifier(secret: string): Promise<boolean> {
+// null when there is no verifier in the form keyshroud writes.
+async function matchesMasterVerifier(secret: string): Promise<boolean | null> {
+  let parts: string[];
+  try { parts = (await readFile(MASTER_VERIFIER_FILE, "utf8")).trim().split("$"); } catch { return null; }
+  const [kind, N, r, p, salt = "", hash = ""] = parts;
+  const expected = Buffer.from(hash, "base64");
+  if (parts.length !== 6 || kind !== "scrypt" || `${N}$${r}$${p}` !== `${SCRYPT_PARAMS.N}$${SCRYPT_PARAMS.r}$${SCRYPT_PARAMS.p}` || expected.length !== 32 || Buffer.from(salt, "base64").length !== 16) return null;
+  const actual = await scryptAsync(secret, Buffer.from(salt, "base64"), 32, { ...SCRYPT_PARAMS, maxmem: SCRYPT_MAXMEM });
+  return timingSafeEqual(actual, expected);
+}
+
+// Without a verifier (an agent can delete the file) try the value itself: bw
+// unlock is local, and a match replaces the session token, so keep the new one.
+async function unlocksVault(secret: string): Promise<boolean> {
+  const before = await readSession();
+  let token: string;
   try {
-    const [kind, N, r, p, salt, hash] = (await readFile(MASTER_VERIFIER_FILE, "utf8")).trim().split("$");
-    if (kind !== "scrypt") return false;
-    const expected = Buffer.from(hash, "base64");
-    const actual = await scryptAsync(secret, Buffer.from(salt, "base64"), expected.length, { N: Number(N), r: Number(r), p: Number(p), maxmem: SCRYPT_MAXMEM });
-    return timingSafeEqual(actual, expected);
+    token = (await runFile("bw", ["unlock", "--passwordenv", "BW_PASSWORD", "--raw"], { env: { ...process.env, BW_PASSWORD: secret }, timeout: 20000, maxBuffer: 4 * 1024 * 1024 })).stdout.trim();
   } catch { return false; }
+  if (!token) return false;
+  // The session keeps its end.
+  await writeSession(token, before?.expiresAt === null, before ? before.expiresAt : undefined);
+  await writeMasterVerifier(secret);
+  return true;
 }
 
 // Store a keychain entry by letting the OS tool prompt for the value on the
@@ -567,7 +608,7 @@ export async function generateKeychainSecret(service: string, label: string, con
 const CLIPBOARD_TOOLS: Array<[string, string[], string, string[]]> = process.platform === "darwin"
   ? [["pbcopy", [], "pbpaste", []]]
   : process.platform === "win32"
-  ? [["clip", [], "powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "Get-Clipboard -Raw"]]]
+  ? [[join(SYSTEM32, "clip.exe"), [], POWERSHELL, ["-NoProfile", "-NonInteractive", "-Command", "Get-Clipboard -Raw"]]]
   : [["wl-copy", [], "wl-paste", ["--no-newline"]], ["xclip", ["-selection", "clipboard"], "xclip", ["-selection", "clipboard", "-o"]]];
 
 export async function copyToClipboard(text: string): Promise<boolean> {
@@ -889,7 +930,9 @@ export async function getSecret(itemName: string): Promise<string> {
 // An agent can start add/rotate, so a dialog could be used to phish the master
 // password into an item it can then read; refuse it outright.
 async function refuseMasterPassword(secret: string): Promise<void> {
-  if (secret && (secret === await readMasterPassword() || await matchesMasterVerifier(secret))) throw new Error("Refusing to store the vault master password as a secret");
+  if (!secret) return;
+  const match = secret === await readMasterPassword() || await matchesMasterVerifier(secret);
+  if (match === true || (match === null && await unlocksVault(secret))) throw new Error("Refusing to store the vault master password as a secret");
 }
 
 export async function createSecretItem(opts: { itemName: string; secret: string; envName?: string; notes?: string }): Promise<{ id: string }> {
@@ -976,7 +1019,7 @@ async function nativePasswordDialog(text: string, button: "Save" | "Unlock"): Pr
         `text returned of (display dialog (item 1 of argv) default answer "" with hidden answer with title "keyshroud" buttons {"Cancel", "${button}"} default button "${button}" cancel button "Cancel" with icon caution)`,
         "-e", "end run", "--", text]]]
     : process.platform === "win32"
-    ? [["powershell.exe", ["-NoProfile", "-NonInteractive", "-STA", "-EncodedCommand", Buffer.from(windowsDialogScript(button), "utf16le").toString("base64")]]]
+    ? [[POWERSHELL, ["-NoProfile", "-NonInteractive", "-STA", "-EncodedCommand", Buffer.from(windowsDialogScript(button), "utf16le").toString("base64")]]]
     : process.env.DISPLAY || process.env.WAYLAND_DISPLAY
       ? [["zenity", ["--entry", "--hide-text", "--no-markup", "--title=keyshroud", `--text=${text}`]], ["kdialog", ["--title", "keyshroud", "--password", text.replace(/[<>]/g, "")]]]
       : [];
@@ -985,12 +1028,12 @@ async function nativePasswordDialog(text: string, button: "Save" | "Unlock"): Pr
     for (const [command, args] of candidates) {
       const result = await new Promise<{ code: number | string | null; stdout: string; stderr: string }>((resolve) => {
         // Windows: the text reaches the dialog script as data, through the environment.
-        execFile(command, args, { timeout: DIALOG_TIMEOUT_MS, env: { ...process.env, [`${P}_DIALOG_TEXT`]: text } }, (error, stdout, stderr) => resolve({ code: error ? ((error as NodeJS.ErrnoException).code ?? 1) : 0, stdout: String(stdout), stderr: String(stderr) }));
+        execFile(command, args, { timeout: DIALOG_TIMEOUT_MS, env: childEnv({ [`${P}_DIALOG_TEXT`]: text }) }, (error, stdout, stderr) => resolve({ code: error ? ((error as NodeJS.ErrnoException).code ?? 1) : 0, stdout: String(stdout), stderr: String(stderr) }));
       });
       if (result.code === "ENOENT") continue;
       if (result.code === 0) return result.stdout.replace(/\r?\n$/, "");
       // powershell exits 2 on Cancel; other failures (no desktop session) mean no dialog.
-      if (command === "powershell.exe" ? result.code === 2 : command !== "osascript" || /-128/.test(result.stderr)) throw new Error("Cancelled");
+      if (command === POWERSHELL ? result.code === 2 : command !== "osascript" || /-128/.test(result.stderr)) throw new Error("Cancelled");
       return null;
     }
     return null;

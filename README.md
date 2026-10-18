@@ -137,7 +137,7 @@ and a command needs a secret, it asks: a masked prompt in a terminal, a native d
 on the desktop (so an agent's command waits for you), and over SSH it tells you to run
 `keyshroud unlock`. A session ends after 30 minutes (`KEYSHROUD_SESSION_TTL_MS`): a timer
 runs `bw lock`, so a copied session token stops working too. On a host nobody sits at,
-`keyshroud unlock --unattended` asks once and opens a session without an end.
+`keyshroud unlock --unattended` asks once, in a terminal only, and opens a session without an end.
 
 To unlock without being asked, store the master password in the OS keychain
 (`security add-generic-password -a "$USER" -s vaultwarden-master-password -w`, or
@@ -468,7 +468,10 @@ secret-using commands through `keyshroud run` or `secrets_run`. An agent with sh
 `~/.config/keyshroud/session` and use `bw` directly until the session ends — after `setup`
 that reaches only the agent account; a stored master password (keychain entry or
 `~/.config/keyshroud/master-password`) it can read at any time, which is why keyshroud asks
-instead by default; otherwise run agents in a sandbox or container if that matters. Redaction is exact-match, so a *partial* or transformed value
+instead by default; otherwise run agents in a sandbox or container if that matters. The same
+agent could also draw a window that looks like the unlock dialog; when in doubt, cancel it and run
+`keyshroud unlock` in a terminal. Without `setup`, keyshroud shares bw's default login, so the
+30-minute lock also ends a `bw` session you opened yourself. Redaction is exact-match, so a *partial* or transformed value
 (`${TOKEN:0:10}`, base64, a line wrapped by a tool) is not masked; values
 shorter than 6 characters are not redacted (to avoid noise), so don't wire short
 PINs.

@@ -134,7 +134,8 @@ async function runCommand(args: string[]): Promise<void> {
   // Agents started through `run` (e.g. `keyshroud run -- claude`) rely on the
   // hook index, so it must cover env-file values too.
   if (Object.keys(env.secrets).length) { try { await core.writeRedactIndex(core.indexValues(env.secrets)); } catch {} }
-  const target = core.invocation(command, commandArgs);
+  let target: core.Invocation;
+  try { target = core.invocation(command, commandArgs); } catch (error) { console.error(error instanceof Error ? error.message : String(error)); process.exitCode = 127; return; }
   const child = spawn(target.command, target.args, { stdio: mask ? ["inherit", "pipe", "pipe"] : "inherit", env: core.childEnv(env.values), windowsVerbatimArguments: target.verbatim });
   if (mask) {
     child.stdout?.pipe(createRedactStream(redactor)).pipe(process.stdout);
@@ -252,7 +253,7 @@ async function setupCommand(args: string[]): Promise<void> {
       }
       master ??= randomBytes(24).toString("base64url");
       if (!(await core.copyToClipboard(master))) fail(`No clipboard here (SSH or no display); run \`${BRAND.bin} setup --email ${email}\` in a terminal instead`, 3);
-      spawn(process.platform === "darwin" ? "open" : process.platform === "win32" ? "explorer.exe" : "xdg-open", [signupUrl], { stdio: "ignore" }).on("error", () => {});
+      spawn(process.platform === "darwin" ? "open" : process.platform === "win32" ? join(dirname(core.SYSTEM32), "explorer.exe") : "xdg-open", [signupUrl], { stdio: "ignore" }).on("error", () => {});
       console.log(kept
         ? `A random master password for ${email} is in the keychain (${core.KEYCHAIN_MASTER_SERVICE}) and on the clipboard.`
         : `A random master password for ${email} is on the clipboard. Save it in your own password manager too: ${BRAND.name} does not store it and asks for it when a session ends.`);
@@ -265,7 +266,7 @@ async function setupCommand(args: string[]): Promise<void> {
     const url = signupUrl;
     console.log(`1. Create the agent account ${email}: ${url}`);
     console.log("   Pick a new master password, not your personal one.");
-    spawn(process.platform === "darwin" ? "open" : process.platform === "win32" ? "explorer.exe" : "xdg-open", [url], { stdio: "ignore" }).on("error", () => {});
+    spawn(process.platform === "darwin" ? "open" : process.platform === "win32" ? join(dirname(core.SYSTEM32), "explorer.exe") : "xdg-open", [url], { stdio: "ignore" }).on("error", () => {});
     process.stdout.write("   Press Enter once the account exists. ");
     await new Promise((resolve) => process.stdin.once("data", resolve)); process.stdin.pause();
   }
@@ -285,7 +286,8 @@ async function setupCommand(args: string[]): Promise<void> {
     await mkdir(core.OWN_BW_DIR, { recursive: true, mode: 0o700 });
     await core.bw(["config", "server", server]);
   }
-  await unlink(core.SESSION_FILE).catch(() => {});
+  // A session of this login stays usable when setup runs again.
+  if (loggedOut) await unlink(core.SESSION_FILE).catch(() => {});
   console.log(`${BRAND.name} now keeps its own bw login in ${core.OWN_BW_DIR}; your personal bw login is untouched.`);
   try {
     if (loggedOut) await core.loginOwnAccount(email, master!, unattended); else await core.ensureSession({ prompt: true, unattended });
@@ -452,8 +454,8 @@ async function main(): Promise<void> {
     if (command === "unlock") {
       requireKnownFlags(args, [], ["--unattended"]);
       await core.ensureSession({ prompt: true, unattended: args.includes("--unattended") });
-      const expiresAt = (await core.readSession())?.expiresAt;
-      console.log(expiresAt ? `unlocked until ${new Date(expiresAt).toLocaleTimeString()}` : "unlocked (no time limit)");
+      const stored = await core.readSession();
+      console.log(!stored ? "unlocked" : stored.expiresAt ? `unlocked until ${new Date(stored.expiresAt).toLocaleTimeString()}` : "unlocked (no time limit)");
       return;
     }
     if (command === "lock") { requireKnownFlags(args, []); await core.lock(); console.log("locked"); return; }

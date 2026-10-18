@@ -12,14 +12,17 @@ All notable changes are documented here. This project follows
   over SSH, a message to run `keyshroud unlock`. A master password already in the
   keychain or in `~/.config/keyshroud/master-password` still unlocks without asking.
 - Sessions end after 30 minutes (`KEYSHROUD_SESSION_TTL_MS`). A background timer
-  runs `bw lock` then, so a copied session token stops working too.
+  runs `bw lock` then, so a copied session token stops working too. It follows the
+  clock, so time a laptop spends asleep counts. Without `setup`, keyshroud shares
+  bw's default login, so this also ends a `bw` session you opened yourself.
 - `setup` no longer stores the agent account's master password unless you pass
   `--confirm-unlock`; from an agent's shell the generated password goes to the
   clipboard only, and `setup --registered` asks for it in a dialog.
 
 ### Added
 - `unlock --unattended` and `setup --unattended` for hosts nobody sits at: they
-  always ask, then open a session without an end. Unlike a master-password file,
+  always ask in a terminal (never in a dialog an agent could open), then open a
+  session without an end. A wrong password leaves the running session alone. Unlike a master-password file,
   a leaked session cannot log in elsewhere or change the password.
 - `doctor` reports where the master password is stored, if anywhere, and when the
   session ends.
@@ -28,13 +31,19 @@ All notable changes are documented here. This project follows
   `cmd.exe`), the unlock and secret dialogs are a PowerShell window, the lock timer is
   a detached Node process, `secrets_run` uses `cmd.exe`, and the clipboard and signup
   page work. Over `ssh -t`, Windows ends the timer with the SSH session; that session
-  then ends on the next call.
+  then ends on the next call. System tools (`powershell`, `clip`, `taskkill`,
+  `explorer`) run by absolute path, and a command that is not on `PATH` fails
+  instead of running a file of that name from the current directory.
 - `doctor` warns when `bw` 2026.9 or later talks to a self-hosted server: those
   releases cannot log in to Vaultwarden yet (`KeyIdBackfillError`, vaultwarden#7750).
 
 ### Fixed
 - `add` and `rotate` still refuse the master password as a secret when it is not
-  stored: keyshroud keeps a scrypt hash of a typed master password for that check.
+  stored: keyshroud keeps a scrypt hash of a typed master password for that check,
+  and tries the value against the vault when that file is missing or altered.
+- A command waiting for another command's unlock dialog asks again when that
+  dialog closes without unlocking, instead of waiting five minutes.
+- Running `setup` again on a logged-in agent account keeps the open session.
 - `run` and `secrets_run` mask a `~/.config/keyshroud/master-password` file that a
   command prints.
 - `setup` works on a host whose keyring is locked (SSH): it no longer needs the

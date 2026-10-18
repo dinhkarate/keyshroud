@@ -2,6 +2,7 @@
 // client the same contract as the pi extension: names in, masked output out.
 import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { createInterface } from "node:readline";
 import process from "node:process";
 import { BRAND } from "./brand.ts";
@@ -100,7 +101,7 @@ async function runTool(args: Json): Promise<Json> {
     });
   }
   const timer = setTimeout(() => {
-    if (windows) spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], { stdio: "ignore" }).on("error", () => {});
+    if (windows) spawn(join(core.SYSTEM32, "taskkill.exe"), ["/pid", String(child.pid), "/t", "/f"], { stdio: "ignore" }).on("error", () => {});
     else { try { process.kill(-child.pid!, "SIGTERM"); } catch {} }
   }, timeout);
   const code = await new Promise<string>((done) => {
