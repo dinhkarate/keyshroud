@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { randomBytes, scryptSync } from "node:crypto";
 import { mkdir, readdir, readFile, stat, symlink, unlink, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -629,7 +630,9 @@ test("without a stored master password keyshroud asks, and the session ends afte
   assert.match(phished.stderr, /master password/);
   assert.ok(!(await box.vault()).items.some((entry) => entry.name === "Phished"));
   // Removing or forging the hash does not help: keyshroud then tries the value as the master password.
-  for (const forged of [null, "scrypt$2$1$1$AAAA$AA==\n"]) {
+  const salt = randomBytes(16);
+  const wellFormed = `scrypt$${2 ** 17}$8$1$${salt.toString("base64")}$${scryptSync("another-value", salt, 32, { N: 2 ** 17, r: 8, p: 1, maxmem: 256 * 1024 * 1024 }).toString("base64")}\n`;
+  for (const forged of [null, "scrypt$2$1$1$AAAA$AA==\n", wellFormed]) {
     if (forged === null) await unlink(join(box.configDir, "master-password.scrypt")); else await writeFile(join(box.configDir, "master-password.scrypt"), forged);
     const again = await runCli(box, ["add", "--env", "PHISHED", "--item", "Phished", "--stdin"], "master");
     assert.match(again.stderr, /master password/);
