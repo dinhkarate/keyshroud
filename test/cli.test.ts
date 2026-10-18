@@ -36,12 +36,16 @@ test("status unlocks from the keychain and stores a private session file", async
   assert.ok(!result.stdout.includes("fake-session"));
 });
 
-test("env lists names only and resolves every reference with one batched list", async () => {
+test("env lists names without the vault; --shell resolves every reference with one batched list", async () => {
   const box = await wired();
   const result = await runCli(box, ["env"]);
   assert.equal(result.code, 0, result.stderr);
   assert.deepEqual(result.stdout.trim().split("\n").sort(), ["GH_TOKEN", "NPM_TOKEN", "PLAIN"]);
   assert.ok(!result.stdout.includes(GH));
+  assert.ok(!(await box.bwCalls()).includes("list items"), "names need no unlock");
+  const shell = await runCli(box, ["env", "--shell"]);
+  assert.equal(shell.code, 0, shell.stderr);
+  assert.match(shell.stdout, /^export GH_TOKEN=/m);
   const lists = (await box.bwCalls()).filter((call) => call === "list items");
   assert.equal(lists.length, 1);
   assert.ok(!(await box.bwCalls()).some((call) => call.startsWith("get password")));
@@ -513,34 +517,36 @@ test("setup --confirm-unlock asks the macOS keychain before every read", { skip:
   const own = join(box.configDir, "bw");
   await mkdir(own, { recursive: true });
   await writeFile(join(own, "fake-vault.json"), JSON.stringify({ status: "unauthenticated", registered: "agent@example.test", password: "agent-pw", items: [] }));
-  const setup = await runCli(box, ["setup", "--email", "agent@example.test", "--registered", "--confirm-unlock"], "agent-pw\n");
-  assert.equal(setup.code, 0, setup.stderr);
+  const setup = await runCliTty(box, ["setup", "--email", "agent@example.test", "--registered", "--confirm-unlock"], "Type the agent account", "agent-pw");
+  assert.equal(setup.code, 0, setup.stdout);
   await stat(join(box.dir, "keychain", `${BRAND.bin}-master-password.confirm`));
 });
 
-test("setup from an agent's shell generates the password; the agent never sees it", async () => {
+test("setup from an agent's shell leaves the password to the user; the agent never sees it", async () => {
   const box = await sandbox([]);
   const own = join(box.configDir, "bw");
   await mkdir(own, { recursive: true });
   const first = await runCli(box, ["setup", "--email", "agent@example.test"]);
   assert.equal(first.code, 0, first.stderr);
-  const generated = await readFile(box.env.FAKE_CLIPBOARD, "utf8");
-  assert.ok(generated.length >= 32);
-  await assert.rejects(stat(join(box.dir, "keychain", `${BRAND.bin}-master-password`)), "the generated password is not stored");
+  await assert.rejects(stat(join(box.dir, "keychain", `${BRAND.bin}-master-password`)), "nothing is stored");
   assert.match(await readFile(box.env.FAKE_OPENED, "utf8"), /#\/signup\?email=agent%40example\.test/);
-  assert.ok(!first.stdout.includes(generated) && !first.stderr.includes(generated));
+  assert.match(first.stdout, /pick its master password there/);
   assert.match(first.stdout, /--registered/);
   // Not logged in yet: other processes keep the shared login meanwhile.
   const meanwhile = await runCli(box, ["doctor"]);
   assert.match(meanwhile.stdout, /bw login=shared/);
+  for (const flag of ["--unattended", "--confirm-unlock"]) {
+    const refused = await runCli(box, ["setup", "--email", "agent@example.test", flag]);
+    assert.equal(refused.code, 2, `${flag} needs a terminal`);
+    assert.match(refused.stderr, /terminal|needs the macOS keychain/);
+  }
 
-  // The user signs up with the pasted password.
-  await writeFile(join(own, "fake-vault.json"), JSON.stringify({ status: "unauthenticated", items: [], registered: "agent@example.test", password: generated }));
-  const second = await runCli(box, ["setup", "--email", "agent@example.test", "--registered"], "", { DISPLAY: ":0", FAKE_DIALOG_VALUE: generated });
+  // The user signs up with a password of their own, typed into the dialog.
+  await writeFile(join(own, "fake-vault.json"), JSON.stringify({ status: "unauthenticated", items: [], registered: "agent@example.test", password: "users-own-pick" }));
+  const second = await runCli(box, ["setup", "--email", "agent@example.test", "--registered"], "", { DISPLAY: ":0", FAKE_DIALOG_VALUE: "users-own-pick" });
   assert.equal(second.code, 0, second.stderr);
   assert.match(second.stdout, /ready: bw login=agent@example\.test/);
-  assert.equal(await readFile(box.env.FAKE_CLIPBOARD, "utf8"), "");
-  assert.ok(!second.stdout.includes(generated) && !second.stderr.includes(generated));
+  assert.ok(!second.stdout.includes("users-own-pick") && !second.stderr.includes("users-own-pick"));
 });
 
 test("a locked keyring fails fast and says why instead of hanging on bw's prompt", async () => {
@@ -564,12 +570,6 @@ test("setup that stops before the agent login leaves the personal login in place
     const run = await runCli(box, ["run", "--", "sh", "-c", "test \"$GH_TOKEN\" = \"$EXPECTED\" && echo same"], "", { EXPECTED: GH });
     assert.match(run.stdout, /same/, run.stderr);
   };
-
-  const noClipboard = await runCli(box, ["setup", "--email", "agent@example.test"], "", { FAKE_CLIPBOARD: join(box.dir, "missing", "clipboard") });
-  assert.equal(noClipboard.code, 3);
-  assert.match(noClipboard.stderr, /No clipboard here/);
-  assert.equal(await exists(ownData), false);
-  await usesPersonal();
 
   // Waiting for the user to sign up: still the personal login.
   const pending = await runCli(box, ["setup", "--email", "agent@example.test"]);
@@ -638,6 +638,12 @@ test("without a stored master password keyshroud asks, and the session ends afte
     assert.match(again.stderr, /master password/);
     assert.ok(!(await box.vault()).items.some((entry) => entry.name === "Phished"));
   }
+  // Nor does a decoy master-password file.
+  await writeFile(join(box.configDir, "master-password"), "decoy\n");
+  const decoy = await runCli(box, ["add", "--env", "PHISHED", "--item", "Phished", "--stdin"], "master");
+  assert.match(decoy.stderr, /master password/);
+  assert.ok(!(await box.vault()).items.some((entry) => entry.name === "Phished"));
+  await unlink(join(box.configDir, "master-password"));
   const other = await runCli(box, ["add", "--env", "OTHER", "--item", "Other", "--stdin"], "not-the-master");
   assert.equal(other.code, 0, other.stderr);
 
@@ -655,6 +661,8 @@ test("the lock timer ends a session even when nothing calls keyshroud", { skip: 
   const unlocked = await runCli(box, ["unlock"], "", timer);
   assert.equal(unlocked.code, 0, unlocked.stderr);
   assert.match(unlocked.stdout, /unlocked until/);
+  // An agent that rewrites the session file does not stop the lock: the timer asks bw about its own token.
+  await writeFile(join(box.configDir, "session"), "another-token\nexpires=never\n");
   const deadline = Date.now() + 8000;
   while (((await box.vault()) as { status?: string }).status !== "locked" && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 200));
   assert.equal(((await box.vault()) as { status?: string }).status, "locked");

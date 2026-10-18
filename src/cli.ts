@@ -20,7 +20,8 @@ Secrets
   get <ENV_NAME | bw://ref>        Print one resolved value to stdout
   run [--env-file F]... [--only A,B] [--no-auth] [--mask|--no-mask] -- <cmd> [args]
                                    Run a command with secrets injected (alias: exec)
-  inject [-i template] [-o out]    Render {{ bw://ref }} placeholders
+  inject [-i template] [-o out] [--force]
+                                   Render {{ bw://ref }} placeholders
   redact                           Copy stdin to stdout with vault secrets masked
   scan [paths...]                  Find vault secret values in files (exit 1 on leaks)
   env [--shell]                    List wired names (or print shell exports)
@@ -40,7 +41,7 @@ Vault
                                    (dry run unless --yes; prints names only)
   unlock [--unattended]            Unlock now (asks unless a master password is stored);
                                    the session ends after 30 minutes
-                                   (--unattended: no end, for hosts nobody sits at)
+                                   (--unattended: no end, for hosts nobody sits at; in a terminal)
   status | lock | doctor
 
 Agents
@@ -223,7 +224,8 @@ async function setupCommand(args: string[]): Promise<void> {
   const email = valueAfter(args, "--email");
   if (!email || !/^[^\s@]+@[^\s@]+$/.test(email)) fail("setup needs --email for a separate agent account (not your personal one)", 2);
   let server = valueAfter(args, "--server");
-  if (!server) { try { server = (JSON.parse(await core.bw(["status"])) as { serverUrl?: string }).serverUrl ?? undefined; } catch {} }
+  // bw reports no server for the default Bitwarden cloud.
+  if (!server) { try { server = (JSON.parse(await core.bw(["status"])) as { serverUrl?: string | null }).serverUrl ?? "https://vault.bitwarden.com"; } catch {} }
   if (!server || !/^https:\/\//.test(server)) fail("setup needs --server https://… (no bw server is configured)", 2);
   const confirm = args.includes("--confirm-unlock");
   const unattended = args.includes("--unattended");
@@ -243,22 +245,14 @@ async function setupCommand(args: string[]): Promise<void> {
   // password in the keychain; otherwise keyshroud asks for it when a session ends.
   let master = await core.readKeychain(core.KEYCHAIN_MASTER_SERVICE);
   if (!process.stdin.isTTY) {
-    // An agent's shell: nothing can be typed, so keyshroud picks the password.
-    if (!loggedOut && confirm && !master) fail(`The agent account is already logged in; run \`${BRAND.bin} setup --confirm-unlock\` in a terminal to store its password`, 2);
+    if (unattended) fail("--unattended opens a session without an end: run setup in a terminal", 2);
+    if (confirm) fail("--confirm-unlock asks for the password in a terminal: run setup there", 2);
+    // An agent's shell: the user picks the password on the signup page, so it
+    // never passes through anything the agent can read (output, clipboard).
     if (loggedOut && !args.includes("--registered")) {
-      const kept = Boolean(master) || confirm;
-      if (!master && confirm) {
-        if (!(await core.generateKeychainSecret(core.KEYCHAIN_MASTER_SERVICE, `${BRAND.name} agent account`, confirm))) fail("Could not store a generated password (needs macOS security or Linux secret-tool)", 3);
-        master = await core.readKeychain(core.KEYCHAIN_MASTER_SERVICE);
-      }
-      master ??= randomBytes(24).toString("base64url");
-      if (!(await core.copyToClipboard(master))) fail(`No clipboard here (SSH or no display); run \`${BRAND.bin} setup --email ${email}\` in a terminal instead`, 3);
       spawn(process.platform === "darwin" ? "open" : process.platform === "win32" ? join(dirname(core.SYSTEM32), "explorer.exe") : "xdg-open", [signupUrl], { stdio: "ignore" }).on("error", () => {});
-      console.log(kept
-        ? `A random master password for ${email} is in the keychain (${core.KEYCHAIN_MASTER_SERVICE}) and on the clipboard.`
-        : `A random master password for ${email} is on the clipboard. Save it in your own password manager too: ${BRAND.name} does not store it and asks for it when a session ends.`);
-      console.log(`Create the account at ${signupUrl} and paste it into both password fields.`);
-      console.log(`Then: ${BRAND.bin} setup --email ${email} --registered`);
+      console.log(`Create the agent account at ${signupUrl} and pick its master password there: a new one, not your personal one. Save it in your password manager.`);
+      console.log(`Then: ${BRAND.bin} setup --email ${email} --registered (it asks for that password in a dialog)`);
       return;
     }
   }
@@ -296,7 +290,6 @@ async function setupCommand(args: string[]): Promise<void> {
     if (fresh) await unlink(ownData).catch(() => {});
     throw error;
   }
-  if (master) await core.clearClipboardIf(master);
   await core.audit("setup", [], "cli");
   const minutes = Math.round(core.SESSION_TTL_MS / 60000);
   console.log(`ready: bw login=${email} (own). ${unattended ? "The session stays open (unattended)." : `Sessions end after ${minutes} minutes; then ${kept ? "keyshroud unlocks again from the keychain" : "keyshroud asks for the master password again"}.`}`);
@@ -462,9 +455,9 @@ async function main(): Promise<void> {
     if (command === "scan") { await scan(args); return; }
     if (command === "env") {
       if (args.some((arg) => arg !== "--shell")) fail(usage, 2);
-      const map = await core.buildEnvMap();
-      if (args.includes("--shell")) for (const [name, value] of Object.entries(map)) console.log(`export ${name}=${shellQuote(value)}`);
-      else for (const name of Object.keys(map)) console.log(name);
+      // Names need no unlock, so they list even while the vault is locked.
+      if (args.includes("--shell")) for (const [name, value] of Object.entries(await core.buildEnvMap())) console.log(`export ${name}=${shellQuote(value)}`);
+      else for (const name of new Set((await core.authEnvEntries()).map((entry) => entry.name))) console.log(name);
       return;
     }
     if (command === "get") {

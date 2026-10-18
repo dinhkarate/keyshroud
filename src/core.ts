@@ -91,9 +91,12 @@ export function invocation(command: string, args: string[]): Invocation {
   }
   if (found.script) return { command: process.execPath, args: [found.script, ...args] };
   if (!/\.(cmd|bat)$/i.test(found.file)) return { command: found.file, args };
-  // Backslashes before a quote, or at the end, are doubled for the C runtime's parser.
-  const quote = (value: string) => `"${value.replace(/(\\*)"/g, '$1$1""').replace(/(\\+)$/, "$1$1")}"`;
-  return { command: process.env.ComSpec ?? join(SYSTEM32, "cmd.exe"), args: ["/d", "/s", "/c", `"${[found.file, ...args].map(quote).join(" ")}"`], verbatim: true };
+  // As cross-spawn does: quote each argument for the C runtime, then escape every
+  // cmd.exe metacharacter (`%` included) with ^, twice, because the batch file's
+  // `%*` is parsed again; cmd then passes the text on as is.
+  const meta = /([()\][%!^"`<>&|;, *?])/g;
+  const quote = (value: string) => `"${value.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/, "$1$1")}"`.replace(meta, "^$1").replace(meta, "^$1");
+  return { command: process.env.ComSpec ?? join(SYSTEM32, "cmd.exe"), args: ["/d", "/s", "/c", `"${[found.file.replace(meta, "^$1"), ...args.map(quote)].join(" ")}"`], verbatim: true };
 }
 
 function bwCommand(args: string[]): [string, string[], boolean] {
@@ -121,7 +124,7 @@ function runFile(command: string, args: string[], options: Record<string, unknow
       resolve({ stdout: String(stdout ?? ""), stderr: String(stderr ?? "") });
     });
     if (input !== undefined && child.stdin) {
-      // A child that exits before reading (a failing clipboard tool) must not crash us with EPIPE.
+      // A child that exits before reading its stdin must not crash us with EPIPE.
       child.stdin.on("error", () => {});
       child.stdin.end(input);
     }
@@ -171,7 +174,8 @@ export const SECRET_CACHE_TTL_MS = (() => {
 export const SESSION_TTL_MS = (() => {
   const raw = setting("SESSION_TTL_MS");
   const parsed = raw === undefined ? NaN : Number(raw);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 30 * 60 * 1000;
+  // At most a day; a session without an end is `unlock --unattended` in a terminal.
+  return Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 24 * 60 * 60 * 1000) : 30 * 60 * 1000;
 })();
 
 export interface VaultItem {
@@ -402,25 +406,29 @@ function armLockTimer(token: string, expiresAt: number): void {
   // bw lock needs only its data directory, not the session or API key.
   const env: Record<string, string> = {};
   for (const [name, value] of Object.entries(process.env)) if (value !== undefined && (name === "BITWARDENCLI_APPDATA_DIR" || !VAULT_ENV_KEYS.includes(name))) env[name] = value;
-  const vars = { token: `${P}_LOCK_TOKEN`, file: `${P}_LOCK_FILE`, bw: `${P}_LOCK_BW`, args: `${P}_LOCK_BW_ARGS`, verbatim: `${P}_LOCK_BW_VERBATIM` };
-  let bwPath: string, bwArgs: string[], verbatim: boolean;
-  try { [bwPath, bwArgs, verbatim] = bwCommand(["lock"]); } catch { return; }
+  const vars = { token: `${P}_LOCK_TOKEN`, file: `${P}_LOCK_FILE`, bw: `${P}_LOCK_BW`, status: `${P}_LOCK_BW_STATUS`, lock: `${P}_LOCK_BW_LOCK`, verbatim: `${P}_LOCK_BW_VERBATIM` };
+  let bwPath: string, statusArgs: string[], lockArgs: string[], verbatim: boolean;
+  try { [bwPath, statusArgs, verbatim] = bwCommand(["status"]); [, lockArgs] = bwCommand(["lock"]); } catch { return; }
   // The wait checks the wall clock, so time asleep (a closed laptop) counts.
+  // At the end it asks bw whether its own token still works rather than
+  // trusting the session file, which an agent can rewrite: a later unlock
+  // replaced the token, a live one is this session.
   // Windows: a detached Node, since powershell does not start without a console
   // and children that are not detached die with this process.
   const timer: [string, string[]] = process.platform === "win32"
     ? [process.execPath, ["-e", [
-        `const fs = require("fs"), e = process.env;`,
+        `const fs = require("fs"), { execFile } = require("child_process"), e = process.env;`,
+        `const opts = { windowsHide: true, windowsVerbatimArguments: e.${vars.verbatim} === "1" };`,
         `const tick = () => { const left = ${expiresAt} - Date.now(); if (left > 0) return setTimeout(tick, Math.min(left, 30000));`,
-        `  let t = ""; try { t = fs.readFileSync(e.${vars.file}, "utf8").split("\\n")[0].trim(); } catch {}`,
-        `  if (t && t !== e.${vars.token}) return; fs.rmSync(e.${vars.file}, { force: true });`,
-        `  require("child_process").execFile(e.${vars.bw}, JSON.parse(e.${vars.args}), { windowsHide: true, windowsVerbatimArguments: e.${vars.verbatim} === "1" }, () => {}); };`,
+        `  execFile(e.${vars.bw}, JSON.parse(e.${vars.status}), { ...opts, env: { ...e, BW_SESSION: e.${vars.token} } }, (error, out) => {`,
+        `    if (!/"status":"unlocked"/.test(String(out))) return;`,
+        `    fs.rmSync(e.${vars.file}, { force: true }); execFile(e.${vars.bw}, JSON.parse(e.${vars.lock}), opts, () => {}); }); };`,
         `tick();`,
       ].join("\n")]]
-    : ["/bin/sh", ["-c", `while now=$(date +%s); [ "$now" -lt "$1" ]; do left=$(($1 - now)); sleep $((left < 30 ? left : 30)); done; t=$(head -n 1 "$2" 2>/dev/null); if [ -z "$t" ] || [ "$t" = "$${vars.token}" ]; then rm -f "$2"; bw lock >/dev/null 2>&1; fi`, "sh", String(Math.ceil(expiresAt / 1000)), SESSION_FILE]];
+    : ["/bin/sh", ["-c", `while now=$(date +%s); [ "$now" -lt "$1" ]; do left=$(($1 - now)); sleep $((left < 30 ? left : 30)); done; if BW_SESSION="$${vars.token}" bw status 2>/dev/null | grep -q '"status":"unlocked"'; then rm -f "$2"; bw lock >/dev/null 2>&1; fi`, "sh", String(Math.ceil(expiresAt / 1000)), SESSION_FILE]];
   const child = spawn(timer[0], timer[1], {
     detached: true, stdio: "ignore", windowsHide: true,
-    env: { ...env, [vars.token]: token, [vars.file]: SESSION_FILE, [vars.bw]: bwPath, [vars.args]: JSON.stringify(bwArgs), [vars.verbatim]: verbatim ? "1" : "0", BW_NOINTERACTION: "true" },
+    env: { ...env, [vars.token]: token, [vars.file]: SESSION_FILE, [vars.bw]: bwPath, [vars.status]: JSON.stringify(statusArgs), [vars.lock]: JSON.stringify(lockArgs), [vars.verbatim]: verbatim ? "1" : "0", BW_NOINTERACTION: "true" },
   });
   child.on("error", () => {});
   child.unref();
@@ -452,10 +460,11 @@ async function waitForSession(): Promise<string | null> {
     if (token) return token;
     const held = await readFile(DIALOG_LOCK, "utf8").catch(() => "");
     if (held.startsWith("cancelled:")) throw new Error("Cancelled");
-    // The dialog closes before its bw unlock (up to 20 s) writes the session.
-    if (held.startsWith("open:")) closedAt = 0;
+    // The dialog closes before its bw login and unlock (20 s each at most) write the session.
+    const open = held.startsWith("open:") && Date.now() - Number(held.slice(5)) < DIALOG_TIMEOUT_MS + 30_000;
+    if (open) closedAt = 0;
     else if (!closedAt) closedAt = Date.now();
-    else if (Date.now() - closedAt > 25_000) return null;
+    else if (Date.now() - closedAt > 45_000) return null;
   }
   throw new Error(DIALOG_BUSY);
 }
@@ -564,8 +573,8 @@ async function unlocksVault(secret: string): Promise<boolean> {
     token = (await runFile("bw", ["unlock", "--passwordenv", "BW_PASSWORD", "--raw"], { env: { ...process.env, BW_PASSWORD: secret }, timeout: 20000, maxBuffer: 4 * 1024 * 1024 })).stdout.trim();
   } catch { return false; }
   if (!token) return false;
-  // The session keeps its end.
-  await writeSession(token, before?.expiresAt === null, before ? before.expiresAt : undefined);
+  // The session keeps its end, but never becomes one without an end here.
+  await writeSession(token, false, before?.expiresAt ?? undefined);
   await writeMasterVerifier(secret);
   return true;
 }
@@ -590,49 +599,6 @@ export async function storeKeychainInteractive(service: string, label: string, c
     if (code === 0) return true;
   }
   return false;
-}
-
-// `setup` from an agent's shell (no terminal): a random master password for the
-// new agent account, written to the keychain over stdin. Nobody types it and it
-// never reaches argv or output; the user gets it via the clipboard for signup.
-export async function generateKeychainSecret(service: string, label: string, confirm: boolean): Promise<boolean> {
-  const secret = randomBytes(24).toString("base64url");
-  const user = process.env.USER || process.env.LOGNAME || "";
-  const opts = { timeout: 30000, maxBuffer: 1024 * 1024 };
-  if (process.platform !== "darwin" && await keychainLocked()) throw new Error(KEYRING_LOCKED);
-  try {
-    if (process.platform === "darwin") {
-      // `security -i` reads the command from stdin, so the value is not in argv.
-      await runFile("security", ["-i"], opts, `add-generic-password -U -a "${user}" -s "${service}" -l "${label}"${confirm ? ' -T ""' : ""} -w "${secret}"\n`);
-      await runFile("security", ["find-generic-password", "-a", user, "-s", service], opts);
-    } else {
-      await runFile("secret-tool", ["store", `--label=${label}`, "service", service, "account", user], opts, secret);
-    }
-    return true;
-  } catch { return false; }
-}
-
-const CLIPBOARD_TOOLS: Array<[string, string[], string, string[]]> = process.platform === "darwin"
-  ? [["pbcopy", [], "pbpaste", []]]
-  : process.platform === "win32"
-  ? [[join(SYSTEM32, "clip.exe"), [], POWERSHELL, ["-NoProfile", "-NonInteractive", "-Command", "Get-Clipboard -Raw"]]]
-  : [["wl-copy", [], "wl-paste", ["--no-newline"]], ["xclip", ["-selection", "clipboard"], "xclip", ["-selection", "clipboard", "-o"]]];
-
-export async function copyToClipboard(text: string): Promise<boolean> {
-  for (const [copy, args] of CLIPBOARD_TOOLS) {
-    try { await runFile(copy, args, { timeout: 10000, maxBuffer: 1024 * 1024 }, text); return true; } catch {}
-  }
-  return false;
-}
-
-// Empty the clipboard only if it still holds `text`.
-export async function clearClipboardIf(text: string): Promise<void> {
-  for (const [copy, copyArgs, paste, pasteArgs] of CLIPBOARD_TOOLS) {
-    try {
-      if ((await runFile(paste, pasteArgs, { timeout: 10000, maxBuffer: 1024 * 1024 })).stdout.trim() === text) await runFile(copy, copyArgs, { timeout: 10000, maxBuffer: 1024 * 1024 }, "");
-      return;
-    } catch {}
-  }
 }
 
 // `setup`: log keyshroud's own bw login in to the agent account. stdin and
@@ -938,9 +904,9 @@ export async function getSecret(itemName: string): Promise<string> {
 // password into an item it can then read; refuse it outright.
 async function refuseMasterPassword(secret: string): Promise<void> {
   if (!secret) return;
-  // The verifier only short-cuts a match: an agent can replace it with the hash of another value.
+  // The stored value and the verifier only short-cut a match: an agent can replace either.
   const stored = await readMasterPassword();
-  if (secret === stored || await matchesMasterVerifier(secret) || (!stored && await unlocksVault(secret))) throw new Error("Refusing to store the vault master password as a secret");
+  if (secret === stored || await matchesMasterVerifier(secret) || await unlocksVault(secret)) throw new Error("Refusing to store the vault master password as a secret");
 }
 
 export async function createSecretItem(opts: { itemName: string; secret: string; envName?: string; notes?: string }): Promise<{ id: string }> {

@@ -54,11 +54,10 @@ dinhkarate
 
 | エージェント | インストール | 使える機能 |
 |---|---|---|
-| **Claude Code** | [プラグイン](#claude-code) | SessionStart + PostToolUse のマスク用フック、MCP ツール、スキル |
+| **Claude Code** | [プラグイン](#claude-code) | SessionStart + PostToolUse のマスク用フック、スキル |
 | **pi / omp** | [`pi install npm:keyshroud`](../README.md#pi--omp) | 環境変数への注入、`tool_result` のマスク（失敗した呼び出しも含む）、`/secret` |
-| **Codex** | [`codex mcp add keyshroud -- keyshroud mcp`](#任意の-mcp-クライアント) | 出力がマスクされる MCP ツール |
-| **Cursor, Claude Desktop, Cline, Gemini CLI** | [`mcpServers` JSON](#任意の-mcp-クライアント) | 出力がマスクされる MCP ツール |
-| **OpenCode** | [`opencode mcp add keyshroud -- keyshroud mcp`](#任意の-mcp-クライアント) | 出力がマスクされる MCP ツール |
+| **Codex, OpenCode, Gemini CLI, Cursor agent** | [`npx skills add dinhkarate/keyshroud`](../README.md#other-agents-with-a-shell) | スキル + 出力がマスクされる CLI |
+| **Claude Desktop、チャットのみのクライアント** | [`mcpServers` JSON](#任意の-mcp-クライアント) | 出力がマスクされる MCP ツール |
 | **任意のシェルや CI** | `keyshroud run -- <cmd>` | 環境変数の注入 + 出力のマスク |
 
 ## クイックスタート
@@ -73,7 +72,7 @@ dinhkarate
   下の `bw config server` は飛ばします（EU アカウント：`bw config server https://vault.bitwarden.eu`）。
 
 ```bash
-npm install -g keyshroud @bitwarden/cli    # または：brew install bitwarden-cli
+npm install -g keyshroud @bitwarden/cli@2026.8.0   # bw 2026.9+ cannot log in to Vaultwarden yet (vaultwarden#7750)
 
 # 1. bw を自分のサーバーに向けて、一度だけログインする
 bw config server https://vault.example.com
@@ -95,12 +94,12 @@ keyshroud run -- claude          # 紐付けたシークレットをすべて使
 ```
 
 任意：*Settings → Security → Keys → API key* で取得した `vaultwarden-api-client-id` /
-`vaultwarden-api-client-secret` もキーチェーンに入れておくと、`bw` のセッションが切れたときに
-keyshroud が自動で再ログインします。
+`vaultwarden-api-client-secret` もキーチェーンに入れておくと、`bw` のログインが切れたとき（logged out）に
+keyshroud が自動で再ログインします。セッションが終わったあとはマスターパスワードを聞かれます。
 
 ### Claude Code
 
-CLI をインストールしてから、プラグイン（MCP サーバー + マスク用フック + スキル）を入れます。
+CLI をインストールしてから、プラグイン（マスク用フック + スキル）を入れます。
 
 ```bash
 npm install -g keyshroud
@@ -144,7 +143,7 @@ OpenCode：`opencode mcp add keyshroud -- keyshroud mcp`。
 
 **`.env` を `.gitignore` に入れるだけではダメ？** それで防げるのはコミットであって、読み取りではありません。エージェントはデバッグのために `.env` を読み、読んだ内容はモデルのプロバイダーに送られます。
 
-**Windows で動く？** まだテストしていません。macOS と Linux をサポートしています。
+**Windows で動く？** はい。Windows 10 + Node 22 でテスト済みです。ロック解除のダイアログは小さな PowerShell ウィンドウで、セッションは同じく 30 分で終わります。Windows にはキーチェーン対応がないため、keyshroud は毎回マスターパスワードを聞きます。詳しくは[英語の FAQ](../README.md#faq)。
 
 ## ドキュメント全文
 

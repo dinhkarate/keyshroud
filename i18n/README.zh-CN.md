@@ -54,11 +54,10 @@ Coding agent 要做实际工作就需要凭据：`gh`、`npm publish`、云厂�
 
 | Agent | 安装方式 | 提供的功能 |
 |---|---|---|
-| **Claude Code** | [插件](#claude-code) | SessionStart + PostToolUse 遮蔽 hook、MCP 工具、skill |
+| **Claude Code** | [插件](#claude-code) | SessionStart + PostToolUse 遮蔽 hook、skill |
 | **pi / omp** | [`pi install npm:keyshroud`](../README.md#pi--omp) | 环境变量注入、`tool_result` 遮蔽（失败的调用也包括在内）、`/secret` |
-| **Codex** | [`codex mcp add keyshroud -- keyshroud mcp`](#任意-mcp-客户端) | 输出已遮蔽的 MCP 工具 |
-| **Cursor, Claude Desktop, Cline, Gemini CLI** | [`mcpServers` JSON](#任意-mcp-客户端) | 输出已遮蔽的 MCP 工具 |
-| **OpenCode** | [`opencode mcp add keyshroud -- keyshroud mcp`](#任意-mcp-客户端) | 输出已遮蔽的 MCP 工具 |
+| **Codex, OpenCode, Gemini CLI, Cursor agent** | [`npx skills add dinhkarate/keyshroud`](../README.md#other-agents-with-a-shell) | skill + 输出已遮蔽的 CLI |
+| **Claude Desktop、仅聊天的客户端** | [`mcpServers` JSON](#任意-mcp-客户端) | 输出已遮蔽的 MCP 工具 |
 | **任意 shell 或 CI** | `keyshroud run -- <cmd>` | 环境变量注入 + 输出遮蔽 |
 
 ## 快速开始
@@ -73,7 +72,7 @@ Coding agent 要做实际工作就需要凭据：`gh`、`npm publish`、云厂�
   并跳过下面的 `bw config server`（欧盟账号：`bw config server https://vault.bitwarden.eu`）。
 
 ```bash
-npm install -g keyshroud @bitwarden/cli    # 或：brew install bitwarden-cli
+npm install -g keyshroud @bitwarden/cli@2026.8.0   # bw 2026.9+ cannot log in to Vaultwarden yet (vaultwarden#7750)
 
 # 1. 让 bw 指向你的服务器，并登录一次
 bw config server https://vault.example.com
@@ -95,12 +94,12 @@ keyshroud run -- claude          # 启动 agent，所有已绑定的密钥都可
 ```
 
 可选：把 `vaultwarden-api-client-id` / `vaultwarden-api-client-secret`（在
-*Settings → Security → Keys → API key* 中获取）也存进钥匙串，这样 `bw` 会话过期时
-keyshroud 还会自动重新登录。
+*Settings → Security → Keys → API key* 中获取）也存进钥匙串，这样 `bw` 登录过期（logged out）时
+keyshroud 会自动重新登录；会话结束后仍需输入 master password。
 
 ### Claude Code
 
-先安装 CLI，再安装插件（MCP server + 遮蔽 hook + skill）：
+先安装 CLI，再安装插件（遮蔽 hook + skill）：
 
 ```bash
 npm install -g keyshroud
@@ -144,7 +143,7 @@ OpenCode：`opencode mcp add keyshroud -- keyshroud mcp`。
 
 **为什么不直接把 `.env` 加进 `.gitignore`？** 那只能阻止提交，挡不住读取。agent 调试时会读 `.env`，而它读到的内容都会发给模型服务商。
 
-**支持 Windows 吗？** 还没测试过。目前支持 macOS 和 Linux。
+**支持 Windows 吗？** 支持，已在 Windows 10 + Node 22 上测试：解锁对话框是一个小的 PowerShell 窗口，会话同样 30 分钟后结束。Windows 没有钥匙串支持，keyshroud 每次都会询问 master password。详见[英文 FAQ](../README.md#faq)。
 
 ## 完整文档
 

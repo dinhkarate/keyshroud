@@ -112,13 +112,13 @@ there. It never enters the chat.
   and skip `bw config server` below (EU accounts: `bw config server https://vault.bitwarden.eu`).
 
 ```bash
-npm install -g keyshroud @bitwarden/cli    # or: brew install bitwarden-cli
+npm install -g keyshroud @bitwarden/cli@2026.8.0   # bw 2026.9+ cannot log in to Vaultwarden yet
 
 # 1. Point bw at your server and log in once
 bw config server https://vault.example.com
 bw login
 
-# 2. Unlock for 30 minutes (asks for the master password; nothing is stored)
+# 2. Unlock for 30 minutes (asks for the master password, which is not stored)
 keyshroud unlock
 
 # 3. Check everything
@@ -141,8 +141,9 @@ runs `bw lock`, so a copied session token stops working too. On a host nobody si
 
 To unlock without being asked, store the master password in the OS keychain
 (`security add-generic-password -a "$USER" -s vaultwarden-master-password -w`, or
-`secret-tool store` on Linux; see the [vault setup guide](examples/vaultwarden#optional-unlock-without-being-asked)).
-Any program running as you can then read it, agents included.
+`secret-tool store` on Linux; after `setup` the entry is `keyshroud-master-password`; see the
+[vault setup guide](examples/vaultwarden#optional-unlock-without-being-asked)). Any program running
+as you can then read it, agents included. Windows has no keychain support.
 
 ### Least privilege: a separate agent account
 
@@ -152,7 +153,8 @@ account instead, which holds only the secrets agents need:
 
 ```bash
 keyshroud setup --email you+agent@example.com   # opens the signup page, then logs in with the
-                                                 # new master password (asked, not stored)
+                                                 # new master password (asked, not stored);
+                                                 # no `bw config server`: Bitwarden cloud
 keyshroud migrate                                # dry run: which wired items would be copied
 keyshroud migrate --yes                          # copy them; references keep working
 ```
@@ -163,10 +165,10 @@ keyshroud migrate --yes                          # copy them; references keep wo
 - `migrate` copies the items that wired names (and any `--env-file` / `--item`) reference, with
   the same names, then locks your personal vault again. Originals stay where they are. It needs
   your personal master password in the keychain once; delete it afterwards (the command prints how).
-- An agent can run `setup` too. Without a terminal, keyshroud generates the agent account's
-  master password and puts it on the clipboard; you paste it into the signup page and into your
-  own password manager, then the agent runs `setup --registered`, which asks for it in a dialog
-  and clears the clipboard.
+- An agent can run `setup` too. Without a terminal it opens the signup page, where you pick the
+  agent account's master password yourself (save it in your password manager); then the agent
+  runs `setup --registered`, which asks for it in a dialog. The password never passes through
+  anything the agent can read. `--confirm-unlock` and `--unattended` need a terminal.
 - `--confirm-unlock` (macOS) stores the master password in the keychain entry
   `keyshroud-master-password` so that macOS asks you before every read, i.e. every unlock.
 - `--unattended` (hosts nobody sits at, e.g. over `ssh -t`) logs in with a session without an
@@ -218,8 +220,9 @@ npm install -g keyshroud
 
 What you get:
 
-- **SessionStart hook** — unlocks, refreshes the redaction index, and tells
-  Claude which secret *names* exist.
+- **SessionStart hook** — refreshes the redaction index and tells Claude which
+  secret *names* exist. It never asks for the master password: with a locked
+  vault it tells Claude to ask you to run `keyshroud unlock`.
 - **PostToolUse hook** — rewrites any successful tool result that contains a
   wired value or the vault session token to `<redacted:NAME>` using Claude
   Code's `updatedToolOutput` (tested with Claude Code 2.1.296).
@@ -389,8 +392,8 @@ closed (exit `4`) instead of guessing.
 | `KEYSHROUD_CACHE_TTL_MS` | `3600000` | in-memory vault snapshot + session check lifetime; `0` disables |
 | `KEYSHROUD_SESSION_TTL_MS` | `1800000` | how long an unlocked session lasts before `bw lock` |
 | `KEYSHROUD_LOCK_TIMER` | on | `0` skips the background timer (sessions then end on the next call) |
-| `KEYSHROUD_CONFIG_DIR` | `$XDG_CONFIG_HOME/keyshroud` | session, redact index, audit log |
-| `KEYSHROUD_KEYCHAIN_MASTER` | `vaultwarden-master-password` | keychain service names… |
+| `KEYSHROUD_CONFIG_DIR` | `$XDG_CONFIG_HOME/keyshroud` | session, `bw/` (after `setup`), master-password hash, redact index, audit log |
+| `KEYSHROUD_KEYCHAIN_MASTER` | `vaultwarden-master-password` | keychain service names (after `setup`: `keyshroud-…`) |
 | `KEYSHROUD_KEYCHAIN_CLIENT_ID` | `vaultwarden-api-client-id` | |
 | `KEYSHROUD_KEYCHAIN_CLIENT_SECRET` | `vaultwarden-api-client-secret` | |
 | `KEYSHROUD_AUDIT` | on | `0` disables `audit.jsonl` |
@@ -418,7 +421,8 @@ CLIs (`.cmd` shims) run without a shell, the unlock dialog is a small PowerShell
 and sessions end after 30 minutes like elsewhere. Files in `%USERPROFILE%\.config\keyshroud`
 are protected by your profile's ACL (you, SYSTEM, Administrators), not by `0600`. One gap:
 over an SSH session with a terminal (`ssh -t`), Windows ends the lock timer when the SSH
-session closes, so that session ends on the next keyshroud call instead.
+session closes, so that session ends on the next keyshroud call instead. There is no keychain
+support on Windows: keyshroud asks for the master password, and `migrate` cannot run there.
 
 **`bw login` fails with `KeyIdBackfillError`?** `bw` 2026.9 and later call an endpoint
 Vaultwarden does not have yet ([vaultwarden#7750](https://github.com/dani-garcia/vaultwarden/issues/7750)).

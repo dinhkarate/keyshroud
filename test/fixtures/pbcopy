@@ -1,3 +1,0 @@
-#!/bin/sh
-# Fake clipboard: stdin -> $FAKE_CLIPBOARD.
-cat > "$FAKE_CLIPBOARD"

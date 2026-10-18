@@ -29,14 +29,13 @@ If Node.js is older than 22.18, stop and tell the user to upgrade it.
 ## 2. Install the CLI
 
 ```bash
-npm install -g keyshroud @bitwarden/cli
+npm install -g keyshroud @bitwarden/cli@2026.8.0
 keyshroud --version
 ```
 
-Self-hosted Vaultwarden: use `@bitwarden/cli@2026.8.0`. Later `bw` releases fail to
-log in there with `KeyIdBackfillError` (vaultwarden#7750).
-
-On macOS `brew install bitwarden-cli` also works for `bw`.
+`bw` stays at 2026.8.0 because later releases fail to log in to Vaultwarden with
+`KeyIdBackfillError` (vaultwarden#7750). On Bitwarden cloud any version works, and on macOS
+`brew install bitwarden-cli` does too.
 
 ## 3. Connect your agent
 
@@ -82,7 +81,7 @@ bw config server https://vault.example.com
 
 bw login
 
-# Unlock for 30 minutes (asks for the master password; keyshroud stores nothing)
+# Unlock for 30 minutes (asks for the master password; keyshroud does not store it)
 keyshroud unlock
 ```
 
