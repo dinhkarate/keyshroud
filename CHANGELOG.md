@@ -5,6 +5,22 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+### Fixed
+- A locked vault whose master password could not be read made every command hang
+  on `bw`'s hidden master-password prompt (20 s per `bw` call). keyshroud now runs
+  `bw` with `BW_NOINTERACTION`, so it fails at once.
+- A locked Linux keyring (no desktop login, e.g. over SSH) is reported as
+  `keyring=locked` by `doctor` instead of `missing`; `run` and `secrets_run` say
+  why names are unresolved, and storing a keychain entry fails instead of waiting
+  forever for an unlock prompt.
+- `setup` no longer switches keyshroud to the new agent login before that login
+  works: a run that stops early (no clipboard over SSH, waiting for signup, or a
+  failed login) leaves the personal login in place.
+- An empty literal (`NAME=`) in an env file reaches the command instead of being
+  reported as unresolved.
+- The Claude Code SessionStart hook says wired secrets could not be resolved
+  instead of claiming none are wired.
+
 ## [0.6.1] - 2026-10-18
 
 ### Changed

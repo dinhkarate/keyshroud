@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdir, readdir, readFile, stat, symlink, utimes, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, stat, symlink, unlink, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
 import { BRAND } from "../src/brand.ts";
@@ -528,13 +528,74 @@ test("setup from an agent's shell generates the password; the agent never sees i
   assert.match(await readFile(box.env.FAKE_OPENED, "utf8"), /#\/signup\?email=agent%40example\.test/);
   assert.ok(!first.stdout.includes(generated) && !first.stderr.includes(generated));
   assert.match(first.stdout, /--registered/);
+  // Not logged in yet: other processes keep the shared login meanwhile.
+  const meanwhile = await runCli(box, ["doctor"]);
+  assert.match(meanwhile.stdout, /bw login=shared/);
 
   // The user signs up with the pasted password.
-  const state = JSON.parse(await readFile(join(own, "fake-vault.json"), "utf8"));
-  await writeFile(join(own, "fake-vault.json"), JSON.stringify({ ...state, registered: "agent@example.test", password: generated }));
+  await writeFile(join(own, "fake-vault.json"), JSON.stringify({ status: "unauthenticated", items: [], registered: "agent@example.test", password: generated }));
   const second = await runCli(box, ["setup", "--email", "agent@example.test", "--registered"]);
   assert.equal(second.code, 0, second.stderr);
   assert.match(second.stdout, /ready: bw login=agent@example\.test/);
   assert.equal(await readFile(box.env.FAKE_CLIPBOARD, "utf8"), "");
   assert.ok(!second.stdout.includes(generated) && !second.stderr.includes(generated));
+});
+
+test("a locked keyring fails fast and says why instead of hanging on bw's prompt", async () => {
+  const box = await wired();
+  await unlink(join(box.dir, "keychain", "vaultwarden-master-password"));
+  const env = { FAKE_BW_PROMPT: "1", FAKE_KEYRING_LOCKED: "1" };
+  const started = Date.now();
+  const run = await runCli(box, ["run", "--", "true"], "", env);
+  assert.ok(Date.now() - started < 10000, "run waited on bw's master-password prompt");
+  assert.match(run.stderr, /unresolved \(names only\): .*GH_TOKEN.*keyring is locked/);
+  const doctor = await runCli(box, ["doctor"], "", env);
+  assert.match(doctor.stdout, /keychain vaultwarden-master-password=unknown \(keyring locked\)/);
+  assert.match(doctor.stdout, /keyring=locked/);
+});
+
+test("setup that stops before the agent login leaves the personal login in place", async () => {
+  const box = await wired();
+  const ownData = join(box.configDir, "bw", "data.json");
+  const exists = (path: string) => stat(path).then(() => true, () => false);
+  const usesPersonal = async () => {
+    const run = await runCli(box, ["run", "--", "sh", "-c", "test \"$GH_TOKEN\" = \"$EXPECTED\" && echo same"], "", { EXPECTED: GH });
+    assert.match(run.stdout, /same/, run.stderr);
+  };
+
+  const noClipboard = await runCli(box, ["setup", "--email", "agent@example.test"], "", { FAKE_CLIPBOARD: join(box.dir, "missing", "clipboard") });
+  assert.equal(noClipboard.code, 3);
+  assert.match(noClipboard.stderr, /No clipboard here/);
+  assert.equal(await exists(ownData), false);
+  await usesPersonal();
+
+  // Waiting for the user to sign up: still the personal login.
+  const pending = await runCli(box, ["setup", "--email", "agent@example.test"]);
+  assert.equal(pending.code, 0, pending.stderr);
+  assert.equal(await exists(ownData), false);
+  await usesPersonal();
+
+  // The account was never created, so the login fails and is rolled back.
+  const failed = await runCli(box, ["setup", "--email", "agent@example.test", "--registered"]);
+  assert.notEqual(failed.code, 0);
+  assert.equal(await exists(ownData), false);
+  await usesPersonal();
+});
+
+test("an empty literal in an env file reaches the command and is not unresolved", async () => {
+  const box = await wired();
+  await writeFile(join(box.dir, ".env.refs"), "EMPTY=\nTOKEN=bw://GitHub CLI token\n");
+  const run = await runCli(box, ["run", "--no-auth", "--env-file", ".env.refs", "--", "sh", "-c", "test \"${EMPTY+set}\" = set && echo set"]);
+  assert.equal(run.code, 0, run.stderr);
+  assert.match(run.stdout, /set/);
+  assert.doesNotMatch(run.stderr, /unresolved/);
+});
+
+test("session-start says wired secrets are unresolved instead of claiming none are wired", async () => {
+  const box = await sandbox([]);
+  await writeAuth(box, { GH_TOKEN: "bw://GitHub CLI token" });
+  const start = await runCli(box, ["hook", "claude", "session-start"], "{}");
+  const context = JSON.parse(start.stdout).hookSpecificOutput.additionalContext as string;
+  assert.match(context, /could not be resolved from the vault: GH_TOKEN/);
+  assert.doesNotMatch(context, /no secrets are wired/);
 });

@@ -23,6 +23,8 @@ async function sessionStart(): Promise<string> {
     const names = Object.keys(env.values);
     context = names.length
       ? `${BRAND.name}: vault secrets are available by name only: ${names.join(", ")}. Run every command that uses one through \`${BRAND.bin} run -- <command>\` (or the secrets_run MCP tool): its output is masked as <redacted:NAME> even when the command fails. Never print a secret. Never ask the user to paste a secret into chat. To store a new one, run \`${BRAND.bin} add --env NAME --item "Item"\` (or call secrets_request): it opens a dialog on the user's desktop for the value.`
+      : env.missing.length
+      ? `${BRAND.name}: wired secrets could not be resolved from the vault: ${env.missing.join(", ")}. Ask the user to run \`${BRAND.bin} doctor\` (with an agent account, \`${BRAND.bin} migrate\` copies missing items into it).`
       : `${BRAND.name}: no secrets are wired yet. To store one, run \`${BRAND.bin} add --env NAME --item "Item"\` (or call secrets_request): it opens a dialog on the user's desktop for the value.`;
   } catch (error) {
     context = `${BRAND.name}: the vault could not be unlocked (${error instanceof Error ? error.message : String(error)}), so tool-output redaction may be incomplete this session. Do not print or inspect secrets; ask the user to run \`${BRAND.bin} unlock\`.`;

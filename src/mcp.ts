@@ -72,7 +72,8 @@ async function runTool(args: Json): Promise<Json> {
     if (unknown.length) return text(`Not wired: ${unknown.join(", ")}`, true);
     entries = entries.filter((entry) => only.includes(entry.name));
   }
-  try { await core.ensureSession(); } catch {}
+  let vaultError = "";
+  try { await core.ensureSession(); } catch (error) { vaultError = error instanceof Error ? error.message : String(error); }
   const env = await core.resolveEntries(entries);
   await core.audit("run", Object.keys(env.secrets), "mcp");
   const redactor = createRedactor(await core.redactionValues(env.secrets));
@@ -114,7 +115,7 @@ async function runTool(args: Json): Promise<Json> {
   const stderr = out("stderr");
   const lines = [
     `exit: ${code}`,
-    env.missing.length ? `unresolved: ${env.missing.join(", ")}` : null,
+    env.missing.length ? `unresolved: ${env.missing.join(", ")}${vaultError ? ` (${vaultError})` : ""}` : null,
     `--- stdout ---\n${stdout}`,
     `--- stderr ---\n${stderr}`,
     truncated ? `[output truncated to ${OUTPUT_LIMIT / 2} characters per stream]` : null,
