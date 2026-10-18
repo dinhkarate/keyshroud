@@ -1,0 +1,10 @@
+// keyshroud.dev: static site from site/, served as Workers static assets.
+// GitHub Pages still deploys the same site/ as a standby (see .github/workflows/pages.yml).
+{
+  "name": "keyshroud-site",
+  "account_id": "0cf77a3eedbb9757f941c73cdfef1918",
+  "compatibility_date": "2026-10-01",
+  "assets": { "directory": "./site" },
+  "workers_dev": true,
+  "routes": [{ "pattern": "keyshroud.dev", "custom_domain": true }]
+}
