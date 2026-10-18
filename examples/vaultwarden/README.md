@@ -47,7 +47,7 @@ Optional, in the web vault:
 On the machine where your agents run (your laptop, a dev box):
 
 ```bash
-npm install -g @bitwarden/cli keyshroud     # or: brew install bitwarden-cli
+npm install -g @bitwarden/cli@2026.8.0 keyshroud   # bw 2026.9+ cannot log in to Vaultwarden yet (vaultwarden#7750)
 bw config server https://vault.example.com  # Bitwarden cloud: skip this (EU: https://vault.bitwarden.eu)
 bw login                                    # once, interactively: email + master password (+ 2FA)
 ```

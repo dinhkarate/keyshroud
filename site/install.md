@@ -33,6 +33,9 @@ npm install -g keyshroud @bitwarden/cli
 keyshroud --version
 ```
 
+Self-hosted Vaultwarden: use `@bitwarden/cli@2026.8.0`. Later `bw` releases fail to
+log in there with `KeyIdBackfillError` (vaultwarden#7750).
+
 On macOS `brew install bitwarden-cli` also works for `bw`.
 
 ## 3. Connect your agent

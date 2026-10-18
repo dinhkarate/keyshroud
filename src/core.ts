@@ -2,7 +2,7 @@
 // extensions, CLI, MCP server, hooks) goes through these functions.
 import { execFile, spawn } from "node:child_process";
 import { randomBytes, scrypt, timingSafeEqual, type ScryptOptions } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { appendFile, chmod, mkdir, readFile, realpath, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
@@ -57,9 +57,46 @@ export interface AuthTargets { omp: string; pi: string }
 
 interface ExecResult { stdout: string; stderr: string }
 
+// Windows: execFile and spawn run only .exe/.com files. npm puts CLIs (bw, npm,
+// npx, ...) on PATH as .cmd shims: run the shim's script with this Node. Other
+// .cmd/.bat files go through cmd.exe, each argument quoted.
+export interface Invocation { command: string; args: string[]; verbatim?: boolean }
+const windowsResolved = new Map<string, { file: string; script?: string } | null>();
+
+export function invocation(command: string, args: string[]): Invocation {
+  if (process.platform !== "win32") return { command, args };
+  if (!windowsResolved.has(command)) {
+    const exts = /\.[^\\/.]+$/.test(command) ? [""] : (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean);
+    const dirs = /[\\/]/.test(command) ? [""] : (process.env.PATH ?? "").split(";").filter(Boolean);
+    let found: { file: string; script?: string } | null = null;
+    search: for (const dir of dirs) for (const ext of exts) {
+      const file = dir ? join(dir, command + ext) : command + ext;
+      if (!existsSync(file)) continue;
+      const script = /\.cmd$/i.test(file) ? /"%dp0%\\([^"]+\.js)"/i.exec(readFileSync(file, "utf8"))?.[1] : undefined;
+      found = { file, script: script && join(dirname(file), script) };
+      break search;
+    }
+    windowsResolved.set(command, found);
+  }
+  const found = windowsResolved.get(command);
+  if (!found) return { command, args };
+  if (found.script) return { command: process.execPath, args: [found.script, ...args] };
+  if (!/\.(cmd|bat)$/i.test(found.file)) return { command: found.file, args };
+  const quote = (value: string) => `"${value.replaceAll('"', '""')}"`;
+  return { command: process.env.ComSpec ?? "cmd.exe", args: ["/d", "/s", "/c", `"${[found.file, ...args].map(quote).join(" ")}"`], verbatim: true };
+}
+
+function bwCommand(args: string[]): [string, string[]] {
+  const { command, args: resolved } = invocation("bw", args);
+  return [command, resolved];
+}
+
 function runFile(command: string, args: string[], options: Record<string, unknown> = {}, input?: string): Promise<ExecResult> {
   // Without it a locked bw waits on a hidden master-password prompt nobody can answer.
-  if (command === "bw") options = { ...options, env: { ...((options.env as NodeJS.ProcessEnv | undefined) ?? process.env), BW_NOINTERACTION: "true" } };
+  if (command === "bw") {
+    options = { ...options, env: { ...((options.env as NodeJS.ProcessEnv | undefined) ?? process.env), BW_NOINTERACTION: "true" } };
+    [command, args] = bwCommand(args);
+  }
   return new Promise((resolve, reject) => {
     const child = execFile(command, args, options as never, (error, stdout, stderr) => {
       if (error) {
@@ -346,13 +383,25 @@ async function writeSession(token: string, unattended: boolean): Promise<void> {
 // session that a later unlock replaced is left alone. The token reaches the
 // timer through its environment, never argv.
 function armLockTimer(token: string): void {
-  if (process.platform === "win32" || setting("LOCK_TIMER") === "0") return;
-  const tokenVar = `${P}_LOCK_TOKEN`;
-  const script = `sleep "$1"; t=$(head -n 1 "$2" 2>/dev/null); if [ -z "$t" ] || [ "$t" = "$${tokenVar}" ]; then rm -f "$2"; bw lock >/dev/null 2>&1; fi`;
+  if (setting("LOCK_TIMER") === "0") return;
   const env: Record<string, string> = {};
   for (const [name, value] of Object.entries(process.env)) if (value !== undefined && name !== "BW_SESSION" && name !== "BW_PASSWORD") env[name] = value;
-  const child = spawn("/bin/sh", ["-c", script, "sh", String(Math.ceil(SESSION_TTL_MS / 1000)), SESSION_FILE], {
-    detached: true, stdio: "ignore", env: { ...env, [tokenVar]: token, BW_NOINTERACTION: "true" },
+  const seconds = String(Math.ceil(SESSION_TTL_MS / 1000));
+  const vars = { token: `${P}_LOCK_TOKEN`, file: `${P}_LOCK_FILE`, bw: `${P}_LOCK_BW`, args: `${P}_LOCK_BW_ARGS` };
+  // Windows: a detached Node, since powershell does not start without a console
+  // and children that are not detached die with this process.
+  const [bwPath, bwArgs] = bwCommand(["lock"]);
+  const timer: [string, string[]] = process.platform === "win32"
+    ? [process.execPath, ["-e", [
+        `const fs = require("fs"), e = process.env;`,
+        `setTimeout(() => { let t = ""; try { t = fs.readFileSync(e.${vars.file}, "utf8").split("\\n")[0].trim(); } catch {}`,
+        `  if (t && t !== e.${vars.token}) return; fs.rmSync(e.${vars.file}, { force: true });`,
+        `  require("child_process").execFile(e.${vars.bw}, JSON.parse(e.${vars.args}), { windowsHide: true }, () => {}); }, ${seconds} * 1000);`,
+      ].join("\n")]]
+    : ["/bin/sh", ["-c", `sleep "$1"; t=$(head -n 1 "$2" 2>/dev/null); if [ -z "$t" ] || [ "$t" = "$${vars.token}" ]; then rm -f "$2"; bw lock >/dev/null 2>&1; fi`, "sh", seconds, SESSION_FILE]];
+  const child = spawn(timer[0], timer[1], {
+    detached: true, stdio: "ignore", windowsHide: true,
+    env: { ...env, [vars.token]: token, [vars.file]: SESSION_FILE, [vars.bw]: bwPath, [vars.args]: JSON.stringify(bwArgs), BW_NOINTERACTION: "true" },
   });
   child.on("error", () => {});
   child.unref();
@@ -416,6 +465,9 @@ async function ensureSessionInner(existing: string | undefined, opts: SessionOpt
 
   const unlocked = await runFile("bw", ["unlock", "--passwordenv", "BW_PASSWORD", "--raw"], {
     env: { ...process.env, BW_PASSWORD: master }, timeout: 20000, maxBuffer: 4 * 1024 * 1024,
+  }).catch((error: Error) => {
+    // bw reports a wrong password as a decryption failure on several stderr lines.
+    throw /Invalid master password|decryption operation failed/i.test(error.message) ? new Error("Wrong master password; nothing was unlocked") : error;
   });
   const token = unlocked.stdout.trim();
   if (!token) throw new Error("Vaultwarden unlock returned no session");
@@ -514,6 +566,8 @@ export async function generateKeychainSecret(service: string, label: string, con
 
 const CLIPBOARD_TOOLS: Array<[string, string[], string, string[]]> = process.platform === "darwin"
   ? [["pbcopy", [], "pbpaste", []]]
+  : process.platform === "win32"
+  ? [["clip", [], "powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "Get-Clipboard -Raw"]]]
   : [["wl-copy", [], "wl-paste", ["--no-newline"]], ["xclip", ["-selection", "clipboard"], "xclip", ["-selection", "clipboard", "-o"]]];
 
 export async function copyToClipboard(text: string): Promise<boolean> {
@@ -537,7 +591,8 @@ export async function clearClipboardIf(text: string): Promise<void> {
 // stderr stay on the terminal so bw can ask for a two-step login code.
 export async function loginOwnAccount(email: string, master: string, unattended = false): Promise<string> {
   const token = await new Promise<string>((resolve, reject) => {
-    const child = spawn("bw", ["login", email, "--passwordenv", "BW_PASSWORD", "--raw"], { env: { ...process.env, BW_PASSWORD: master }, stdio: ["inherit", "pipe", "inherit"] });
+    const [command, args] = bwCommand(["login", email, "--passwordenv", "BW_PASSWORD", "--raw"]);
+    const child = spawn(command, args, { env: { ...process.env, BW_PASSWORD: master }, stdio: ["inherit", "pipe", "inherit"] });
     let out = "";
     child.stdout.on("data", (chunk: Buffer) => { out += chunk; });
     child.on("error", reject);
@@ -920,6 +975,8 @@ async function nativePasswordDialog(text: string, button: "Save" | "Unlock"): Pr
     ? [["osascript", ["-e", "on run argv", "-e", 'activate', "-e",
         `text returned of (display dialog (item 1 of argv) default answer "" with hidden answer with title "keyshroud" buttons {"Cancel", "${button}"} default button "${button}" cancel button "Cancel" with icon caution)`,
         "-e", "end run", "--", text]]]
+    : process.platform === "win32"
+    ? [["powershell.exe", ["-NoProfile", "-NonInteractive", "-STA", "-EncodedCommand", Buffer.from(windowsDialogScript(button), "utf16le").toString("base64")]]]
     : process.env.DISPLAY || process.env.WAYLAND_DISPLAY
       ? [["zenity", ["--entry", "--hide-text", "--no-markup", "--title=keyshroud", `--text=${text}`]], ["kdialog", ["--title", "keyshroud", "--password", text.replace(/[<>]/g, "")]]]
       : [];
@@ -927,15 +984,40 @@ async function nativePasswordDialog(text: string, button: "Save" | "Unlock"): Pr
   return withDialogLock(async () => {
     for (const [command, args] of candidates) {
       const result = await new Promise<{ code: number | string | null; stdout: string; stderr: string }>((resolve) => {
-        execFile(command, args, { timeout: DIALOG_TIMEOUT_MS }, (error, stdout, stderr) => resolve({ code: error ? ((error as NodeJS.ErrnoException).code ?? 1) : 0, stdout: String(stdout), stderr: String(stderr) }));
+        // Windows: the text reaches the dialog script as data, through the environment.
+        execFile(command, args, { timeout: DIALOG_TIMEOUT_MS, env: { ...process.env, [`${P}_DIALOG_TEXT`]: text } }, (error, stdout, stderr) => resolve({ code: error ? ((error as NodeJS.ErrnoException).code ?? 1) : 0, stdout: String(stdout), stderr: String(stderr) }));
       });
       if (result.code === "ENOENT") continue;
       if (result.code === 0) return result.stdout.replace(/\r?\n$/, "");
-      if (command !== "osascript" || /-128/.test(result.stderr)) throw new Error("Cancelled");
+      // powershell exits 2 on Cancel; other failures (no desktop session) mean no dialog.
+      if (command === "powershell.exe" ? result.code === 2 : command !== "osascript" || /-128/.test(result.stderr)) throw new Error("Cancelled");
       return null;
     }
     return null;
   });
+}
+
+// A small Windows Forms password dialog. The value goes to stdout as UTF-8.
+function windowsDialogScript(button: "Save" | "Unlock"): string {
+  return [
+    "Add-Type -AssemblyName System.Windows.Forms, System.Drawing",
+    "[Console]::OutputEncoding = New-Object Text.UTF8Encoding $false",
+    "[Windows.Forms.Application]::EnableVisualStyles()",
+    "$f = New-Object Windows.Forms.Form",
+    "$f.Text = 'keyshroud'; $f.TopMost = $true; $f.FormBorderStyle = 'FixedDialog'; $f.MaximizeBox = $false; $f.MinimizeBox = $false",
+    "$f.StartPosition = 'CenterScreen'; $f.AutoSize = $true; $f.AutoSizeMode = 'GrowAndShrink'; $f.Padding = New-Object Windows.Forms.Padding 12",
+    "$p = New-Object Windows.Forms.FlowLayoutPanel; $p.FlowDirection = 'TopDown'; $p.AutoSize = $true",
+    `$l = New-Object Windows.Forms.Label; $l.Text = $env:${P}_DIALOG_TEXT; $l.AutoSize = $true; $l.MaximumSize = New-Object Drawing.Size 440, 0`,
+    "$t = New-Object Windows.Forms.TextBox; $t.UseSystemPasswordChar = $true; $t.Width = 440",
+    "$r = New-Object Windows.Forms.FlowLayoutPanel; $r.AutoSize = $true",
+    `$ok = New-Object Windows.Forms.Button; $ok.Text = '${button}'; $ok.DialogResult = 'OK'`,
+    "$no = New-Object Windows.Forms.Button; $no.Text = 'Cancel'; $no.DialogResult = 'Cancel'",
+    "$r.Controls.AddRange(@($ok, $no)); $p.Controls.AddRange(@($l, $t, $r)); $f.Controls.Add($p)",
+    "$f.AcceptButton = $ok; $f.CancelButton = $no",
+    "$f.Add_Shown({ $f.Activate(); $t.Focus() })",
+    "if ($f.ShowDialog() -ne 'OK') { exit 2 }",
+    "[Console]::Out.Write($t.Text)",
+  ].join("\n");
 }
 
 async function withDialogLock<T>(fn: () => Promise<T>): Promise<T> {

@@ -78,12 +78,15 @@ async function runTool(args: Json): Promise<Json> {
   await core.audit("run", Object.keys(env.secrets), "mcp");
   const redactor = createRedactor(await core.redactionValues(env.secrets));
   const timeout = typeof args.timeout_ms === "number" && args.timeout_ms > 0 ? args.timeout_ms : 120000;
-  // Own process group so a timeout kills everything the command started.
-  const child = spawn("/bin/sh", ["-c", args.command], {
+  // Own process group so a timeout kills everything the command started
+  // (Windows: cmd.exe, and taskkill for the tree).
+  const windows = process.platform === "win32";
+  const child = spawn(windows ? process.env.ComSpec ?? "cmd.exe" : "/bin/sh", windows ? ["/d", "/s", "/c", `"${args.command}"`] : ["-c", args.command], {
     cwd: typeof args.cwd === "string" && args.cwd ? args.cwd : process.cwd(),
     env: core.childEnv(env.values),
     stdio: ["ignore", "pipe", "pipe"],
-    detached: true,
+    detached: !windows,
+    windowsVerbatimArguments: windows,
   });
   const chunks = { stdout: [] as Buffer[], stderr: [] as Buffer[] };
   // Collect generously per stream, mask, then truncate. If collection stopped
@@ -96,7 +99,10 @@ async function runTool(args: Json): Promise<Json> {
       chunks[stream].push(chunk);
     });
   }
-  const timer = setTimeout(() => { try { process.kill(-child.pid!, "SIGTERM"); } catch {} }, timeout);
+  const timer = setTimeout(() => {
+    if (windows) spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], { stdio: "ignore" }).on("error", () => {});
+    else { try { process.kill(-child.pid!, "SIGTERM"); } catch {} }
+  }, timeout);
   const code = await new Promise<string>((done) => {
     child.on("close", (exit, signal) => done(signal ? `signal ${signal}` : String(exit)));
     child.on("error", (error) => done(`spawn error: ${error.message}`));
