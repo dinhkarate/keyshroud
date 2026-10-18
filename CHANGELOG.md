@@ -5,6 +5,8 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-10-18
+
 ### Fixed
 - A locked vault whose master password could not be read made every command hang
   on `bw`'s hidden master-password prompt (20 s per `bw` call). keyshroud now runs
