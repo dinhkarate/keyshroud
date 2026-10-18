@@ -54,7 +54,7 @@ bw login                                    # once, interactively: email + maste
 
 ## 4. Unlock
 
-By default keyshroud stores nothing. When the vault is locked and a command needs a secret, it asks
+By default keyshroud does not store the master password. When the vault is locked and a command needs a secret, it asks
 for the master password (a masked prompt in a terminal, a native dialog on the desktop) and opens a
 session that `bw lock` ends after 30 minutes. Over SSH, run it yourself:
 
@@ -66,8 +66,10 @@ ssh -t host keyshroud unlock --unattended   # a host nobody sits at: one session
 ### Optional: unlock without being asked
 
 Any program running as you, an agent included, can read what you store here, and with it open
-the vault at any time. Prefer a separate agent account (`keyshroud setup`) if you do this.
-Each command below prompts for the value; nothing lands in shell history.
+the vault at any time. Prefer a separate agent account (`keyshroud setup`) if you do this; its
+entries are named `keyshroud-master-password`, `keyshroud-api-client-id` and
+`keyshroud-api-client-secret` instead of the `vaultwarden-…` names below.
+Each command below prompts for the value; nothing lands in shell history. Windows has no keychain support.
 
 ```bash
 # macOS
@@ -99,7 +101,7 @@ anyone who can read that file can open your vault; `keyshroud unlock --unattende
 keyshroud doctor
 ```
 
-You want to see `session=unlocked` and `master password=not stored`.
+You want to see `session=unlocked`, and `master password=not stored` unless you stored it above.
 Then store your first secret and use it:
 
 ```bash

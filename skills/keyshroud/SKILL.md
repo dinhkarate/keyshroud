@@ -83,5 +83,6 @@ When the vault is locked, a command waits while a dialog on the user's desktop
 asks for the master password. Never ask for it in chat and never retry in a loop
 after a cancel.
 
-`setup` and `migrate` are for the user: they touch the personal vault. If an item
+`migrate` is for the user: it needs the personal vault. You may start `setup --email`;
+the user picks the agent account's password on the signup page, never through you. If an item
 is missing after `setup`, ask the user to run `keyshroud migrate --item "NAME"`.

@@ -41,7 +41,6 @@ export async function sandbox(items: Array<Record<string, unknown>>, opts: { loc
     FAKE_BW_VAULT: vaultFile,
     FAKE_BW_LOG: logFile,
     FAKE_KEYCHAIN_DIR: keychain,
-    FAKE_CLIPBOARD: join(dir, "clipboard"),
     FAKE_OPENED: join(dir, "opened"),
     [`${BRAND.envPrefix}_CONFIG_DIR`]: configDir,
     // No background lock timers outliving the test run; one test turns it back on.

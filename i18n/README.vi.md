@@ -53,11 +53,10 @@ Agent cần credential để làm việc thật: `gh`, `npm publish`, CLI của 
 
 | Agent | Cài đặt | Có gì |
 |---|---|---|
-| **Claude Code** | plugin (xem bên dưới) | hook che output SessionStart + PostToolUse, MCP tools, skill |
+| **Claude Code** | plugin (xem bên dưới) | hook che output SessionStart + PostToolUse, skill |
 | **pi / omp** | `pi install npm:keyshroud` | nạp env, che `tool_result` (cả lệnh lỗi), `/secret` |
-| **Codex** | `codex mcp add keyshroud -- keyshroud mcp` | MCP tools, output đã che |
-| **Cursor, Claude Desktop, Cline, Gemini CLI** | JSON `mcpServers` | MCP tools, output đã che |
-| **OpenCode** | `opencode mcp add keyshroud -- keyshroud mcp` | MCP tools, output đã che |
+| **Codex, OpenCode, Gemini CLI, Cursor agent** | [`npx skills add dinhkarate/keyshroud`](../README.md#other-agents-with-a-shell) | skill + CLI, output đã che |
+| **Claude Desktop, client chỉ chat** | [JSON `mcpServers`](../README.md#mcp-clients-without-a-shell) | MCP tools, output đã che |
 | **Shell hoặc CI bất kỳ** | `keyshroud run -- <cmd>` | inject env + che output |
 
 ## Bắt đầu nhanh
@@ -73,7 +72,7 @@ Agent cần credential để làm việc thật: `gh`, `npm publish`, CLI của 
   và bỏ qua `bw config server` bên dưới (tài khoản EU: `bw config server https://vault.bitwarden.eu`).
 
 ```bash
-npm install -g keyshroud @bitwarden/cli    # hoặc: brew install bitwarden-cli
+npm install -g keyshroud @bitwarden/cli@2026.8.0   # bw 2026.9+ cannot log in to Vaultwarden yet (vaultwarden#7750)
 
 # 1. Trỏ bw vào server và đăng nhập một lần
 bw config server https://vault.example.com
@@ -135,7 +134,7 @@ Các tool: `secrets_list`, `secrets_run`, `secrets_request`, `vault_status`. Kh�
 
 **Đây có phải sandbox không?** Không. Nó chặn rò rỉ *vô tình*. Agent độc hại hoặc bị prompt injection vẫn có thể gửi giá trị ra ngoài — xem [security model](../README.md#security-model).
 
-**Chạy trên Windows được không?** Chưa test. Hỗ trợ macOS và Linux.
+**Chạy trên Windows được không?** Được, đã test trên Windows 10 với Node 22: hộp thoại mở khoá là một cửa sổ PowerShell nhỏ, session vẫn hết hạn sau 30 phút. Windows không hỗ trợ keychain, nên keyshroud luôn hỏi master password. Xem thêm [FAQ tiếng Anh](../README.md#faq).
 
 ## Tài liệu đầy đủ
 

@@ -5,6 +5,25 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+### Security
+- `setup` from an agent's shell no longer generates the agent account's master
+  password and puts it on the clipboard, where the agent could read it. It opens
+  the signup page and you pick the password there; `setup --registered` asks for
+  it in a dialog. `--confirm-unlock` and `--unattended` need a terminal.
+- `add`, `rotate` and `secrets_request` always check a value against the vault
+  unless it matches the stored master password or its hash, so a decoy
+  `master-password` file no longer turns the refusal off.
+- The lock timer asks `bw` whether its own token still works instead of trusting
+  the session file, so rewriting that file no longer keeps a session open.
+  `KEYSHROUD_SESSION_TTL_MS` is capped at a day.
+
+### Fixed
+- `env` lists wired names while the vault is locked.
+- `setup` without `--server` uses Bitwarden cloud when `bw` has no server set.
+- Install commands pin `@bitwarden/cli@2026.8.0`; the docs give the
+  `keyshroud-…` keychain names used after `setup`, say that Windows has no
+  keychain support, and the translations cover Windows and the CLI-first setup.
+
 ## [0.7.0] - 2026-10-19
 
 ### Changed
