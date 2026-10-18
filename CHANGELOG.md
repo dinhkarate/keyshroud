@@ -5,6 +5,8 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-10-19
+
 ### Security
 - `setup` from an agent's shell no longer generates the agent account's master
   password and puts it on the clipboard, where the agent could read it. It opens
