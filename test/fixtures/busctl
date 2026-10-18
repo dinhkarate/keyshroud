@@ -1,0 +1,4 @@
+#!/bin/sh
+# Fake busctl: the Secret Service default collection reads as locked when
+# $FAKE_KEYRING_LOCKED is set.
+[ -n "$FAKE_KEYRING_LOCKED" ] && echo "b true" || echo "b false"

@@ -56,6 +56,8 @@ export interface AuthTargets { omp: string; pi: string }
 interface ExecResult { stdout: string; stderr: string }
 
 function runFile(command: string, args: string[], options: Record<string, unknown> = {}, input?: string): Promise<ExecResult> {
+  // Without it a locked bw waits on a hidden master-password prompt nobody can answer.
+  if (command === "bw") options = { ...options, env: { ...((options.env as NodeJS.ProcessEnv | undefined) ?? process.env), BW_NOINTERACTION: "true" } };
   return new Promise((resolve, reject) => {
     const child = execFile(command, args, options as never, (error, stdout, stderr) => {
       if (error) {
@@ -237,6 +239,17 @@ export async function readKeychain(service: string): Promise<string | null> {
   return null;
 }
 
+// Linux: a locked Secret Service keyring (no desktop login, e.g. over SSH)
+// answers every lookup with nothing and makes `secret-tool store` wait forever
+// for an unlock prompt, so callers check this to say why instead.
+export const KEYRING_LOCKED = "The Linux keyring is locked (log in to the desktop session, or unlock it with your keyring app)";
+export async function keychainLocked(): Promise<boolean> {
+  try {
+    const result = await runFile("busctl", ["--user", "get-property", "org.freedesktop.secrets", "/org/freedesktop/secrets/aliases/default", "org.freedesktop.Secret.Collection", "Locked"], { timeout: 5000, maxBuffer: 1024 * 1024 });
+    return result.stdout.trim() === "b true";
+  } catch { return false; }
+}
+
 async function readMasterPassword(): Promise<string | null> {
   const keychain = await readKeychain(KEYCHAIN_MASTER_SERVICE);
   if (keychain) return keychain;
@@ -291,7 +304,7 @@ async function ensureSessionInner(existing: string | undefined): Promise<string>
   } catch {}
 
   const master = await readMasterPassword();
-  if (!master) throw new Error("Vaultwarden master password not available (see `doctor`)");
+  if (!master) throw new Error(await keychainLocked() ? `Vaultwarden master password not available: ${KEYRING_LOCKED}` : "Vaultwarden master password not available (see `doctor`)");
 
   const beforeLogin = await rawStatus();
   if (beforeLogin.status === "unauthenticated") {
@@ -322,6 +335,7 @@ export async function storeKeychainInteractive(service: string, label: string, c
     ? [["security", ["add-generic-password", "-U", "-a", user, "-s", service, "-l", label, ...(confirm ? ["-T", ""] : []), "-w"]]]
     : [["secret-tool", ["store", `--label=${label}`, "service", service, "account", user]]];
   // -U keeps an existing entry's access list, so an ask-every-time entry is recreated.
+  if (process.platform !== "darwin" && await keychainLocked()) throw new Error(KEYRING_LOCKED);
   if (process.platform === "darwin" && confirm) await runFile("security", ["delete-generic-password", "-a", user, "-s", service], { timeout: 10000, maxBuffer: 1024 * 1024 }).catch(() => {});
   for (const [command, args] of attempts) {
     const code = await new Promise<number | null>((resolve) => {
@@ -341,6 +355,7 @@ export async function generateKeychainSecret(service: string, label: string, con
   const secret = randomBytes(24).toString("base64url");
   const user = process.env.USER || process.env.LOGNAME || "";
   const opts = { timeout: 30000, maxBuffer: 1024 * 1024 };
+  if (process.platform !== "darwin" && await keychainLocked()) throw new Error(KEYRING_LOCKED);
   try {
     if (process.platform === "darwin") {
       // `security -i` reads the command from stdin, so the value is not in argv.
@@ -569,10 +584,12 @@ export async function resolveEntries(entries: Array<{ name: string; raw: string 
   const resolved = await Promise.all(entries.map(async ({ name, raw }) => {
     const inherited = opts.preferProcessEnv ? process.env[name] : undefined;
     if (inherited) return { name, value: inherited, secret: isSecretSource(raw) };
+    if (!raw.trim()) return { name, value: "", secret: false };
     try { return { name, value: await resolveShellValue(raw), secret: isSecretSource(raw) }; } catch { return { name, value: null, secret: true }; }
   }));
   for (const { name, value, secret } of resolved) {
-    if (value === null || value === "") { result.missing.push(name); continue; }
+    // An empty literal (`NAME=`) is a value; only an empty secret is unresolved.
+    if (value === null || (value === "" && secret)) { result.missing.push(name); continue; }
     result.values[name] = value;
     if (secret) result.secrets[name] = value;
   }

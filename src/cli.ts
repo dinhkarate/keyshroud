@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { existsSync } from "node:fs";
 import { chmod, copyFile, mkdir, lstat, readdir, readFile, readlink, rename, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import { constants, homedir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -112,10 +113,11 @@ async function runCommand(args: string[]): Promise<void> {
   if (only) for (const name of only) if (!selected.some((entry) => entry.name === name)) fail(`Secret unresolved: ${name} is not wired`, 4);
   // Later sources win: env files override auth.json.
   const deduped = [...new Map(selected.map((entry) => [entry.name, entry])).values()];
-  try { await core.ensureSession(); } catch {}
+  let vaultError = "";
+  try { await core.ensureSession(); } catch (error) { vaultError = error instanceof Error ? error.message : String(error); }
   const env = await core.resolveEntries(deduped);
   await core.audit("run", Object.keys(env.secrets), command);
-  if (env.missing.length) console.error(`${BRAND.bin}: unresolved (names only): ${env.missing.join(", ")}`);
+  if (env.missing.length) console.error(`${BRAND.bin}: unresolved (names only): ${env.missing.join(", ")}${vaultError ? ` (${vaultError})` : ""}`);
 
   // Mask by default whenever output is not a human terminal (agents, CI, pipes).
   const mask = flags.includes("--mask") || (!flags.includes("--no-mask") && !process.stdout.isTTY);
@@ -213,13 +215,14 @@ async function setupCommand(args: string[]): Promise<void> {
   const confirm = args.includes("--confirm-unlock");
   if (confirm && process.platform !== "darwin") fail("--confirm-unlock needs the macOS keychain; Linux secret-tool cannot ask before each read", 2);
   core.useOwnBwLogin();
-  await mkdir(core.OWN_BW_DIR, { recursive: true, mode: 0o700 });
-  const status = JSON.parse(await core.bw(["status"]).catch(() => "{}")) as { status?: string; userEmail?: string };
+  // bw writes data.json on its first call there, and that file switches every
+  // later keyshroud run to this login, so OWN_BW_DIR stays untouched until the
+  // agent account can actually log in.
+  const ownData = join(core.OWN_BW_DIR, "data.json");
+  const fresh = !existsSync(ownData);
+  const status = fresh ? {} : JSON.parse(await core.bw(["status"]).catch(() => "{}")) as { status?: string; userEmail?: string };
   if (status.userEmail && status.userEmail.toLowerCase() !== email.toLowerCase()) fail(`${BRAND.name}'s bw login already belongs to ${status.userEmail}; remove ${core.OWN_BW_DIR} to start over`, 5);
   const loggedOut = !status.status || status.status === "unauthenticated";
-  if (loggedOut) await core.bw(["config", "server", server]);
-  await unlink(core.SESSION_FILE).catch(() => {});
-  console.log(`${BRAND.name} now keeps its own bw login in ${core.OWN_BW_DIR}; your personal bw login is untouched.`);
   const signupUrl = `${server.replace(/\/$/, "")}/#/signup?email=${encodeURIComponent(email)}`;
   if (!process.stdin.isTTY) {
     // An agent's shell: nothing can be typed, so keyshroud picks the password.
@@ -228,7 +231,7 @@ async function setupCommand(args: string[]): Promise<void> {
     if (loggedOut && !args.includes("--registered")) {
       if (!hasEntry && !(await core.generateKeychainSecret(core.KEYCHAIN_MASTER_SERVICE, `${BRAND.name} agent account`, confirm))) fail("Could not store a generated password (needs macOS security or Linux secret-tool)", 3);
       const master = await core.readKeychain(core.KEYCHAIN_MASTER_SERVICE);
-      if (!master || !(await core.copyToClipboard(master))) fail(`No clipboard tool; run \`${BRAND.bin} setup\` in a terminal instead`, 3);
+      if (!master || !(await core.copyToClipboard(master))) fail(`No clipboard here (SSH or no display); run \`${BRAND.bin} setup --email ${email}\` in a terminal instead`, 3);
       spawn(process.platform === "darwin" ? "open" : "xdg-open", [signupUrl], { stdio: "ignore" }).on("error", () => {});
       console.log(`A random master password for ${email} is in the keychain (${core.KEYCHAIN_MASTER_SERVICE}) and on the clipboard.`);
       console.log(`Create the account at ${signupUrl} and paste it into both password fields.`);
@@ -250,7 +253,19 @@ async function setupCommand(args: string[]): Promise<void> {
   }
   const master = await core.readKeychain(core.KEYCHAIN_MASTER_SERVICE);
   if (!master) fail(`The keychain entry ${core.KEYCHAIN_MASTER_SERVICE} is missing or access was denied`, 3);
-  if (loggedOut) await core.loginOwnAccount(email, master); else await core.ensureSession();
+  if (loggedOut) {
+    await mkdir(core.OWN_BW_DIR, { recursive: true, mode: 0o700 });
+    await core.bw(["config", "server", server]);
+  }
+  await unlink(core.SESSION_FILE).catch(() => {});
+  console.log(`${BRAND.name} now keeps its own bw login in ${core.OWN_BW_DIR}; your personal bw login is untouched.`);
+  try {
+    if (loggedOut) await core.loginOwnAccount(email, master); else await core.ensureSession();
+  } catch (error) {
+    // A failed first login must not leave keyshroud switched to a logged-out account.
+    if (fresh) await unlink(ownData).catch(() => {});
+    throw error;
+  }
   await core.clearClipboardIf(master);
   await core.audit("setup", [], "cli");
   console.log(`ready: bw login=${email} (own). Next: \`${BRAND.bin} migrate\` copies the wired secrets from your personal vault.`);
@@ -516,7 +531,10 @@ async function main(): Promise<void> {
       requireKnownFlags(args, []);
       try { await core.ensureSession(); } catch {}
       const s = await core.getStatus(); console.log(`bw login=${core.OWN_BW_LOGIN ? `own agent account (${core.OWN_BW_DIR})` : `shared with your personal bw (run: ${BRAND.bin} setup)`}`); console.log(`bw version=${s.version ?? "missing (install @bitwarden/cli)"}`); console.log(`bw server=${s.serverUrl ?? "unconfigured (run: bw config server <url>)"}`); console.log(`session=${s.status}`);
-      for (const [service, present] of Object.entries(await core.keychainPresence())) console.log(`keychain ${service}=${present ? "present" : "missing"}`);
+      const presence = Object.entries(await core.keychainPresence());
+      const locked = presence.some(([, present]) => !present) && await core.keychainLocked();
+      for (const [service, present] of presence) console.log(`keychain ${service}=${present ? "present" : locked ? "unknown (keyring locked)" : "missing"}`);
+      if (locked) console.log(`keyring=locked: ${core.KEYRING_LOCKED}`);
       for (const path of [targetPaths.omp, targetPaths.pi]) for (const name of Object.keys(await core.readAuthEntries(path))) console.log(`${path} ${name} resolved=${(await authValue(name)) ? "yes" : "no"}`);
       console.log(`redact index=${(await core.readRedactIndex()) ? "present" : "missing"}`);
       const settings = JSON.parse(await readFile(join(homedir(), ".claude", "settings.json"), "utf8").catch(() => "{}")) as Record<string, unknown>;
