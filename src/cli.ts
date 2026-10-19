@@ -144,8 +144,9 @@ async function runCommand(args: string[]): Promise<void> {
   }
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.on(signal, () => child.kill(signal));
   await new Promise<void>((done) => {
-    child.on("close", (code, signal) => { process.exitCode = code ?? 128 + (signal ? constants.signals[signal] ?? 0 : 1); done(); });
-    child.on("error", (error) => { console.error(error.message); process.exitCode = 127; done(); });
+    let failed = false;
+    child.on("close", (code, signal) => { if (!failed) process.exitCode = code ?? 128 + (signal ? constants.signals[signal] ?? 0 : 1); done(); });
+    child.on("error", (error) => { failed = true; console.error(error.message); process.exitCode = 127; done(); });
   });
 }
 
@@ -224,8 +225,10 @@ async function setupCommand(args: string[]): Promise<void> {
   const email = valueAfter(args, "--email");
   if (!email || !/^[^\s@]+@[^\s@]+$/.test(email)) fail("setup needs --email for a separate agent account (not your personal one)", 2);
   let server = valueAfter(args, "--server");
-  // bw reports no server for the default Bitwarden cloud.
-  if (!server) { try { server = (JSON.parse(await core.bw(["status"])) as { serverUrl?: string | null }).serverUrl ?? "https://vault.bitwarden.com"; } catch {} }
+  // bw reports no server for the default Bitwarden cloud, and also after a logout,
+  // so the cloud is assumed only for a first setup.
+  const firstSetup = !existsSync(join(core.OWN_BW_DIR, "data.json"));
+  if (!server) { try { server = (JSON.parse(await core.bw(["status"])) as { serverUrl?: string | null }).serverUrl ?? (firstSetup ? "https://vault.bitwarden.com" : undefined); } catch {} }
   if (!server || !/^https:\/\//.test(server)) fail("setup needs --server https://… (no bw server is configured)", 2);
   const confirm = args.includes("--confirm-unlock");
   const unattended = args.includes("--unattended");
@@ -282,7 +285,6 @@ async function setupCommand(args: string[]): Promise<void> {
   }
   // A session of this login stays usable when setup runs again.
   if (loggedOut) await unlink(core.SESSION_FILE).catch(() => {});
-  console.log(`${BRAND.name} now keeps its own bw login in ${core.OWN_BW_DIR}; your personal bw login is untouched.`);
   try {
     if (loggedOut) await core.loginOwnAccount(email, master!, unattended); else await core.ensureSession({ prompt: true, unattended });
   } catch (error) {
@@ -290,6 +292,7 @@ async function setupCommand(args: string[]): Promise<void> {
     if (fresh) await unlink(ownData).catch(() => {});
     throw error;
   }
+  console.log(`${BRAND.name} now keeps its own bw login in ${core.OWN_BW_DIR}; your personal bw login is untouched.`);
   await core.audit("setup", [], "cli");
   const minutes = Math.round(core.SESSION_TTL_MS / 60000);
   console.log(`ready: bw login=${email} (own). ${unattended ? "The session stays open (unattended)." : `Sessions end after ${minutes} minutes; then ${kept ? "keyshroud unlocks again from the keychain" : "keyshroud asks for the master password again"}.`}`);
@@ -430,6 +433,8 @@ async function importCommand(args: string[]): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  // `keyshroud doctor | head -1`: a closed pipe ends the output, not with a stack trace.
+  process.stdout.on("error", (error: NodeJS.ErrnoException) => { if (error.code === "EPIPE") process.exit(); throw error; });
   const args = process.argv.slice(2); const command = args.shift();
   if (!command || command === "--help" || command === "-h" || command === "help") { console.log(usage); if (!command) process.exitCode = 2; return; }
   if (command === "--version" || command === "-v") {

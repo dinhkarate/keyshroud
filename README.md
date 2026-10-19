@@ -163,8 +163,8 @@ keyshroud migrate --yes                          # copy them; references keep wo
   login is untouched. Its master password is not stored: keyshroud asks for it when a session
   ends and keeps only a scrypt hash, so `add` can refuse it as a secret.
 - `migrate` copies the items that wired names (and any `--env-file` / `--item`) reference, with
-  the same names, then locks your personal vault again. Originals stay where they are. It needs
-  your personal master password in the keychain once; delete it afterwards (the command prints how).
+  the same names, then locks your personal vault again. Originals stay where they are. It asks
+  for your personal master password in a terminal (or reads the keychain entry `vaultwarden-master-password`).
 - An agent can run `setup` too. Without a terminal it opens the signup page, where you pick the
   agent account's master password yourself (save it in your password manager); then the agent
   runs `setup --registered`, which asks for it in a dialog. The password never passes through

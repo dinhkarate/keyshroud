@@ -638,8 +638,9 @@ test("without a stored master password keyshroud asks, and the session ends afte
     assert.match(again.stderr, /master password/);
     assert.ok(!(await box.vault()).items.some((entry) => entry.name === "Phished"));
   }
-  // Nor does a decoy master-password file.
+  // Nor does a decoy master-password file next to a removed hash.
   await writeFile(join(box.configDir, "master-password"), "decoy\n");
+  await unlink(join(box.configDir, "master-password.scrypt"));
   const decoy = await runCli(box, ["add", "--env", "PHISHED", "--item", "Phished", "--stdin"], "master");
   assert.match(decoy.stderr, /master password/);
   assert.ok(!(await box.vault()).items.some((entry) => entry.name === "Phished"));
@@ -653,6 +654,17 @@ test("without a stored master password keyshroud asks, and the session ends afte
   assert.doesNotMatch(ended.stdout, /same/);
   assert.equal(((await box.vault()) as { status?: string }).status, "locked");
   await assert.rejects(stat(join(box.configDir, "session")));
+});
+
+test("a logged-out bw says how to log in before anyone is asked for a password", async () => {
+  const box = await wired();
+  await unlink(join(box.dir, "keychain", "vaultwarden-master-password"));
+  await writeFile(box.env.FAKE_BW_VAULT, JSON.stringify({ ...(await box.vault()), status: "unauthenticated" }));
+  const log = join(box.dir, "dialog.log");
+  const run = await runCli(box, ["unlock"], "", { DISPLAY: ":0", FAKE_DIALOG_LOG: log, FAKE_DIALOG_VALUE: "master" });
+  assert.notEqual(run.code, 0);
+  assert.match(run.stderr, /bw is logged out: run `keyshroud setup .*--registered`/);
+  await assert.rejects(stat(log), "no dialog was opened");
 });
 
 test("the lock timer ends a session even when nothing calls keyshroud", { skip: process.platform === "win32" }, async () => {

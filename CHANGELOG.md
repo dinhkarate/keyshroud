@@ -5,6 +5,27 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+### Security
+- Windows: an argument with a line break to a `.cmd`/`.bat` file is refused;
+  cmd.exe would run what follows as a command, with the secrets in its
+  environment (BatBadBut).
+- The trial unlock behind the master-password refusal keeps a session's end only
+  up to one session length, so an end date written into the session file no
+  longer survives it.
+
+### Fixed
+- A logged-out `bw` is reported before anyone is asked for the master password,
+  with how to log in again, instead of a request to run `keyshroud unlock`.
+- `setup` run again after a logout no longer assumes Bitwarden cloud when no
+  `--server` is given; only a first setup does.
+- `migrate` asks for the personal master password in a terminal when it is not
+  in the keychain.
+- `secrets_list` says why names are unresolved; `run` exits 127 for a missing
+  command; `keyshroud doctor | head` no longer prints a stack trace; a failed
+  `setup` login no longer claims keyshroud switched to the new login.
+- Windows: plain words reach a `.cmd`/`.bat` unchanged, so a batch file that
+  reads `%1` works again; the lock timer also locks with `BW_PRETTY=true`.
+
 ## [0.7.1] - 2026-10-19
 
 ### Security
