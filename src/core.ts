@@ -91,11 +91,15 @@ export function invocation(command: string, args: string[]): Invocation {
   }
   if (found.script) return { command: process.execPath, args: [found.script, ...args] };
   if (!/\.(cmd|bat)$/i.test(found.file)) return { command: found.file, args };
+  // cmd.exe ends a command at a line break whatever the escaping (BatBadBut).
+  if (args.some((arg) => /[\r\n\0]/.test(arg))) throw Object.assign(new Error(`${command}: a .cmd/.bat argument cannot contain a line break`), { code: "EINVAL" });
   // As cross-spawn does: quote each argument for the C runtime, then escape every
   // cmd.exe metacharacter (`%` included) with ^, twice, because the batch file's
   // `%*` is parsed again; cmd then passes the text on as is.
   const meta = /([()\][%!^"`<>&|;, *?])/g;
-  const quote = (value: string) => `"${value.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/, "$1$1")}"`.replace(meta, "^$1").replace(meta, "^$1");
+  // Plain words go as they are, so a batch file that reads %1 sees them unchanged.
+  const quote = (value: string) => /^[\w.\-\/\\:@+]+$/.test(value) ? value
+    : `"${value.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/, "$1$1")}"`.replace(meta, "^$1").replace(meta, "^$1");
   return { command: process.env.ComSpec ?? join(SYSTEM32, "cmd.exe"), args: ["/d", "/s", "/c", `"${[found.file.replace(meta, "^$1"), ...args.map(quote)].join(" ")}"`], verbatim: true };
 }
 
@@ -421,11 +425,11 @@ function armLockTimer(token: string, expiresAt: number): void {
         `const opts = { windowsHide: true, windowsVerbatimArguments: e.${vars.verbatim} === "1" };`,
         `const tick = () => { const left = ${expiresAt} - Date.now(); if (left > 0) return setTimeout(tick, Math.min(left, 30000));`,
         `  execFile(e.${vars.bw}, JSON.parse(e.${vars.status}), { ...opts, env: { ...e, BW_SESSION: e.${vars.token} } }, (error, out) => {`,
-        `    if (!/"status":"unlocked"/.test(String(out))) return;`,
+        `    if (!/"status":\\s*"unlocked"/.test(String(out))) return;`,
         `    fs.rmSync(e.${vars.file}, { force: true }); execFile(e.${vars.bw}, JSON.parse(e.${vars.lock}), opts, () => {}); }); };`,
         `tick();`,
       ].join("\n")]]
-    : ["/bin/sh", ["-c", `while now=$(date +%s); [ "$now" -lt "$1" ]; do left=$(($1 - now)); sleep $((left < 30 ? left : 30)); done; if BW_SESSION="$${vars.token}" bw status 2>/dev/null | grep -q '"status":"unlocked"'; then rm -f "$2"; bw lock >/dev/null 2>&1; fi`, "sh", String(Math.ceil(expiresAt / 1000)), SESSION_FILE]];
+    : ["/bin/sh", ["-c", `while now=$(date +%s); [ "$now" -lt "$1" ]; do left=$(($1 - now)); sleep $((left < 30 ? left : 30)); done; if BW_SESSION="$${vars.token}" bw status 2>/dev/null | grep -q '"status": *"unlocked"'; then rm -f "$2"; bw lock >/dev/null 2>&1; fi`, "sh", String(Math.ceil(expiresAt / 1000)), SESSION_FILE]];
   const child = spawn(timer[0], timer[1], {
     detached: true, stdio: "ignore", windowsHide: true,
     env: { ...env, [vars.token]: token, [vars.file]: SESSION_FILE, [vars.bw]: bwPath, [vars.status]: JSON.stringify(statusArgs), [vars.lock]: JSON.stringify(lockArgs), [vars.verbatim]: verbatim ? "1" : "0", BW_NOINTERACTION: "true" },
@@ -476,6 +480,14 @@ async function ensureSessionInner(existing: string | undefined, opts: SessionOpt
     if (stored) return stored;
   }
 
+  // Logged out: log in first (API key), so nobody types a password for nothing.
+  const beforeLogin = await rawStatus();
+  if (beforeLogin.status === "unauthenticated") {
+    const clientId = await readKeychain(KEYCHAIN_CLIENT_ID_SERVICE);
+    const clientSecret = await readKeychain(KEYCHAIN_CLIENT_SECRET_SERVICE);
+    if (!clientId || !clientSecret) throw new Error(`bw is logged out: run \`${BRAND.bin} setup --email EMAIL --server URL --registered\` (agent account) or \`bw login\` in a terminal; with the API key in the keychain keyshroud logs in by itself (see \`doctor\`)`);
+    await runFile("bw", ["login", "--apikey"], { env: { ...process.env, BW_CLIENTID: clientId, BW_CLIENTSECRET: clientSecret }, timeout: 20000, maxBuffer: 4 * 1024 * 1024 });
+  }
   // A stored master password unlocks without asking; --unattended always asks.
   let master = opts.unattended ? null : await readMasterPassword();
   const asked = !master;
@@ -492,15 +504,6 @@ async function ensureSessionInner(existing: string | undefined, opts: SessionOpt
   }
   // bw unlock replaces the token, so copies of the old one stop working; a
   // wrong password leaves the open session alone.
-
-  const beforeLogin = await rawStatus();
-  if (beforeLogin.status === "unauthenticated") {
-    const clientId = await readKeychain(KEYCHAIN_CLIENT_ID_SERVICE);
-    const clientSecret = await readKeychain(KEYCHAIN_CLIENT_SECRET_SERVICE);
-    if (!clientId || !clientSecret) throw new Error("bw is logged out and API key credentials are not in the keychain (see `doctor`)");
-    await runFile("bw", ["login", "--apikey"], { env: { ...process.env, BW_CLIENTID: clientId, BW_CLIENTSECRET: clientSecret }, timeout: 20000, maxBuffer: 4 * 1024 * 1024 });
-  }
-
   const unlocked = await runFile("bw", ["unlock", "--passwordenv", "BW_PASSWORD", "--raw"], {
     env: { ...process.env, BW_PASSWORD: master }, timeout: 20000, maxBuffer: 4 * 1024 * 1024,
   }).catch((error: Error) => {
@@ -573,8 +576,8 @@ async function unlocksVault(secret: string): Promise<boolean> {
     token = (await runFile("bw", ["unlock", "--passwordenv", "BW_PASSWORD", "--raw"], { env: { ...process.env, BW_PASSWORD: secret }, timeout: 20000, maxBuffer: 4 * 1024 * 1024 })).stdout.trim();
   } catch { return false; }
   if (!token) return false;
-  // The session keeps its end, but never becomes one without an end here.
-  await writeSession(token, false, before?.expiresAt ?? undefined);
+  // The session keeps its end, at most one session length away: the file is the agent's to write.
+  await writeSession(token, false, Math.min(before?.expiresAt ?? Infinity, Date.now() + SESSION_TTL_MS));
   await writeMasterVerifier(secret);
   return true;
 }
@@ -610,7 +613,7 @@ export async function loginOwnAccount(email: string, master: string, unattended 
     let out = "";
     child.stdout.on("data", (chunk: Buffer) => { out += chunk; });
     child.on("error", reject);
-    child.on("exit", (exit) => (exit === 0 && out.trim() ? resolve(out.trim()) : reject(new Error("bw login failed"))));
+    child.on("exit", (exit) => { if (exit === 0 && out.trim()) resolve(out.trim()); else { process.stderr.write("\n"); reject(new Error("bw login failed")); } });
   });
   await writeSession(token, unattended);
   await writeMasterVerifier(master);
@@ -622,8 +625,9 @@ export async function loginOwnAccount(email: string, master: string, unattended 
 // `migrate`: read the items of the bw login the user had before setup (the
 // default bw data dir), then lock it again. The values stay in memory.
 export async function readPersonalItems(): Promise<Array<Record<string, unknown>>> {
-  const master = await readKeychain(PERSONAL_KEYCHAIN_MASTER_SERVICE);
-  if (!master) throw new Error(`Personal master password not in the keychain (${PERSONAL_KEYCHAIN_MASTER_SERVICE})`);
+  let master = await readKeychain(PERSONAL_KEYCHAIN_MASTER_SERVICE);
+  if (!master && process.stdin.isTTY && process.stderr.isTTY) master = await readMasked("Master password of your personal vault: ") || null;
+  if (!master) throw new Error(`Run \`${BRAND.bin} migrate\` in a terminal: it asks for your personal master password (or reads the keychain entry ${PERSONAL_KEYCHAIN_MASTER_SERVICE})`);
   const env = (extra: Record<string, string>) => {
     const out: Record<string, string> = {};
     for (const [name, value] of Object.entries(process.env)) if (value !== undefined && !VAULT_ENV_KEYS.includes(name)) out[name] = value;

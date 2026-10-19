@@ -132,10 +132,11 @@ async function runTool(args: Json): Promise<Json> {
 
 async function callTool(name: string, args: Json): Promise<Json> {
   if (name === "secrets_list") {
-    try { await core.ensureSession(); } catch {}
+    let vaultError = "";
+    try { await core.ensureSession(); } catch (error) { vaultError = error instanceof Error ? error.message : String(error); }
     const env = await core.resolveEntries(await collectEntries(args.env_file));
     const resolved = Object.keys(env.values);
-    return text(`resolved: ${resolved.join(", ") || "none"}\nunresolved: ${env.missing.join(", ") || "none"}`);
+    return text(`resolved: ${resolved.join(", ") || "none"}\nunresolved: ${env.missing.join(", ") || "none"}${env.missing.length && vaultError ? ` (${vaultError})` : ""}`);
   }
   if (name === "secrets_run") return runTool(args);
   if (name === "secrets_request") {
