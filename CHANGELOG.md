@@ -5,6 +5,8 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-10-19
+
 ### Security
 - Windows: an argument with a line break to a `.cmd`/`.bat` file is refused;
   cmd.exe would run what follows as a command, with the secrets in its

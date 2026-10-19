@@ -1,7 +1,7 @@
 {
   "name": "keyshroud",
   "description": "Let Claude Code use secrets from self-hosted Vaultwarden without ever seeing them. Requires `npm i -g keyshroud`.",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "author": { "name": "dinhkarate" },
   "homepage": "https://keyshroud.dev",
   "repository": "https://github.com/dinhkarate/keyshroud",
