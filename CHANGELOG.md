@@ -5,6 +5,8 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-10-19
+
 ### Added
 - `keyshroud mcp` picks up an update by itself: once `npm i -g keyshroud@…`
   puts a new version on disk, the running server hands requests to a server
