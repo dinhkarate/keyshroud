@@ -1,9 +1,11 @@
 // Minimal MCP stdio server (newline-delimited JSON-RPC 2.0). It gives any MCP
 // client the same contract as the pi extension: names in, masked output out.
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcessByStdio } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline";
+import type { Readable, Writable } from "node:stream";
 import process from "node:process";
 import { BRAND } from "./brand.ts";
 import * as core from "./core.ts";
@@ -173,7 +175,7 @@ async function callTool(name: string, args: Json): Promise<Json> {
   if (name === "vault_status") {
     try { await core.ensureSession(); } catch {}
     const s = await core.getStatus();
-    return text(`status=${s.status} server=${s.serverUrl ?? "unconfigured"} items=${s.items ?? "unknown"} bw=${s.version ?? "missing"}`);
+    return text(`status=${s.status} server=${s.serverUrl ?? "unconfigured"} items=${s.items ?? "unknown"} bw=${s.version ?? "missing"} ${BRAND.bin}=${runningVersion ?? "unknown"}`);
   }
   return text(`Unknown tool: ${name}`, true);
 }
@@ -204,7 +206,64 @@ async function handle(message: Json): Promise<Json | null> {
   return { jsonrpc: "2.0", id, error: { code: -32601, message: `Method not found: ${String(method)}` } };
 }
 
+// `npm i -g keyshroud@…` replaces the package under a running server. Once the
+// version on disk differs from the code in memory, requests go to a server
+// started from the new files (kept until the next update), so clients need no
+// restart. That server keeps its own session and caches.
+const PACKAGE_JSON = new URL("../package.json", import.meta.url);
+const CLI_FILE = fileURLToPath(new URL(import.meta.url.endsWith(".ts") ? "./cli.ts" : "./cli.js", import.meta.url));
+const DELEGATE_INIT_ID = `${BRAND.bin}-reload`;
+let runningVersion: string | null = null;
+
+async function diskVersion(): Promise<string | null> {
+  try { return (JSON.parse(await readFile(PACKAGE_JSON, "utf8")) as { version?: string }).version ?? null; } catch { return null; }
+}
+
+interface Delegate { version: string; child: ChildProcessByStdio<Writable, Readable, null>; ready: Promise<boolean>; waiting: Set<unknown> }
+
+function startDelegate(version: string, initParams: Json | undefined): Delegate {
+  const child = spawn(process.execPath, [CLI_FILE, "mcp"], { stdio: ["pipe", "pipe", "inherit"], env: process.env });
+  const waiting = new Set<unknown>();
+  let settle: (ok: boolean) => void = () => {};
+  const ready = new Promise<boolean>((resolve) => { settle = resolve; });
+  child.stdin.on("error", () => {});
+  child.on("error", () => settle(false));
+  child.on("exit", () => {
+    settle(false);
+    // Requests it took but never answered.
+    for (const id of waiting) process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32603, message: `The updated ${BRAND.name} server stopped; restart the MCP client` } })}\n`);
+    waiting.clear();
+  });
+  createInterface({ input: child.stdout, crlfDelay: Infinity }).on("line", (line) => {
+    let message: Json;
+    try { message = JSON.parse(line) as Json; } catch { return; }
+    if (message.id === DELEGATE_INIT_ID) {
+      child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`);
+      settle(true);
+      return;
+    }
+    waiting.delete(message.id);
+    process.stdout.write(`${line}\n`);
+  });
+  child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: DELEGATE_INIT_ID, method: "initialize", params: initParams ?? { protocolVersion: SUPPORTED_VERSIONS[0], capabilities: {}, clientInfo: { name: BRAND.name, version } } })}\n`);
+  return { version, child, ready, waiting };
+}
+
 export async function serveMcp(): Promise<void> {
+  const running = runningVersion = await diskVersion();
+  let delegate: Delegate | null = null;
+  let initParams: Json | undefined;
+  // true when a server from newer files took the request.
+  const forward = async (line: string, message: Json): Promise<boolean> => {
+    const version = await diskVersion();
+    if (!running || !version || version === running) return false;
+    if (delegate?.version !== version) { delegate?.child.kill(); delegate = startDelegate(version, initParams); }
+    const current = delegate;
+    if (!(await current.ready)) return false;
+    current.waiting.add(message.id);
+    current.child.stdin.write(`${line}\n`);
+    return true;
+  };
   const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
   const pending = new Set<Promise<void>>();
   for await (const line of rl) {
@@ -214,9 +273,15 @@ export async function serveMcp(): Promise<void> {
       process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } })}\n`);
       continue;
     }
-    const task = handle(message).then((response) => { if (response) process.stdout.write(`${JSON.stringify(response)}\n`); });
+    if (message.method === "initialize") initParams = (message.params ?? undefined) as Json | undefined;
+    const isRequest = message.id !== undefined && message.id !== null && message.method !== "initialize";
+    const task = (isRequest ? forward(line, message) : Promise.resolve(false))
+      .then(async (forwarded) => { if (forwarded) return; const response = await handle(message); if (response) process.stdout.write(`${JSON.stringify(response)}\n`); });
     pending.add(task);
     void task.finally(() => pending.delete(task));
   }
   await Promise.all(pending);
+  // Let the newer server answer what it has, then stop it.
+  const last = delegate as Delegate | null;
+  if (last) await new Promise((resolve) => { last.child.once("exit", resolve); last.child.stdin.end(); });
 }

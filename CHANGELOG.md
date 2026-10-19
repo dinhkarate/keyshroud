@@ -5,6 +5,13 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+### Added
+- `keyshroud mcp` picks up an update by itself: once `npm i -g keyshroud@…`
+  puts a new version on disk, the running server hands requests to a server
+  started from the new files, so MCP clients need no restart. Servers started
+  before this release need one last restart. `vault_status` shows the version
+  that answered.
+
 ## [0.7.2] - 2026-10-19
 
 ### Security

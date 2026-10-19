@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { randomBytes, scryptSync } from "node:crypto";
-import { mkdir, readdir, readFile, stat, symlink, unlink, utimes, writeFile } from "node:fs/promises";
+import { cp, mkdir, readdir, readFile, stat, symlink, unlink, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
 import { BRAND } from "../src/brand.ts";
@@ -411,6 +411,39 @@ async function mcpCall(box: Awaited<ReturnType<typeof wired>>, name: string, arg
   await new Promise((resolve) => child.on("close", resolve));
   return { raw: out, text: JSON.parse(out.trim()).result.content[0].text as string };
 }
+
+test("an MCP server hands requests to the newer files after an update, so clients need no restart", async () => {
+  const box = await wired();
+  // A copy of the package, updated in place the way `npm i -g` does.
+  const pkg = join(box.dir, "pkg");
+  await cp(join(CLI, "..", ".."), pkg, { recursive: true, filter: (path) => !/node_modules|\.git$|dist$|test$/.test(path) });
+  const child = spawn(process.execPath, [join(pkg, "src", "cli.ts"), "mcp"], { env: box.env, cwd: box.dir });
+  const responses = new Map<unknown, Record<string, any>>();
+  let buffer = "";
+  child.stdout.on("data", (chunk) => {
+    buffer += chunk;
+    for (let at = buffer.indexOf("\n"); at >= 0; at = buffer.indexOf("\n")) { const message = JSON.parse(buffer.slice(0, at)); responses.set(message.id, message); buffer = buffer.slice(at + 1); }
+  });
+  const call = async (id: number, name: string, args: object = {}) => {
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } })}\n`);
+    const deadline = Date.now() + 30000;
+    while (!responses.has(id) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50));
+    return responses.get(id)?.result.content[0].text as string;
+  };
+  child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test", version: "0" } } })}\n`);
+  const version = JSON.parse(await readFile(join(pkg, "package.json"), "utf8")).version;
+  assert.match(await call(2, "vault_status"), new RegExp(`keyshroud=${version.replaceAll(".", "\\.")}`));
+
+  const manifest = JSON.parse(await readFile(join(pkg, "package.json"), "utf8"));
+  await writeFile(join(pkg, "package.json"), JSON.stringify({ ...manifest, version: "99.0.0" }));
+  assert.match(await call(3, "vault_status"), /keyshroud=99\.0\.0/);
+  const run = await call(4, "secrets_run", { command: "echo $GH_TOKEN" });
+  assert.match(run, /<redacted:GH_TOKEN>/);
+  assert.ok(!run.includes(GH));
+  child.stdin.end();
+  await new Promise((resolve) => child.on("close", resolve));
+  assert.ok(!responses.has("keyshroud-reload"), "the newer server's handshake stays internal");
+});
 
 test("MCP secrets_run never leaks a partial secret when output hits the collection limit", async () => {
   const box = await wired();
