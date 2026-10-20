@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { randomBytes, scryptSync } from "node:crypto";
 import { cp, mkdir, readdir, readFile, stat, symlink, unlink, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -172,6 +173,22 @@ test("add stores a piped secret, wires both agents, and never prints it", async 
   }
   const again = await runCli(box, ["add", "--env", "NEW_KEY", "--item", "New key", "--stdin"], "x");
   assert.equal(again.code, 5);
+});
+
+test("bw calls that reach the server run one at a time across processes", async () => {
+  const box = await wired();
+  const slow = { FAKE_BW_SYNC_MS: "400" };
+  const results = await Promise.all(["ONE", "TWO", "THREE"].map((name) => runCli(box, ["add", "--env", `${name}_KEY`, "--item", `Key ${name}`, "--stdin"], `value-${name}-zq`, slow)));
+  for (const result of results) assert.equal(result.code, 0, result.stderr);
+  assert.ok(!existsSync(`${box.vaultFile}.overlap`), "two bw syncs ran at once");
+  assert.ok(!existsSync(join(box.configDir, "bw.lock")));
+});
+
+test("a login the server revoked is named instead of a bare unresolved list", async () => {
+  const box = await wired();
+  const result = await runCli(box, ["run", "--", "true"], "", { FAKE_BW_SYNC_ERROR: "invalid_grant" });
+  assert.match(result.stderr, /unresolved \(names only\): .*GH_TOKEN.*expired or was revoked/);
+  assert.ok(!result.stderr.includes(GH));
 });
 
 test("add without a terminal opens a native dialog, and cancelling stores nothing", async () => {

@@ -124,7 +124,7 @@ async function runTool(args: Json): Promise<Json> {
   const stderr = out("stderr");
   const lines = [
     `exit: ${code}`,
-    env.missing.length ? `unresolved: ${env.missing.join(", ")}${vaultError ? ` (${vaultError})` : ""}` : null,
+    env.missing.length ? `unresolved: ${env.missing.join(", ")}${core.unresolvedReason(vaultError)}` : null,
     `--- stdout ---\n${stdout}`,
     `--- stderr ---\n${stderr}`,
     truncated ? `[output truncated to ${OUTPUT_LIMIT / 2} characters per stream]` : null,
@@ -138,7 +138,7 @@ async function callTool(name: string, args: Json): Promise<Json> {
     try { await core.ensureSession(); } catch (error) { vaultError = error instanceof Error ? error.message : String(error); }
     const env = await core.resolveEntries(await collectEntries(args.env_file));
     const resolved = Object.keys(env.values);
-    return text(`resolved: ${resolved.join(", ") || "none"}\nunresolved: ${env.missing.join(", ") || "none"}${env.missing.length && vaultError ? ` (${vaultError})` : ""}`);
+    return text(`resolved: ${resolved.join(", ") || "none"}\nunresolved: ${env.missing.join(", ") || "none"}${env.missing.length ? core.unresolvedReason(vaultError) : ""}`);
   }
   if (name === "secrets_run") return runTool(args);
   if (name === "secrets_request") {
