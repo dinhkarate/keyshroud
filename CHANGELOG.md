@@ -5,6 +5,19 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.7.5] - 2026-10-20
+
+### Fixed
+- Any `bw` release works, including 2026.9 and later on Vaultwarden before
+  1.37.4. Those `bw` releases save the login and then exit with
+  `KeyIdBackfillError`; `setup` and the API-key login now go on when `bw` is
+  logged in anyway. The first unlock after upgrading `bw` fails its data
+  migration in the same way, so keyshroud tries once more. Tested with `bw`
+  2024.12 to 2026.10 on Vaultwarden 1.37.3, and 2025.6 to 2026.10 on 1.37.4
+  (Vaultwarden 1.37.4 refuses new items from older `bw` releases).
+- `doctor` no longer tells you to stay on `bw` 2026.8.0, and the install
+  commands no longer pin it.
+
 ## [0.7.4] - 2026-10-20
 
 ### Fixed
