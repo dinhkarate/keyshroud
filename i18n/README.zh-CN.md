@@ -72,7 +72,7 @@ Coding agent 要做实际工作就需要凭据：`gh`、`npm publish`、云厂�
   并跳过下面的 `bw config server`（欧盟账号：`bw config server https://vault.bitwarden.eu`）。
 
 ```bash
-npm install -g keyshroud @bitwarden/cli@2026.8.0   # bw 2026.9+ cannot log in to Vaultwarden yet (vaultwarden#7750)
+npm install -g keyshroud @bitwarden/cli
 
 # 1. 让 bw 指向你的服务器，并登录一次
 bw config server https://vault.example.com

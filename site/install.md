@@ -29,13 +29,14 @@ If Node.js is older than 22.18, stop and tell the user to upgrade it.
 ## 2. Install the CLI
 
 ```bash
-npm install -g keyshroud @bitwarden/cli@2026.8.0
+npm install -g keyshroud @bitwarden/cli
 keyshroud --version
 ```
 
-`bw` stays at 2026.8.0 because later releases fail to log in to Vaultwarden with
-`KeyIdBackfillError` (vaultwarden#7750). On Bitwarden cloud any version works, and on macOS
-`brew install bitwarden-cli` does too.
+Any `bw` release from 2025.6 on works (older ones cannot save items on Vaultwarden 1.37.4), and on
+macOS `brew install bitwarden-cli` does too. With `bw` 2026.9 or
+later and Vaultwarden before 1.37.4, `bw login` prints `KeyIdBackfillError` but saves the login;
+keyshroud carries on, and Vaultwarden 1.37.4 makes the error go away.
 
 ## 3. Connect your agent
 

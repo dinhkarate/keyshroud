@@ -72,7 +72,7 @@ dinhkarate
   下の `bw config server` は飛ばします（EU アカウント：`bw config server https://vault.bitwarden.eu`）。
 
 ```bash
-npm install -g keyshroud @bitwarden/cli@2026.8.0   # bw 2026.9+ cannot log in to Vaultwarden yet (vaultwarden#7750)
+npm install -g keyshroud @bitwarden/cli
 
 # 1. bw を自分のサーバーに向けて、一度だけログインする
 bw config server https://vault.example.com
