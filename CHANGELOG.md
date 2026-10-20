@@ -5,6 +5,17 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.7.4] - 2026-10-20
+
+### Fixed
+- `bw` commands that talk to the server (sync, login, unlock, create, edit,
+  delete) run one at a time across every keyshroud process on the machine.
+  Vaultwarden replaces the refresh token on each use, so two agents refreshing
+  at once could leave bw with a rejected token, and bw then logged the machine
+  out for every agent.
+- When bw has lost its login, the unresolved-names message says so and how to
+  log in again, instead of listing the names with no reason.
+
 ## [0.7.3] - 2026-10-19
 
 ### Added
