@@ -23,15 +23,25 @@ const find = (key) => {
   return matches[0];
 };
 const stdin = () => { try { return fs.readFileSync(0, "utf8"); } catch { return ""; } };
+// bw 2026.9+ against Vaultwarden before 1.37.4: the login is saved, then a
+// follow-up call gets a 404 and bw exits 1 without printing a session.
+const backfill = () => die("ERROR bitwarden_user_crypto_management::key_id_backfill: Failed to post the user key id: 404\nError [KeyIdBackfillError]: API call failed during user key id backfill");
 const [cmd, sub, key] = args;
 if (cmd === "--version") out("2026.1.0\n");
 else if (cmd === "status") out({ serverUrl: state.server ?? "https://vault.example.test", ...(state.email ? { userEmail: state.email } : {}), status: unlocked() ? "unlocked" : state.status === "unauthenticated" ? "unauthenticated" : "locked" });
 else if (cmd === "config" && sub === "server") { fs.mkdirSync(appdata, { recursive: true }); fs.writeFileSync(`${appdata}/data.json`, "{}"); state.server = key; save(); out("Saved setting `config`."); }
-else if (cmd === "unlock") { if (process.env.BW_PASSWORD !== (state.password ?? "master")) die("Invalid master password."); state.status = "unlocked"; save(); out(session); }
-else if (cmd === "login" && sub === "--apikey") { state.status = "locked"; save(); out("logged in"); }
+else if (cmd === "unlock") {
+  if (process.env.BW_PASSWORD !== (state.password ?? "master")) die("Invalid master password.");
+  // A newer bw's first unlock of an older bw's data runs a migration that can fail.
+  if (process.env.FAKE_BW_MIGRATION_ERROR && !state.migrated) { state.migrated = true; save(); die("[Encrypted Migrator] Error running migrations for user: u1 Error [KeyIdBackfillError]: API call failed during user key id backfill"); }
+  state.status = "unlocked"; save(); out(session);
+}
+else if (cmd === "login" && sub === "--apikey") { state.status = "locked"; save(); if (process.env.FAKE_BW_BACKFILL_ERROR) backfill(); out("logged in"); }
 else if (cmd === "login") {
   if (state.registered !== sub || process.env.BW_PASSWORD !== state.password) die("Username or password is incorrect. Try again.");
-  state.email = sub; state.status = "unlocked"; save(); out(session);
+  state.email = sub;
+  if (process.env.FAKE_BW_BACKFILL_ERROR) { state.status = "locked"; save(); backfill(); }
+  state.status = "unlocked"; save(); out(session);
 }
 else if (cmd === "sync") {
   // Like the real bw, a refresh token the server rejects ends the login.

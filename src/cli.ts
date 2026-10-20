@@ -82,12 +82,6 @@ function checkNames(envName: string, itemName: string): void {
   const problem = itemNameProblem(itemName);
   if (problem) fail(`Vault item name ${problem}`, 2);
 }
-// bw 2026.9+ posts the user key id to an endpoint Vaultwarden lacks (vaultwarden#7750).
-function vaultwardenTooNew(version: string | null, server: string | null): boolean {
-  const [year, month] = (version ?? "").split(".").map(Number);
-  const selfHosted = Boolean(server) && !/^https:\/\/([^/]+\.)?bitwarden\.(com|eu)(\/|$)/.test(server!);
-  return selfHosted && (year > 2026 || (year === 2026 && month >= 9));
-}
 function shellQuote(value: string): string { return `'${value.replaceAll("'", "'\\''")}'`; }
 function failureCode(error: unknown): number {
   const text = error instanceof Error ? error.message : String(error);
@@ -568,7 +562,7 @@ async function main(): Promise<void> {
     if (command === "doctor") {
       requireKnownFlags(args, []);
       try { await core.ensureSession(); } catch {}
-      const s = await core.getStatus(); console.log(`bw login=${core.OWN_BW_LOGIN ? `own agent account (${core.OWN_BW_DIR})` : `shared with your personal bw (run: ${BRAND.bin} setup)`}`); console.log(`bw version=${s.version ?? "missing (install @bitwarden/cli)"}${vaultwardenTooNew(s.version, s.serverUrl) ? " (bw 2026.9 and later cannot log in to Vaultwarden yet: npm i -g @bitwarden/cli@2026.8.0)" : ""}`); console.log(`bw server=${s.serverUrl ?? "unconfigured (run: bw config server <url>)"}`); console.log(`session=${s.status}`);
+      const s = await core.getStatus(); console.log(`bw login=${core.OWN_BW_LOGIN ? `own agent account (${core.OWN_BW_DIR})` : `shared with your personal bw (run: ${BRAND.bin} setup)`}`); console.log(`bw version=${s.version ?? "missing (install @bitwarden/cli)"}`); console.log(`bw server=${s.serverUrl ?? "unconfigured (run: bw config server <url>)"}`); console.log(`session=${s.status}`);
       const session = await core.readSession();
       if (session) console.log(`session expires=${session.expiresAt === null ? "never (unattended)" : new Date(session.expiresAt).toISOString()}`);
       const source = await core.storedMasterSource();

@@ -706,6 +706,45 @@ test("without a stored master password keyshroud asks, and the session ends afte
   await assert.rejects(stat(join(box.configDir, "session")));
 });
 
+test("bw 2026.9+ on an older Vaultwarden: a login that bw reports as failed but saved still works", async () => {
+  const box = await wired();
+  const own = join(box.configDir, "bw");
+  await mkdir(own, { recursive: true });
+  await writeFile(join(own, "fake-vault.json"), JSON.stringify({ status: "unauthenticated", registered: "agent@example.test", password: "agent-pw", session: "own-session", items: [] }));
+  const backfill = { FAKE_BW_BACKFILL_ERROR: "1" };
+  const wrong = await runCli(box, ["setup", "--email", "agent@example.test", "--registered"], "", { DISPLAY: ":0", FAKE_DIALOG_VALUE: "not-it", ...backfill });
+  assert.notEqual(wrong.code, 0, "a wrong password still fails");
+  const setup = await runCli(box, ["setup", "--email", "agent@example.test", "--registered"], "", { DISPLAY: ":0", FAKE_DIALOG_VALUE: "agent-pw", ...backfill });
+  assert.equal(setup.code, 0, setup.stderr);
+  assert.match(setup.stderr, /the login worked/);
+  assert.ok(!(setup.stdout + setup.stderr).includes("agent-pw"));
+  assert.match((await runCli(box, ["status"])).stdout, /status=unlocked/);
+
+  // Logged out again: the API key logs in by itself despite the same error.
+  const keychain = join(box.dir, "keychain");
+  await writeFile(join(keychain, `${BRAND.bin}-api-client-id`), "user.id\n");
+  await writeFile(join(keychain, `${BRAND.bin}-api-client-secret`), "api-secret\n");
+  await writeFile(join(keychain, `${BRAND.bin}-master-password`), "agent-pw\n");
+  await writeFile(join(own, "fake-vault.json"), JSON.stringify({ ...JSON.parse(await readFile(join(own, "fake-vault.json"), "utf8")), status: "unauthenticated" }));
+  await unlink(join(box.configDir, "session"));
+  const relogin = await runCli(box, ["status"], "", backfill);
+  assert.equal(relogin.code, 0, relogin.stderr);
+  assert.match(relogin.stdout, /status=unlocked/);
+});
+
+test("the first unlock after a bw upgrade fails its data migration; keyshroud tries once more", async () => {
+  const box = await wired();
+  const result = await runCli(box, ["unlock"], "", { FAKE_BW_MIGRATION_ERROR: "1" });
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal((await box.bwCalls()).filter((call) => call.startsWith("unlock")).length, 2);
+  assert.equal((await runCli(box, ["get", "GH_TOKEN"])).stdout, GH);
+  // The master-password refusal unlocks on trial too, and still recognises the password.
+  const fresh = await wired();
+  const refused = await runCli(fresh, ["add", "--env", "MP", "--item", "Master copy", "--stdin"], "master", { FAKE_BW_MIGRATION_ERROR: "1" });
+  assert.notEqual(refused.code, 0);
+  assert.ok(!(await fresh.vault()).items.some((entry) => entry.name === "Master copy"));
+});
+
 test("a logged-out bw says how to log in before anyone is asked for a password", async () => {
   const box = await wired();
   await unlink(join(box.dir, "keychain", "vaultwarden-master-password"));

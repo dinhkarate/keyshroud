@@ -114,6 +114,10 @@ function bwCommand(args: string[]): [string, string[], boolean] {
 // may talk to the server therefore run one at a time, across processes.
 const BW_SERVER_COMMANDS = new Set(["sync", "login", "unlock", "create", "edit", "delete", "logout"]);
 const BW_LOCK = join(CONFIG_DIR, "bw.lock");
+// A newer bw migrates an older bw's data on the first unlock. When the
+// migration's server call fails (bw 2026.9+ posts a user key id that
+// Vaultwarden rejects), that unlock fails and the next one works.
+const BW_MIGRATION_RE = /Encrypted Migrator|KeyIdBackfillError/;
 
 async function withBwLock<T>(fn: () => Promise<T>): Promise<T> {
   await mkdir(CONFIG_DIR, { recursive: true, mode: 0o700 });
@@ -134,7 +138,10 @@ async function withBwLock<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 function runFile(command: string, args: string[], options: Record<string, unknown> = {}, input?: string): Promise<ExecResult> {
-  if (command === "bw" && BW_SERVER_COMMANDS.has(args[0])) return withBwLock(() => execBw(args, options, input));
+  if (command === "bw" && BW_SERVER_COMMANDS.has(args[0])) return withBwLock(() => execBw(args, options, input).catch((error: Error) => {
+    if (args[0] !== "unlock" || !BW_MIGRATION_RE.test(error.message)) throw error;
+    return execBw(args, options, input);
+  }));
   return command === "bw" ? execBw(args, options, input) : execRun(command, args, options, input);
 }
 
@@ -384,6 +391,15 @@ export async function keychainPresence(): Promise<Record<string, boolean>> {
   return out;
 }
 
+// bw 2026.9+ logs in, then fails a follow-up call (POST
+// /api/accounts/key-management/user-key-id) that Vaultwarden before 1.37.4
+// answers with 404, and exits 1 although the login is saved. The vault works
+// as usual after that, so a failed login counts when bw is no longer logged out.
+async function loggedInAnyway(email?: string): Promise<boolean> {
+  const after = await rawStatus();
+  return (after.status === "locked" || after.status === "unlocked") && (!email || after.email?.toLowerCase() === email.toLowerCase());
+}
+
 async function rawStatus(session?: string): Promise<{ status: string; serverUrl: string | null; email: string | null }> {
   try {
     const parsed = JSON.parse(await bw(["status"], { session })) as { status?: unknown; serverUrl?: unknown; userEmail?: unknown };
@@ -527,7 +543,8 @@ async function ensureSessionInner(existing: string | undefined, opts: SessionOpt
     const clientId = await readKeychain(KEYCHAIN_CLIENT_ID_SERVICE);
     const clientSecret = await readKeychain(KEYCHAIN_CLIENT_SECRET_SERVICE);
     if (!clientId || !clientSecret) throw new Error(`bw is logged out: run \`${BRAND.bin} setup --email EMAIL --server URL --registered\` (agent account) or \`bw login\` in a terminal; with the API key in the keychain keyshroud logs in by itself (see \`doctor\`)`);
-    await runFile("bw", ["login", "--apikey"], { env: { ...process.env, BW_CLIENTID: clientId, BW_CLIENTSECRET: clientSecret }, timeout: 20000, maxBuffer: 4 * 1024 * 1024 });
+    await runFile("bw", ["login", "--apikey"], { env: { ...process.env, BW_CLIENTID: clientId, BW_CLIENTSECRET: clientSecret }, timeout: 20000, maxBuffer: 4 * 1024 * 1024 })
+      .catch(async (error: Error) => { if (!(await loggedInAnyway())) throw error; });
   }
   // A stored master password unlocks without asking; --unattended always asks.
   let master = opts.unattended ? null : await readMasterPassword();
@@ -660,7 +677,12 @@ export async function loginOwnAccount(email: string, master: string, unattended 
     child.stdout.on("data", (chunk: Buffer) => { out += chunk; });
     child.on("error", reject);
     child.on("exit", (exit) => { if (exit === 0 && out.trim()) resolve(out.trim()); else { process.stderr.write("\n"); reject(new Error("bw login failed")); } });
-  }));
+  })).catch(async (error: Error) => {
+    if (!(await loggedInAnyway(email))) throw error;
+    process.stderr.write(`${BRAND.bin}: the login worked; the error above is bw 2026.9+ calling an endpoint that Vaultwarden added in 1.37.4\n`);
+    return (await runFile("bw", ["unlock", "--passwordenv", "BW_PASSWORD", "--raw"], { env: { ...process.env, BW_PASSWORD: master }, timeout: 20000, maxBuffer: 4 * 1024 * 1024 })).stdout.trim();
+  });
+  if (!token) throw new Error("bw login returned no session");
   await writeSession(token, unattended);
   await writeMasterVerifier(master);
   try { await bw(["sync", "--quiet"], { session: token }); } catch {}

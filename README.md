@@ -112,7 +112,7 @@ there. It never enters the chat.
   and skip `bw config server` below (EU accounts: `bw config server https://vault.bitwarden.eu`).
 
 ```bash
-npm install -g keyshroud @bitwarden/cli@2026.8.0   # bw 2026.9+ cannot log in to Vaultwarden yet
+npm install -g keyshroud @bitwarden/cli
 
 # 1. Point bw at your server and log in once
 bw config server https://vault.example.com
@@ -424,9 +424,10 @@ over an SSH session with a terminal (`ssh -t`), Windows ends the lock timer when
 session closes, so that session ends on the next keyshroud call instead. There is no keychain
 support on Windows: keyshroud asks for the master password, and `migrate` cannot run there.
 
-**`bw login` fails with `KeyIdBackfillError`?** `bw` 2026.9 and later call an endpoint
-Vaultwarden does not have yet ([vaultwarden#7750](https://github.com/dani-garcia/vaultwarden/issues/7750)).
-Install `npm i -g @bitwarden/cli@2026.8.0` until Vaultwarden supports it; `doctor` warns about it.
+**`bw login` prints `KeyIdBackfillError`?** `bw` 2026.9 and later call an endpoint that Vaultwarden
+added in 1.37.4 ([vaultwarden#7750](https://github.com/dani-garcia/vaultwarden/issues/7750)). The login
+is saved anyway (`bw status` says `locked`), and `keyshroud setup` and the API-key login carry on by
+themselves. Update Vaultwarden to 1.37.4 or later to make the error go away.
 
 ## Security model
 
