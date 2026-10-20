@@ -108,16 +108,45 @@ function bwCommand(args: string[]): [string, string[], boolean] {
   return [command, resolved, Boolean(verbatim)];
 }
 
-function runFile(command: string, args: string[], options: Record<string, unknown> = {}, input?: string): Promise<ExecResult> {
-  // Without it a locked bw waits on a hidden master-password prompt nobody can answer.
-  if (command === "bw") {
-    options = { ...options, env: { ...((options.env as NodeJS.ProcessEnv | undefined) ?? process.env), BW_NOINTERACTION: "true" } };
-    try {
-      let verbatim: boolean;
-      [command, args, verbatim] = bwCommand(args);
-      options = { ...options, windowsVerbatimArguments: verbatim };
-    } catch (error) { return Promise.reject(error); }
+// bw keeps one refresh token per login in data.json, and Vaultwarden replaces it
+// on each refresh: two bw processes refreshing at once leave the slower one with
+// a rejected token, and bw then drops the login for every agent. Commands that
+// may talk to the server therefore run one at a time, across processes.
+const BW_SERVER_COMMANDS = new Set(["sync", "login", "unlock", "create", "edit", "delete", "logout"]);
+const BW_LOCK = join(CONFIG_DIR, "bw.lock");
+
+async function withBwLock<T>(fn: () => Promise<T>): Promise<T> {
+  await mkdir(CONFIG_DIR, { recursive: true, mode: 0o700 });
+  // bw calls time out after 20 s, so a lock older than a minute was left by a
+  // process that died; past the wait, run anyway rather than hang an agent.
+  const deadline = Date.now() + 60_000;
+  let held = false;
+  while (!held) {
+    try { await mkdir(BW_LOCK); held = true; } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      const age = await stat(BW_LOCK).then((info) => Date.now() - info.mtimeMs, () => 0);
+      if (age > 60_000) { await rm(BW_LOCK, { recursive: true, force: true }); continue; }
+      if (Date.now() > deadline) break;
+      await new Promise((resolve) => setTimeout(resolve, 100 + Math.random() * 100));
+    }
   }
+  try { return await fn(); } finally { if (held) await rm(BW_LOCK, { recursive: true, force: true }).catch(() => {}); }
+}
+
+function runFile(command: string, args: string[], options: Record<string, unknown> = {}, input?: string): Promise<ExecResult> {
+  if (command === "bw" && BW_SERVER_COMMANDS.has(args[0])) return withBwLock(() => execBw(args, options, input));
+  return command === "bw" ? execBw(args, options, input) : execRun(command, args, options, input);
+}
+
+function execBw(args: string[], options: Record<string, unknown>, input?: string): Promise<ExecResult> {
+  // Without it a locked bw waits on a hidden master-password prompt nobody can answer.
+  const env = { ...((options.env as NodeJS.ProcessEnv | undefined) ?? process.env), BW_NOINTERACTION: "true" };
+  let command: string, verbatim: boolean;
+  try { [command, args, verbatim] = bwCommand(args); } catch (error) { return Promise.reject(error); }
+  return execRun(command, args, { ...options, env, windowsVerbatimArguments: verbatim }, input);
+}
+
+function execRun(command: string, args: string[], options: Record<string, unknown>, input?: string): Promise<ExecResult> {
   return new Promise((resolve, reject) => {
     const child = execFile(command, args, options as never, (error, stdout, stderr) => {
       if (error) {
@@ -256,13 +285,25 @@ function vaultIndex(): Promise<VaultIndex> {
   return vaultPending;
 }
 
+// Why the last read of the vault failed, for "unresolved" messages.
+let lastVaultError: string | null = null;
+// " (reason)" for an unresolved-names message: the unlock error, else why the vault could not be read.
+export function unresolvedReason(sessionError: string): string {
+  const reason = sessionError || lastVaultError;
+  return reason ? ` (${reason})` : "";
+}
+function vaultErrorText(error: unknown): string {
+  const text = error instanceof Error ? error.message : String(error);
+  return DEAD_LOGIN_RE.test(text) ? DEAD_LOGIN : `bw could not read the vault: ${text.split("\n")[0].slice(0, 200)}`;
+}
+
 // Items created outside this process are not in the batched snapshot. A miss
 // falls back to one direct `bw get item` per TTL window, so new items
 // self-heal while deleted or renamed references stop spawning doomed lookups.
 async function lookupItem(itemName: string): Promise<VaultItem | null> {
   const key = normalizeItemName(itemName);
   let index: VaultIndex | null = null;
-  try { index = await vaultIndex(); } catch {}
+  try { index = await vaultIndex(); lastVaultError = null; } catch (error) { lastVaultError = vaultErrorText(error); }
   const hit = index?.byId.get(itemName) ?? index?.byName.get(key);
   if (hit === AMBIGUOUS) throw new Error(`Ambiguous vault item name: ${itemName}`);
   if (hit) return hit;
@@ -519,6 +560,11 @@ async function ensureSessionInner(existing: string | undefined, opts: SessionOpt
   return token;
 }
 
+// bw drops its login when the server rejects the refresh token; every agent
+// on this machine then needs a new login, so name it instead of "not found".
+const DEAD_LOGIN_RE = /invalid_grant|refresh token|not logged in|logged out|unauthori[sz]ed|\b401\b|invalid_token/i;
+const DEAD_LOGIN = `bw's login on this machine expired or was revoked by the server: run \`${BRAND.bin} setup --email EMAIL --server URL --registered\` (agent account) or \`bw login\` in a terminal`;
+
 // Ask the person at the keyboard: a masked prompt on a terminal, else a native
 // dialog. null when nobody can be asked (SSH without a terminal, no display).
 export async function askMasterPassword(opts: { email?: string; unattended?: boolean } = {}): Promise<string | null> {
@@ -607,14 +653,14 @@ export async function storeKeychainInteractive(service: string, label: string, c
 // `setup`: log keyshroud's own bw login in to the agent account. stdin and
 // stderr stay on the terminal so bw can ask for a two-step login code.
 export async function loginOwnAccount(email: string, master: string, unattended = false): Promise<string> {
-  const token = await new Promise<string>((resolve, reject) => {
+  const token = await withBwLock(() => new Promise<string>((resolve, reject) => {
     const [command, args, verbatim] = bwCommand(["login", email, "--passwordenv", "BW_PASSWORD", "--raw"]);
     const child = spawn(command, args, { env: { ...process.env, BW_PASSWORD: master }, stdio: ["inherit", "pipe", "inherit"], windowsVerbatimArguments: verbatim });
     let out = "";
     child.stdout.on("data", (chunk: Buffer) => { out += chunk; });
     child.on("error", reject);
     child.on("exit", (exit) => { if (exit === 0 && out.trim()) resolve(out.trim()); else { process.stderr.write("\n"); reject(new Error("bw login failed")); } });
-  });
+  }));
   await writeSession(token, unattended);
   await writeMasterVerifier(master);
   try { await bw(["sync", "--quiet"], { session: token }); } catch {}

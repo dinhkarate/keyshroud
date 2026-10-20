@@ -127,7 +127,7 @@ async function runCommand(args: string[]): Promise<void> {
   try { await core.ensureSession({ prompt: true }); } catch (error) { vaultError = error instanceof Error ? error.message : String(error); }
   const env = await core.resolveEntries(deduped);
   await core.audit("run", Object.keys(env.secrets), command);
-  if (env.missing.length) console.error(`${BRAND.bin}: unresolved (names only): ${env.missing.join(", ")}${vaultError ? ` (${vaultError})` : ""}`);
+  if (env.missing.length) console.error(`${BRAND.bin}: unresolved (names only): ${env.missing.join(", ")}${core.unresolvedReason(vaultError)}`);
 
   // Mask by default whenever output is not a human terminal (agents, CI, pipes).
   const mask = flags.includes("--mask") || (!flags.includes("--no-mask") && !process.stdout.isTTY);
@@ -163,7 +163,7 @@ async function inject(args: string[]): Promise<void> {
   await Promise.all(refs.map(async (raw) => {
     const ref = parseRef(raw);
     const value = ref ? await core.resolveRef(ref) : null;
-    if (value === null) throw new Error(`Secret reference unresolved: ${raw}${vaultError ? ` (${vaultError})` : ""}`);
+    if (value === null) throw new Error(`Secret reference unresolved: ${raw}${core.unresolvedReason(vaultError)}`);
     values.set(raw, value);
   }));
   await core.audit("inject", refs, output ?? "stdout");
@@ -471,7 +471,7 @@ async function main(): Promise<void> {
       let vaultError = "";
       try { await core.ensureSession({ prompt: true }); } catch (error) { vaultError = error instanceof Error ? error.message : String(error); }
       const value = ref ? await core.resolveRef(ref) : await authValue(args[0]);
-      if (value === null) fail(`Secret unresolved: ${args[0]}${vaultError ? ` (${vaultError})` : ""}`, 4);
+      if (value === null) fail(`Secret unresolved: ${args[0]}${core.unresolvedReason(vaultError)}`, 4);
       await core.audit("get", [args[0]], "cli");
       process.stdout.write(value); return;
     }

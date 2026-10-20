@@ -33,10 +33,22 @@ else if (cmd === "login") {
   if (state.registered !== sub || process.env.BW_PASSWORD !== state.password) die("Username or password is incorrect. Try again.");
   state.email = sub; state.status = "unlocked"; save(); out(session);
 }
-else if (cmd === "sync") out("");
+else if (cmd === "sync") {
+  // Like the real bw, a refresh token the server rejects ends the login.
+  if (process.env.FAKE_BW_SYNC_ERROR) { state.status = "unauthenticated"; save(); die(process.env.FAKE_BW_SYNC_ERROR); }
+  // A slow sync marks itself, so a test can see two syncs running at once.
+  const marker = `${vaultPath}.syncing`;
+  if (fs.existsSync(marker)) fs.writeFileSync(`${vaultPath}.overlap`, "");
+  fs.writeFileSync(marker, "");
+  const end = Date.now() + Number(process.env.FAKE_BW_SYNC_MS ?? 0);
+  while (Date.now() < end) {}
+  fs.rmSync(marker, { force: true });
+  out("");
+}
 else if (cmd === "lock") { state.status = "locked"; save(); out("Your vault is locked."); }
 // Like the real bw, a locked vault waits on a master-password prompt unless BW_NOINTERACTION is set.
 else if (!unlocked() && process.env.FAKE_BW_PROMPT && process.env.BW_NOINTERACTION !== "true") setInterval(() => {}, 1000);
+else if (state.status === "unauthenticated") die("You are not logged in.");
 else if (!unlocked()) die("Vault is locked.");
 else if (cmd === "list" && sub === "items") {
   const search = args[3] ?? "";
