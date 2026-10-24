@@ -5,6 +5,19 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.7.6] - 2026-10-24
+
+### Added
+- On a Mac, when bw has lost the agent account's login and the master password
+  is in the keychain, keyshroud asks for Touch ID (or the Mac's password) and
+  logs back in by itself. `setup` remembers the account's email and server in
+  `~/.config/keyshroud/account.json`, since bw forgets both on logout; `doctor`
+  shows whether a relogin is possible.
+
+### Fixed
+- `doctor` no longer takes minutes when bw is logged out: it says so for each
+  name instead of trying to resolve every one.
+
 ## [0.7.5] - 2026-10-20
 
 ### Fixed
