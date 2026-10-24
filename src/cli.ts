@@ -286,6 +286,7 @@ async function setupCommand(args: string[]): Promise<void> {
     if (fresh) await unlink(ownData).catch(() => {});
     throw error;
   }
+  await core.rememberAccount(email, server);
   console.log(`${BRAND.name} now keeps its own bw login in ${core.OWN_BW_DIR}; your personal bw login is untouched.`);
   await core.audit("setup", [], "cli");
   const minutes = Math.round(core.SESSION_TTL_MS / 60000);
@@ -567,6 +568,8 @@ async function main(): Promise<void> {
       if (session) console.log(`session expires=${session.expiresAt === null ? "never (unattended)" : new Date(session.expiresAt).toISOString()}`);
       const source = await core.storedMasterSource();
       console.log(`master password=${source === "keychain" ? `stored in the keychain (${core.KEYCHAIN_MASTER_SERVICE}): unlocks without asking` : source === "file" ? `stored in ${core.MASTER_PASSWORD_FILE}: any program running as you can read it` : `not stored (${BRAND.bin} asks for it)`}`);
+      const account = await core.readAccount();
+      console.log(`relogin after a logout=${account ? `${account.email} at ${account.server}${process.platform === "darwin" && source === "keychain" ? " (asks for Touch ID)" : " (needs the API key in the keychain)"}` : `account unknown (run: ${BRAND.bin} setup)`}`);
       const presence = Object.entries(await core.keychainPresence());
       const locked = presence.some(([, present]) => !present) && await core.keychainLocked();
       for (const [service, present] of presence) console.log(`keychain ${service}=${present ? "present" : locked ? "unknown (keyring locked)" : "missing"}`);

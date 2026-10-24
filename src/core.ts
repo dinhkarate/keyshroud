@@ -24,6 +24,8 @@ export const MASTER_PASSWORD_FILE = join(CONFIG_DIR, "master-password");
 export const MASTER_VERIFIER_FILE = join(CONFIG_DIR, "master-password.scrypt");
 export const REDACT_INDEX_FILE = join(CONFIG_DIR, "redact-index.json");
 export const AUDIT_FILE = join(CONFIG_DIR, "audit.jsonl");
+// The agent account's email and server: bw forgets both when it logs out.
+export const ACCOUNT_FILE = join(CONFIG_DIR, "account.json");
 
 // After `setup`, keyshroud keeps its own bw login (a dedicated agent account) in
 // CONFIG_DIR/bw, with its own keychain entries, so the user's personal bw login
@@ -400,6 +402,19 @@ async function loggedInAnyway(email?: string): Promise<boolean> {
   return (after.status === "locked" || after.status === "unlocked") && (!email || after.email?.toLowerCase() === email.toLowerCase());
 }
 
+export async function rememberAccount(email: string, server: string): Promise<void> {
+  const next = JSON.stringify({ email, server });
+  if ((await readFile(ACCOUNT_FILE, "utf8").catch(() => "")).trim() === next) return;
+  await writePrivateFile(ACCOUNT_FILE, `${next}\n`);
+}
+
+export async function readAccount(): Promise<{ email: string; server: string } | null> {
+  try {
+    const parsed = JSON.parse(await readFile(ACCOUNT_FILE, "utf8")) as { email?: unknown; server?: unknown };
+    return typeof parsed.email === "string" && typeof parsed.server === "string" && /^https:\/\//.test(parsed.server) ? { email: parsed.email, server: parsed.server } : null;
+  } catch { return null; }
+}
+
 async function rawStatus(session?: string): Promise<{ status: string; serverUrl: string | null; email: string | null }> {
   try {
     const parsed = JSON.parse(await bw(["status"], { session })) as { status?: unknown; serverUrl?: unknown; userEmail?: unknown };
@@ -537,14 +552,33 @@ async function ensureSessionInner(existing: string | undefined, opts: SessionOpt
     if (stored) return stored;
   }
 
-  // Logged out: log in first (API key), so nobody types a password for nothing.
+  // Logged out: log in first (API key, else the stored master password once
+  // Touch ID approves), so nobody types a password for nothing.
   const beforeLogin = await rawStatus();
   if (beforeLogin.status === "unauthenticated") {
+    const loggedOut = `bw is logged out: run \`${BRAND.bin} setup --email EMAIL --server URL --registered\` (agent account) or \`bw login\` in a terminal; with the API key in the keychain keyshroud logs in by itself, and on a Mac with the master password in the keychain it asks for Touch ID first (see \`doctor\`)`;
     const clientId = await readKeychain(KEYCHAIN_CLIENT_ID_SERVICE);
     const clientSecret = await readKeychain(KEYCHAIN_CLIENT_SECRET_SERVICE);
-    if (!clientId || !clientSecret) throw new Error(`bw is logged out: run \`${BRAND.bin} setup --email EMAIL --server URL --registered\` (agent account) or \`bw login\` in a terminal; with the API key in the keychain keyshroud logs in by itself (see \`doctor\`)`);
-    await runFile("bw", ["login", "--apikey"], { env: { ...process.env, BW_CLIENTID: clientId, BW_CLIENTSECRET: clientSecret }, timeout: 20000, maxBuffer: 4 * 1024 * 1024 })
-      .catch(async (error: Error) => { if (!(await loggedInAnyway())) throw error; });
+    if (clientId && clientSecret) {
+      await runFile("bw", ["login", "--apikey"], { env: { ...process.env, BW_CLIENTID: clientId, BW_CLIENTSECRET: clientSecret }, timeout: 20000, maxBuffer: 4 * 1024 * 1024 })
+        .catch(async (error: Error) => { if (!(await loggedInAnyway())) throw error; });
+    } else {
+      const account = OWN_BW_LOGIN && !opts.unattended ? await readAccount() : null;
+      const master = account ? await readMasterPassword() : null;
+      if (!account || !master) throw new Error(loggedOut);
+      try { await approveWithTouchId(`log ${account.email} back in to the vault`); } catch (error) {
+        if (!(error instanceof Error && error.message === DIALOG_BUSY)) throw new Error(`Touch ID was not approved; ${loggedOut}`);
+        // Another process is asking already: use the login it makes.
+        const token = await waitForSession();
+        if (token) return token;
+        throw new Error(loggedOut);
+      }
+      await runFile("bw", ["config", "server", account.server], { timeout: 20000, maxBuffer: 1024 * 1024 });
+      await runFile("bw", ["login", account.email, "--passwordenv", "BW_PASSWORD", "--raw"], { env: { ...process.env, BW_PASSWORD: master }, timeout: 20000, maxBuffer: 4 * 1024 * 1024 })
+        .catch(async (error: Error) => { if (!(await loggedInAnyway(account.email))) throw error; });
+    }
+  } else if (OWN_BW_LOGIN && beforeLogin.email && beforeLogin.serverUrl) {
+    await rememberAccount(beforeLogin.email, beforeLogin.serverUrl).catch(() => {});
   }
   // A stored master password unlocks without asking; --unattended always asks.
   let master = opts.unattended ? null : await readMasterPassword();
@@ -1041,6 +1075,27 @@ const DIALOG_LOCK = join(CONFIG_DIR, "dialog.lock");
 const DIALOG_COOLDOWN_MS = 30_000;
 const DIALOG_TIMEOUT_MS = 300_000;
 const DIALOG_BUSY = "Another keyshroud dialog is already open";
+
+// macOS asks the person at the Mac with Touch ID (or the Mac's password). The
+// reason reaches the script as data (argv). One prompt at a time, as dialogs.
+const TOUCH_ID_SCRIPT = [
+  "function run(argv) {",
+  "  ObjC.import('LocalAuthentication');",
+  "  let result = null;",
+  "  $.LAContext.alloc.init.evaluatePolicyLocalizedReasonReply(2, argv[0], (ok) => { result = ok ? 'ok' : 'denied'; });",
+  `  const until = Date.now() + ${DIALOG_TIMEOUT_MS};`,
+  "  while (result === null && Date.now() < until) $.NSRunLoop.currentRunLoop.runUntilDate($.NSDate.dateWithTimeIntervalSinceNow(0.2));",
+  "  return result ?? 'timeout';",
+  "}",
+].join("\n");
+
+async function approveWithTouchId(reason: string): Promise<void> {
+  if (process.platform !== "darwin" || process.env.SSH_CONNECTION || process.env.SSH_TTY) throw new Error("Cancelled");
+  await withDialogLock(async () => {
+    const result = await runFile("osascript", ["-l", "JavaScript", "-e", TOUCH_ID_SCRIPT, "--", reason], { timeout: DIALOG_TIMEOUT_MS + 10_000, maxBuffer: 1024 * 1024 }).catch(() => null);
+    if (result?.stdout.trim() !== "ok") throw new Error("Cancelled");
+  });
+}
 
 export async function readSecretFromDialog(opts: { itemName: string; envName?: string }): Promise<string | null> {
   if (process.env.SSH_CONNECTION || process.env.SSH_TTY) return null;
