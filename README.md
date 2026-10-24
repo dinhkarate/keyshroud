@@ -171,6 +171,8 @@ keyshroud migrate --yes                          # copy them; references keep wo
   anything the agent can read. `--confirm-unlock` and `--unattended` need a terminal.
 - `--confirm-unlock` (macOS) stores the master password in the keychain entry
   `keyshroud-master-password` so that macOS asks you before every read, i.e. every unlock.
+- If bw loses the login (a rejected refresh token logs it out), keyshroud on a Mac with the
+  master password in the keychain asks for Touch ID and logs the agent account back in.
 - `--unattended` (hosts nobody sits at, e.g. over `ssh -t`) logs in with a session without an
   end. Unlock it again with `keyshroud unlock --unattended`.
 - Self-hosted Vaultwarden with `SIGNUPS_ALLOWED=false`: invite the address from the admin page

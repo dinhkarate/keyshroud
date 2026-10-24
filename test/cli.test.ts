@@ -732,6 +732,42 @@ test("bw 2026.9+ on an older Vaultwarden: a login that bw reports as failed but 
   assert.match(relogin.stdout, /status=unlocked/);
 });
 
+test("logged out on a Mac: Touch ID approves logging the agent account back in with the stored master password", { skip: process.platform !== "darwin" }, async () => {
+  const box = await wired();
+  const own = join(box.configDir, "bw");
+  await mkdir(own, { recursive: true });
+  await writeFile(join(own, "fake-vault.json"), JSON.stringify({ status: "unauthenticated", registered: "agent@example.test", password: "agent-pw", session: "own-session", items: [] }));
+  const setup = await runCli(box, ["setup", "--email", "agent@example.test", "--server", "https://vault.agent.test", "--registered"], "", { FAKE_DIALOG_VALUE: "agent-pw" });
+  assert.equal(setup.code, 0, setup.stderr);
+  assert.deepEqual(JSON.parse(await readFile(join(box.configDir, "account.json"), "utf8")), { email: "agent@example.test", server: "https://vault.agent.test" });
+
+  // bw forgets the server and email when it logs out.
+  const keychain = join(box.dir, "keychain");
+  await writeFile(join(keychain, `${BRAND.bin}-master-password`), "agent-pw\n");
+  const logOut = async () => {
+    const { email: _email, server: _server, ...rest } = JSON.parse(await readFile(join(own, "fake-vault.json"), "utf8"));
+    await writeFile(join(own, "fake-vault.json"), JSON.stringify({ ...rest, status: "unauthenticated" }));
+    await unlink(join(box.configDir, "session")).catch(() => {});
+  };
+  await logOut();
+  const log = join(box.dir, "dialog.log");
+  const relogin = await runCli(box, ["status"], "", { FAKE_DIALOG_VALUE: "ok", FAKE_DIALOG_LOG: log });
+  assert.equal(relogin.code, 0, relogin.stderr);
+  assert.match(relogin.stdout, /status=unlocked/);
+  assert.match(await readFile(log, "utf8"), /^osascript\|\|-l JavaScript [\s\S]*LocalAuthentication[\s\S]* -- log agent@example\.test back in to the vault$/m);
+  const calls = await box.bwCalls();
+  assert.ok(calls.includes("[own] config server https://vault.agent.test"));
+  assert.ok(calls.includes("[own] login agent@example.test --passwordenv BW_PASSWORD --raw"));
+  assert.ok(!(relogin.stdout + relogin.stderr + calls.join("\n")).includes("agent-pw"));
+
+  // Refused: bw stays logged out and says so.
+  await logOut();
+  const refused = await runCli(box, ["unlock"], "", { FAKE_DIALOG_CANCEL: "1" });
+  assert.notEqual(refused.code, 0);
+  assert.match(refused.stderr, /Touch ID was not approved; bw is logged out/);
+  assert.equal(((await box.bwCalls()).filter((call) => call.startsWith("[own] login")).length), 2, "no login after a refusal");
+});
+
 test("the first unlock after a bw upgrade fails its data migration; keyshroud tries once more", async () => {
   const box = await wired();
   const result = await runCli(box, ["unlock"], "", { FAKE_BW_MIGRATION_ERROR: "1" });
