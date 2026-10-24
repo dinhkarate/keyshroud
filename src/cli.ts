@@ -574,7 +574,9 @@ async function main(): Promise<void> {
       const locked = presence.some(([, present]) => !present) && await core.keychainLocked();
       for (const [service, present] of presence) console.log(`keychain ${service}=${present ? "present" : locked ? "unknown (keyring locked)" : "missing"}`);
       if (locked) console.log(`keyring=locked: ${core.KEYRING_LOCKED}`);
-      for (const path of [targetPaths.omp, targetPaths.pi]) for (const name of Object.keys(await core.readAuthEntries(path))) console.log(`${path} ${name} resolved=${(await authValue(name)) ? "yes" : "no"}`);
+      // Logged out, every name would spawn a get that fails slowly: say why once instead.
+      const loggedOut = s.status === "unauthenticated" || s.status === "unavailable";
+      for (const path of [targetPaths.omp, targetPaths.pi]) for (const name of Object.keys(await core.readAuthEntries(path))) console.log(`${path} ${name} resolved=${loggedOut ? `unknown (bw is ${s.status})` : (await authValue(name)) ? "yes" : "no"}`);
       console.log(`redact index=${(await core.readRedactIndex()) ? "present" : "missing"}`);
       const settings = JSON.parse(await readFile(join(homedir(), ".claude", "settings.json"), "utf8").catch(() => "{}")) as Record<string, unknown>;
       console.log(`apiKeyHelper wired=${settings.apiKeyHelper ? "yes" : "no"}`); if (s.status !== "unlocked") process.exitCode = 3; return;

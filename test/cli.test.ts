@@ -792,6 +792,16 @@ test("a logged-out bw says how to log in before anyone is asked for a password",
   await assert.rejects(stat(log), "no dialog was opened");
 });
 
+test("doctor on a logged-out bw says so for each name instead of trying every one", async () => {
+  const box = await wired();
+  await writeFile(box.env.FAKE_BW_VAULT, JSON.stringify({ ...(await box.vault()), status: "unauthenticated" }));
+  const doctor = await runCli(box, ["doctor"]);
+  assert.equal(doctor.code, 3);
+  assert.match(doctor.stdout, /resolved=unknown \(bw is unauthenticated\)/);
+  assert.doesNotMatch(doctor.stdout, /resolved=(yes|no)/);
+  assert.ok(!(await box.bwCalls()).some((call) => /^(get|list|login|unlock)/.test(call)), "no secret lookups or logins");
+});
+
 test("the lock timer ends a session even when nothing calls keyshroud", { skip: process.platform === "win32" }, async () => {
   const box = await wired();
   const timer = { [`${BRAND.envPrefix}_LOCK_TIMER`]: "1", [`${BRAND.envPrefix}_SESSION_TTL_MS`]: "1000" };
