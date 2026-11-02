@@ -1,6 +1,6 @@
 {
   "name": "keyshroud",
-  "description": "Let Claude Code use secrets from self-hosted Vaultwarden without ever seeing them. Requires `npm i -g keyshroud`.",
+  "description": "Let Claude Code use secrets from an encrypted local vault or self-hosted Vaultwarden without ever seeing them. Requires `npm i -g keyshroud`.",
   "version": "0.7.6",
   "author": { "name": "dinhkarate" },
   "homepage": "https://keyshroud.dev",

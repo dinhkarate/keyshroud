@@ -2,7 +2,8 @@
 
 You are an AI coding agent. The user asked you to set up keyshroud: it lets you
 run commands that need API keys while every secret value reaches you only as
-`<redacted:NAME>`. Secrets live in the user's own Vaultwarden or Bitwarden vault.
+`<redacted:NAME>`. Secrets live in an encrypted vault on the user's machine, or
+in their own Vaultwarden or Bitwarden vault.
 
 Work through the steps in order. Run the commands yourself unless a step says
 the **user** must run it. Report each result in one line.
@@ -10,18 +11,18 @@ the **user** must run it. Report each result in one line.
 ## Rules for the whole session
 
 - Never ask the user to paste a secret, token, or password into the chat.
-- Never handle the vault master password. Never read it from the keychain and
-  never put it in a command argument, file, or environment variable.
+- Never handle a vault master password or passphrase. Never read one, or the
+  local vault's key, from the keychain, and never put one in a command
+  argument, file, or environment variable.
 - Never run `keyshroud get`, `bw get`, `bw unlock`, or `bw list` yourself. They
-  print values or unlock the vault outside keyshroud's masking.
+  print values or unlock a vault outside keyshroud's masking.
 - Never print, echo, or log a secret value. Use names (`GH_TOKEN`) and
-  references (`bw://GitHub token`) only.
+  references (`local://GitHub token`) only.
 
 ## 1. Check prerequisites
 
 ```bash
 node --version          # needs v22.18 or newer
-command -v bw || echo "bw missing"
 ```
 
 If Node.js is older than 22.18, stop and tell the user to upgrade it.
@@ -29,14 +30,15 @@ If Node.js is older than 22.18, stop and tell the user to upgrade it.
 ## 2. Install the CLI
 
 ```bash
-npm install -g keyshroud @bitwarden/cli
+npm install -g keyshroud
 keyshroud --version
+keyshroud status
 ```
 
-Any `bw` release from 2025.6 on works (older ones cannot save items on Vaultwarden 1.37.4), and on
-macOS `brew install bitwarden-cli` does too. With `bw` 2026.9 or
-later and Vaultwarden before 1.37.4, `bw login` prints `KeyIdBackfillError` but saves the login;
-keyshroud carries on, and Vaultwarden 1.37.4 makes the error go away.
+`status` prints `backend=local …` on a machine that has never used keyshroud with
+Vaultwarden: secrets go to the local vault, and there is nothing else to set up.
+A line starting with `server=` means this machine already uses Vaultwarden or
+Bitwarden; keep it that way.
 
 ## 3. Connect your agent
 
@@ -67,27 +69,42 @@ If you do use MCP from non-interactive `codex exec`, also allow the tool in `~/.
 approval_mode = "approve"
 ```
 
-## 4. Connect the vault (the user does this)
+## 4. Where the secrets live
 
-These commands handle the master password, so the **user** runs them in their
-own terminal window, not through you. Ask which vault they use, then give them
-the matching block.
+**The local vault (default).** The first `keyshroud add` creates it, with its key in the
+macOS keychain, the Linux Secret Service or Windows DPAPI. Nothing to do now.
 
-No vault yet? Point them to https://bitwarden.com (free account) or the
-self-hosting guide: https://github.com/dinhkarate/keyshroud/tree/main/examples/vaultwarden#readme
+On a Linux machine without a desktop keyring (a server, a container, an SSH session) or
+without systemd, the vault is protected by a passphrase instead, and `keyshroud add` from your shell exits with
+code 3 and asks for `keyshroud unlock`. The **user** runs that in their own terminal: it
+asks for a new passphrase twice and creates the vault. Never type or relay the passphrase.
+
+**Several machines: Vaultwarden or Bitwarden.** Only if the user wants the same secrets on
+several machines. These commands handle the master password, so the **user** runs them in
+their own terminal window, not through you:
 
 ```bash
+npm install -g @bitwarden/cli
+
 # Self-hosted Vaultwarden only (skip for bitwarden.com; EU cloud: https://vault.bitwarden.eu)
 bw config server https://vault.example.com
 
 bw login
 
+# New items go to Vaultwarden from now on (local:// items keep working)
+mkdir -p ~/.config/keyshroud && echo bw > ~/.config/keyshroud/backend
+
 # Unlock for 30 minutes (asks for the master password; keyshroud does not store it)
 keyshroud unlock
 ```
 
-Later, when a session has ended, a command that needs a secret opens a dialog on
-the user's desktop and waits; over SSH it says to run `keyshroud unlock`.
+No server yet? Point them to https://bitwarden.com (free account) or the self-hosting guide:
+https://github.com/dinhkarate/keyshroud/tree/main/examples/vaultwarden#readme. Any `bw` release
+from 2025.6 on works; with `bw` 2026.9 or later and Vaultwarden before 1.37.4, `bw login` prints
+`KeyIdBackfillError` but saves the login.
+
+Later, when a session has ended (Vaultwarden, or a passphrase vault), a command that needs a
+secret opens a dialog on the user's desktop and waits; over SSH it says to run `keyshroud unlock`.
 
 Wait until the user says they are done.
 
@@ -98,7 +115,7 @@ keyshroud doctor
 ```
 
 `doctor` prints names and status only. If it reports something missing, tell
-the user which line failed and what to run. Do not try to fix vault login
+the user which line failed and what to run. Do not try to fix a vault login
 yourself.
 
 ## 6. Add and use secrets
@@ -108,7 +125,7 @@ yourself.
   hidden-input dialog on the user's desktop; the user pastes the value there.
 - **Move an existing `.env` into the vault:** `keyshroud import` shows a dry
   run with names only; `keyshroud import --yes` stores the values and writes a
-  commit-safe `.env.refs` file of `bw://` references.
+  commit-safe `.env.refs` file of `local://` (or `bw://`) references.
 - **Run a command that needs secrets:** `keyshroud run -- <command>` (or the
   `secrets_run` MCP tool). Values are injected into the command's environment
   and masked as `<redacted:NAME>` in its output, even when it fails.
@@ -117,8 +134,8 @@ yourself.
 ## 7. Finish
 
 Tell the user, in two or three lines: which agent integration you installed,
-what `doctor` reported, and that from now on secret-using commands go through
-`keyshroud run`.
+where the secrets live (`keyshroud status`), what `doctor` reported, and that from
+now on secret-using commands go through `keyshroud run`.
 
 Docs: https://github.com/dinhkarate/keyshroud#readme · Security model:
 https://github.com/dinhkarate/keyshroud#security-model

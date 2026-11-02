@@ -1,12 +1,13 @@
 ---
 name: keyshroud
-description: Use secrets (API keys, tokens, passwords) from the user's self-hosted Vaultwarden/Bitwarden without ever seeing their values. Use whenever a command needs a credential, the user mentions a token/API key/.env, asks to store or rotate a secret, or output might contain a secret.
+description: Use secrets (API keys, tokens, passwords) from the user's keyshroud vault (an encrypted local vault, or their Vaultwarden/Bitwarden) without ever seeing their values. Use whenever a command needs a credential, the user mentions a token/API key/.env, asks to store or rotate a secret, or output might contain a secret.
 ---
 
 # keyshroud
 
-The user's secrets live in Vaultwarden. You work with **names and references**,
-never values. keyshroud injects values into child processes and replaces them
+The user's secrets live in keyshroud's encrypted local vault, or in their
+Vaultwarden/Bitwarden (`keyshroud status` says which). You work with **names and
+references**, never values. keyshroud injects values into child processes and replaces them
 in output with `<redacted:NAME>`.
 
 ## Rules
@@ -19,7 +20,7 @@ in output with `<redacted:NAME>`.
    ```
    Tell the user a dialog is waiting for them, and ask for one secret at a time;
    if they cancel, do not ask again unprompted. Never ask for the vault master
-   password. With the MCP server, call `secrets_request` instead. Over SSH or without a display there is no dialog:
+   password or passphrase. With the MCP server, call `secrets_request` instead. Over SSH or without a display there is no dialog:
    then give the user the command to run in their own terminal.
 2. Never print, echo, `cat`, base64, or otherwise transform a secret value.
    `<redacted:NAME>` in output means the secret was used correctly. Do not try
@@ -52,19 +53,20 @@ masked automatically when not attached to a terminal. MCP: `secrets_run`.
 ## References (safe to commit)
 
 ```
-bw://<item>                 login password
+local://<item>              value in the local vault (also: /notes, /id)
+bw://<item>                 Vaultwarden login password
 bw://<item>/username        also: notes, totp, uri, id
 bw://<item>/fields/<name>   custom field
 ```
-Percent-encode `/` in item names (`bw://a%2Fb`). A project's `.env.refs`:
+Percent-encode `/` in item names (`local://a%2Fb`). A project's `.env.refs`:
 ```dotenv
+GH_TOKEN=local://GitHub CLI token
 DATABASE_URL=bw://Prod DB/fields/url
-GH_TOKEN=bw://GitHub CLI token
 LOG_LEVEL=debug
 ```
 
 Config files that cannot read env vars: `keyshroud inject -i config.tpl -o config`
-renders `{{ bw://item/field }}` placeholders into a 0600 file. Add the output to
+renders `{{ local://item }}` and `{{ bw://item/field }}` placeholders into a 0600 file. Add the output to
 `.gitignore`.
 
 ## Before committing
@@ -80,9 +82,10 @@ keyshroud scan .          # exits 1 and lists file:line NAME for any leaked valu
 overwrite existing state.
 
 When the vault is locked, a command waits while a dialog on the user's desktop
-asks for the master password. Never ask for it in chat and never retry in a loop
-after a cancel.
+asks for the master password or passphrase. Never ask for it in chat and never
+retry in a loop after a cancel. A local vault that needs a passphrase and does
+not exist yet is created by the user in a terminal (`keyshroud unlock`).
 
-`migrate` is for the user: it needs the personal vault. You may start `setup --email`;
+`migrate` is for Vaultwarden users: it needs the personal vault. You may start `setup --email`;
 the user picks the agent account's password on the signup page, never through you. If an item
 is missing after `setup`, ask the user to run `keyshroud migrate --item "NAME"`.

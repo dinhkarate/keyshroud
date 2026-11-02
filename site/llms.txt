@@ -1,17 +1,17 @@
 # keyshroud
 
-> keyshroud lets AI coding agents (Claude Code, Codex, Cursor, Cline, OpenCode, Gemini CLI, pi, omp) run commands that need API keys without ever seeing the values. Secrets stay in the user's own Vaultwarden or Bitwarden vault; keyshroud injects them into the command's environment and replaces every value in the output with `<redacted:NAME>` before the model reads it. Free, MIT-licensed, local-only, no telemetry.
+> keyshroud lets AI coding agents (Claude Code, Codex, Cursor, Cline, OpenCode, Gemini CLI, pi, omp) run commands that need API keys without ever seeing the values. Secrets stay in an encrypted vault on the user's machine (or their own Vaultwarden or Bitwarden vault, for several machines); keyshroud injects them into the command's environment and replaces every value in the output with `<redacted:NAME>` before the model reads it. Free, MIT-licensed, no account, no telemetry.
 
-To install it for a user, follow https://keyshroud.dev/install.md step by step. It is written for agents: what to run yourself, what the user must run (vault login and master password), and the rules for handling secrets.
+To install it for a user, follow https://keyshroud.dev/install.md step by step. It is written for agents: what to run yourself, what the user must run (passwords and vault login), and the rules for handling secrets.
 
 Key facts for agents:
 
 - Run secret-using commands as `keyshroud run -- <command>`. Output is masked even when the command fails. Agents with a shell use the CLI; the `secrets_run` MCP tool is for clients without one.
 - Never ask the user to paste a secret into chat. To store one, run `keyshroud add --env NAME --item "Item"` or call `secrets_request`; the user types the value into a hidden-input dialog or terminal prompt.
-- Never run `keyshroud get`, `bw get`, or `bw unlock`, and never read the vault master password from the keychain.
-- Projects commit `.env.refs` files with references like `GH_TOKEN=bw://GitHub token`; `keyshroud import` converts an existing `.env` (names-only dry run by default).
+- Never run `keyshroud get`, `bw get`, or `bw unlock`, and never read a vault password, passphrase or key from the keychain.
+- Projects commit `.env.refs` files with references like `GH_TOKEN=local://GitHub token` (or `bw://…` for Vaultwarden); `keyshroud import` converts an existing `.env` (names-only dry run by default).
 - MCP server (for clients without a shell): `keyshroud mcp` (stdio). Tools: `secrets_run`, `secrets_list`, `secrets_request`, `vault_status`. None returns a secret value.
-- Requirements: Node.js 22.18+, the Bitwarden CLI (`bw`), and a Vaultwarden or Bitwarden account.
+- Requirements: Node.js 22.18+. The first `keyshroud add` creates the local vault (key in the macOS keychain, Linux Secret Service or Windows DPAPI; a passphrase where none works). Vaultwarden or Bitwarden is optional, through the Bitwarden CLI (`bw`).
 
 ## Docs
 
@@ -23,7 +23,8 @@ Key facts for agents:
 - [MCP clients without a shell](https://github.com/dinhkarate/keyshroud#mcp-clients-without-a-shell): Claude Desktop and chat-only clients
 - [CLI reference](https://github.com/dinhkarate/keyshroud#cli-reference)
 - [Security model](https://github.com/dinhkarate/keyshroud#security-model): what keyshroud does and does not protect against
-- [Vault setup](https://github.com/dinhkarate/keyshroud/tree/main/examples/vaultwarden#readme): self-host Vaultwarden or use Bitwarden cloud
+- [Local vault](https://github.com/dinhkarate/keyshroud#the-local-vault): where the key lives on each OS
+- [Sync with Vaultwarden](https://github.com/dinhkarate/keyshroud#sync-across-machines-vaultwarden-or-bitwarden): self-host Vaultwarden or use Bitwarden cloud for several machines
 
 ## Optional
 

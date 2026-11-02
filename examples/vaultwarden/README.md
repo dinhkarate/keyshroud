@@ -4,6 +4,10 @@ This folder runs [Vaultwarden](https://github.com/dani-garcia/vaultwarden), a li
 Bitwarden-compatible server, behind [Caddy](https://caddyserver.com) with automatic HTTPS.
 It fits on a $5 VPS or a Raspberry Pi. Then it connects the Bitwarden CLI (`bw`) and keyshroud to it.
 
+keyshroud does not need a server: by default it keeps secrets in an encrypted vault on your
+machine. Use this guide when the same secrets should reach several machines, or to keep them on a
+server you control.
+
 Don't want to run a server? A free [Bitwarden](https://bitwarden.com) cloud account works the
 same way — skip to [step 3](#3-install-and-connect-the-cli).
 
@@ -50,7 +54,11 @@ On the machine where your agents run (your laptop, a dev box):
 npm install -g @bitwarden/cli keyshroud
 bw config server https://vault.example.com  # Bitwarden cloud: skip this (EU: https://vault.bitwarden.eu)
 bw login                                    # once, interactively: email + master password (+ 2FA)
+mkdir -p ~/.config/keyshroud && echo bw > ~/.config/keyshroud/backend   # new items go to Vaultwarden
 ```
+
+The last line makes Vaultwarden the default for new items; items already in the local vault keep
+resolving through their `local://` references.
 
 ## 4. Unlock
 

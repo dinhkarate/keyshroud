@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>keyshroud — Hide API keys from Claude Code, Codex &amp; Cursor | Vaultwarden secrets for AI agents</title>
-<meta name="description" content="Let AI coding agents use your API keys without ever seeing them. Self-hosted Vaultwarden/Bitwarden, masked output, MCP server, Claude Code and pi plugins. Free and MIT-licensed.">
+<title>keyshroud — Hide API keys from Claude Code, Codex &amp; Cursor | Encrypted local secrets for AI agents</title>
+<meta name="description" content="Let AI coding agents use your API keys without ever seeing them. An encrypted vault on your machine (or your self-hosted Vaultwarden/Bitwarden), masked output, MCP server, Claude Code and pi plugins. Free and MIT-licensed.">
 <meta property="og:title" content="keyshroud">
 <meta property="og:description" content="Your agents use the keys. They never see them.">
 <meta property="og:url" content="https://keyshroud.dev">
@@ -19,10 +19,10 @@
   "@context": "https://schema.org",
   "@type": "SoftwareApplication",
   "name": "keyshroud",
-  "description": "Let AI coding agents use your API keys without ever seeing them. Self-hosted Vaultwarden/Bitwarden, masked output, MCP server, Claude Code and pi plugins.",
+  "description": "Let AI coding agents use your API keys without ever seeing them. An encrypted vault on your machine (or your self-hosted Vaultwarden/Bitwarden), masked output, MCP server, Claude Code and pi plugins.",
   "url": "https://keyshroud.dev/",
   "applicationCategory": "DeveloperApplication",
-  "operatingSystem": "macOS, Linux",
+  "operatingSystem": "macOS, Linux, Windows",
   "softwareVersion": "0.7.6",
   "license": "https://opensource.org/licenses/MIT",
   "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
@@ -143,6 +143,8 @@ h2 { font-size: 28px; letter-spacing: -0.02em; margin: 0 0 8px; }
 @media (min-width: 760px) { .threat { grid-template-columns: 1fr 1fr; } }
 .threat ul { margin: 0; padding-left: 20px; color: var(--muted); }
 .threat li { margin: 6px 0; }
+.demo video { display: block; width: 100%; height: auto; aspect-ratio: 1120 / 540; background: var(--term-bg); border-radius: 12px; border: 1px solid #23262e; box-shadow: 0 20px 50px -20px rgba(0,0,0,.45); }
+.demo p { color: var(--muted); font-size: 14px; margin: 12px 0 0; }
 footer { padding: 32px 0 48px; border-top: 1px solid var(--line); color: var(--muted); font-size: 14px; display: flex; flex-wrap: wrap; gap: 8px 24px; justify-content: space-between; }
 footer a { color: var(--muted); }
 @media (max-width: 480px) { nav a.hide-sm { display: none; } }
@@ -169,23 +171,23 @@ footer a { color: var(--muted); }
   <div class="hero">
     <div>
       <h1>Your agents use the keys. They never see them.</h1>
-      <p class="lede">keyshroud keeps API keys in your self-hosted Vaultwarden and injects them into the commands your AI coding agent runs. Any secret value that shows up in tool output is replaced with <code>&lt;redacted:NAME&gt;</code> before the model reads it.</p>
+      <p class="lede">keyshroud keeps API keys in an encrypted vault on your machine (or your own Vaultwarden) and injects them into the commands your AI coding agent runs. Any secret value that shows up in tool output is replaced with <code>&lt;redacted:NAME&gt;</code> before the model reads it.</p>
       <div class="cta">
         <a class="btn primary" href="#quickstart">Get started</a>
         <a class="btn" href="https://github.com/dinhkarate/keyshroud">Star on GitHub</a>
       </div>
-      <p class="install">Free, MIT-licensed, local-only &middot; <code>npm i -g keyshroud</code></p>
+      <p class="install">Free, MIT-licensed, no account &middot; <code>npm i -g keyshroud</code></p>
     </div>
     <div class="term" role="img" aria-label="Terminal demo: an agent prints a token and sees a redacted placeholder">
       <div class="term-bar"><i></i><i></i><i></i></div>
-<pre><span class="line l1"><span class="d"># inside Claude Code or pi, the agent tries to read a key</span></span>
-<span class="line l2"><span class="p">$</span> echo $GH_TOKEN</span>
-<span class="line l3"><span class="r">&lt;redacted:GH_TOKEN&gt;</span></span>
-<span class="line l4"> </span>
-<span class="line l5"><span class="d"># ...but the key still works</span></span>
+<pre><span class="line l1"><span class="p">$</span> keyshroud add --env GH_TOKEN --item "GitHub token"</span>
+<span class="line l2">Paste secret for GH_TOKEN: <span class="d">********************</span></span>
+<span class="line l3"><span class="d"># inside Claude Code or pi, the agent tries to read it</span></span>
+<span class="line l4"><span class="p">$</span> echo $GH_TOKEN</span>
+<span class="line l5"><span class="r">&lt;redacted:GH_TOKEN&gt;</span></span>
 <span class="line l6"><span class="p">$</span> keyshroud run -- gh api user -q .login</span>
 <span class="line l7">dinhkarate</span>
-<span class="line l8"><span class="d"># the model saw the name, never the value</span></span></pre>
+<span class="line l8"><span class="d"># the key worked; the model saw only its name</span></span></pre>
     </div>
   </div>
 </div>
@@ -193,18 +195,18 @@ footer a { color: var(--muted); }
 <section id="quickstart">
   <div class="wrap">
     <h2>Up and running in three steps</h2>
-    <p class="sub">You need Node.js 22.18+, the Bitwarden CLI (<code>bw</code>), and a Vaultwarden or Bitwarden account.</p>
+    <p class="sub">You need Node.js 22.18+. No account, no server: the first secret creates an encrypted vault on your machine.</p>
     <div class="steps">
       <div class="step">
         <h3>Install</h3>
-        <pre><code>npm i -g keyshroud @bitwarden/cli</code></pre>
+        <pre><code>npm i -g keyshroud</code></pre>
         <p>One CLI that agents call from their shell, plus plugins for Claude Code and pi. An MCP server covers clients without a shell.</p>
       </div>
       <div class="step">
-        <h3>Point at your vault</h3>
-        <pre><code>bw config server https://vault.example.com
-keyshroud doctor</code></pre>
-        <p>keyshroud asks for the master password when the vault is locked and does not store it; a session ends after 30 minutes. <code>doctor</code> reports what is missing. No vault yet? <a href="https://github.com/dinhkarate/keyshroud/tree/main/examples/vaultwarden#readme">Self-host Vaultwarden</a> or use a free Bitwarden account.</p>
+        <h3>Store a secret</h3>
+        <pre><code>keyshroud add --env GH_TOKEN \
+  --item "GitHub token"</code></pre>
+        <p>Typed into a masked prompt, or a dialog when an agent starts it. The vault&#8217;s key goes to the macOS keychain, the Linux Secret Service or Windows DPAPI. Already have a <code>.env</code>? <code>keyshroud import</code> moves it.</p>
       </div>
       <div class="step">
         <h3>Run your agent</h3>
@@ -212,9 +214,10 @@ keyshroud doctor</code></pre>
         <p>Or install the Claude Code plugin: <code>/plugin marketplace add dinhkarate/keyshroud</code></p>
       </div>
     </div>
+    <p class="note">Several machines? Keep the secrets in Vaultwarden or Bitwarden instead: <a href="https://github.com/dinhkarate/keyshroud#sync-across-machines-vaultwarden-or-bitwarden">sync setup</a>. Machines that used keyshroud 0.7 keep Vaultwarden.</p>
     <div class="agent-setup">
       <h3>Or let your agent set it up</h3>
-      <p>Paste this into Claude Code, Codex, Cursor, OpenCode or pi. The agent follows <a href="/install.md">install.md</a> and leaves vault login and the master password to you.</p>
+      <p>Paste this into Claude Code, Codex, Cursor, OpenCode or pi. The agent follows <a href="/install.md">install.md</a> and leaves typing secrets (and any vault password) to you.</p>
       <div class="prompt">
         <pre><code id="agent-prompt">Read https://keyshroud.dev/install.md and set up keyshroud for me.</code></pre>
         <button type="button" id="copy-prompt">Copy</button>
@@ -230,6 +233,17 @@ document.getElementById('copy-prompt').addEventListener('click', async (e) => {
 });
 </script>
 
+<section class="demo" id="demo">
+  <div class="wrap">
+    <h2>See it on a new machine</h2>
+    <p class="sub">Store a token, use it masked, catch a copy that leaked into a log. About 30 seconds, nothing else installed.</p>
+    <video autoplay muted loop playsinline preload="metadata" aria-label="Terminal recording: keyshroud add creates the local vault and stores a GitHub token through a masked prompt; keyshroud run prints &lt;redacted:GH_TOKEN&gt; in place of the token; keyshroud scan finds the token in debug.log; auth.json holds only a local:// reference">
+      <source src="demo.webm" type="video/webm">
+      <source src="demo.mp4" type="video/mp4">
+    </video>
+    <p>Recorded with <a href="https://github.com/charmbracelet/vhs">vhs</a> from <a href="https://github.com/dinhkarate/keyshroud/blob/main/assets/demo/demo.tape">demo.tape</a>. The token is fake.</p>
+  </div>
+</section>
 <section>
   <div class="wrap">
     <h2>Built for agents, not just shells</h2>
@@ -238,9 +252,9 @@ document.getElementById('copy-prompt').addEventListener('click', async (e) => {
       <div class="card"><h3>Masked output</h3><p><code>keyshroud run</code> streams stdout and stderr through a redactor. A secret is never split across chunks and slips through, and masking is on by default when output isn't going to a terminal.</p></div>
       <div class="card"><h3>Hooks on tool output</h3><p>pi <code>tool_result</code> and Claude Code <code>PostToolUse</code> hooks scrub tool results, including commands the agent ran without keyshroud. (Claude Code can't rewrite failed calls, so secret-using commands go through <code>keyshroud run</code>.)</p></div>
       <div class="card"><h3>MCP server</h3><p>For clients without a shell, <code>keyshroud mcp</code> gives them <code>secrets_run</code>, <code>secrets_list</code> and <code>secrets_request</code>. None of them return values.</p></div>
-      <div class="card"><h3><code>bw://</code> references</h3><p>Write <code>GH_TOKEN=bw://GitHub/fields/token</code> in a <code>.env.refs</code> file you can commit. References cover passwords, usernames, notes, TOTP codes, URIs and custom fields.</p></div>
-      <div class="card"><h3>Inject &amp; scan</h3><p><code>inject</code> renders <code>{{ bw://… }}</code> templates into files only you can read (mode 0600). <code>scan</code> finds leaked values in your repo before you commit.</p></div>
-      <div class="card"><h3>Self-hosted, free</h3><p>Runs on the Vaultwarden you already host. No SaaS, no account with us, no telemetry. Adding a secret uses a masked prompt, so the value never enters the chat.</p></div>
+      <div class="card"><h3>Committable references</h3><p>Write <code>GH_TOKEN=local://GitHub token</code> in a <code>.env.refs</code> file you can commit. <code>bw://</code> references reach Vaultwarden passwords, usernames, notes, TOTP codes, URIs and custom fields.</p></div>
+      <div class="card"><h3>Inject &amp; scan</h3><p><code>inject</code> renders <code>{{ local://… }}</code> templates into files only you can read (mode 0600). <code>scan</code> finds leaked values in your repo before you commit.</p></div>
+      <div class="card"><h3>Local first, sync if you want</h3><p>Secrets live in an AES-256-GCM vault on your machine. For several machines, keep them in the Vaultwarden you host, or Bitwarden. No SaaS account with us, no telemetry.</p></div>
     </div>
   </div>
 </section>
@@ -269,8 +283,9 @@ document.getElementById('copy-prompt').addEventListener('click', async (e) => {
         <h3>keyshroud</h3>
         <p class="what">Your vault, masked agent output, plugins for the agents you use.</p>
         <ul>
-          <li><i class="mark y" role="img" aria-label="Yes">&#10003;</i><div><b>Self-hosted vault</b><span>Vaultwarden or Bitwarden</span></div></li>
-          <li><i class="mark y" role="img" aria-label="Yes">&#10003;</i><div><b>Free</b><span>MIT-licensed, no account with us</span></div></li>
+          <li><i class="mark y" role="img" aria-label="Yes">&#10003;</i><div><b>Keys stay with you</b><span>On your machine, or your Vaultwarden</span></div></li>
+          <li><i class="mark y" role="img" aria-label="Yes">&#10003;</i><div><b>No account needed</b><span>The local vault needs no signup</span></div></li>
+          <li><i class="mark y" role="img" aria-label="Yes">&#10003;</i><div><b>Free</b><span>MIT-licensed, no telemetry</span></div></li>
           <li><i class="mark y" role="img" aria-label="Yes">&#10003;</i><div><b>Masks agent output</b><span>Every tool result, wrapped or not</span></div></li>
           <li><i class="mark y" role="img" aria-label="Yes">&#10003;</i><div><b>Agent plugins</b><span>Claude Code, pi, MCP</span></div></li>
         </ul>
@@ -280,7 +295,8 @@ document.getElementById('copy-prompt').addEventListener('click', async (e) => {
         <h3>1Password <code>op run</code></h3>
         <p class="what">Polished, but your secrets live in 1Password&#8217;s cloud.</p>
         <ul>
-          <li><i class="mark n" role="img" aria-label="No">&#10005;</i><div><b>Self-hosted vault</b><span>1Password cloud only</span></div></li>
+          <li><i class="mark n" role="img" aria-label="No">&#10005;</i><div><b>Keys stay with you</b><span>1Password cloud only</span></div></li>
+          <li><i class="mark n" role="img" aria-label="No">&#10005;</i><div><b>No account needed</b><span>Needs a 1Password account</span></div></li>
           <li><i class="mark n" role="img" aria-label="No">&#10005;</i><div><b>Free</b><span>Needs a paid plan</span></div></li>
           <li><i class="mark p" role="img" aria-label="Partly">~</i><div><b>Masks agent output</b><span>Only commands wrapped in <code>op run</code></span></div></li>
           <li><i class="mark y" role="img" aria-label="Yes">&#10003;</i><div><b>Agent plugins</b><span>Claude Code, Cursor, MCP</span></div></li>
@@ -291,7 +307,8 @@ document.getElementById('copy-prompt').addEventListener('click', async (e) => {
         <h3>Bitwarden MCP server</h3>
         <p class="what">Self-hosted too, but it hands values to the model.</p>
         <ul>
-          <li><i class="mark y" role="img" aria-label="Yes">&#10003;</i><div><b>Self-hosted vault</b><span>Vaultwarden or Bitwarden</span></div></li>
+          <li><i class="mark y" role="img" aria-label="Yes">&#10003;</i><div><b>Keys stay with you</b><span>Vaultwarden or Bitwarden</span></div></li>
+          <li><i class="mark n" role="img" aria-label="No">&#10005;</i><div><b>No account needed</b><span>Needs a vault account</span></div></li>
           <li><i class="mark y" role="img" aria-label="Yes">&#10003;</i><div><b>Free</b><span>Open source</span></div></li>
           <li><i class="mark n" role="img" aria-label="No">&#10005;</i><div><b>Masks agent output</b><span>Returns plaintext to the model</span></div></li>
           <li><i class="mark p" role="img" aria-label="Partly">~</i><div><b>Agent plugins</b><span>MCP only</span></div></li>
@@ -311,6 +328,7 @@ document.getElementById('copy-prompt').addEventListener('click', async (e) => {
         <h3>Protected</h3>
         <ul>
           <li>Secret values entering the model's context through tool output</li>
+          <li>Secrets at rest: the local vault is AES-256-GCM, its key in the OS keychain</li>
           <li>Secrets pasted into chat while being stored (keyshroud uses a masked prompt instead)</li>
           <li>Plaintext in agent config and <code>auth.json</code> (only references are stored)</li>
           <li>Secret values accidentally committed to your repo (caught by <code>keyshroud scan</code>)</li>
@@ -320,7 +338,7 @@ document.getElementById('copy-prompt').addEventListener('click', async (e) => {
         <h3>Not protected</h3>
         <ul>
           <li>A malicious or prompt-injected agent that encodes a value or sends it over the network</li>
-          <li>Other processes running as your user</li>
+          <li>Other programs running as your user: they can read the vault&#8217;s key from the keychain (create the vault with a passphrase to be asked instead)</li>
           <li>Values shorter than 6 characters (not redacted, to avoid noise)</li>
         </ul>
       </div>
@@ -344,9 +362,9 @@ document.getElementById('copy-prompt').addEventListener('click', async (e) => {
       <div class="card good">
         <h3>With keyshroud</h3>
         <ul>
-          <li>The agent sees <b>names and <code>bw://</code> references</b>, never values</li>
+          <li>The agent sees <b>names and <code>local://</code> references</b>, never values</li>
           <li>Any value in tool output becomes <b><code>&lt;redacted:NAME&gt;</code></b></li>
-          <li>Keys stay in <b>your own Vaultwarden</b>, free and MIT-licensed</li>
+          <li>Keys stay <b>on your machine</b>, or in your own Vaultwarden, free and MIT-licensed</li>
         </ul>
       </div>
     </div>
@@ -362,7 +380,7 @@ document.getElementById('copy-prompt').addEventListener('click', async (e) => {
 
 <div class="wrap">
   <footer>
-    <span>keyshroud &middot; MIT &middot; works with Vaultwarden and Bitwarden. Not affiliated with Bitwarden, Inc.</span>
+    <span>keyshroud &middot; MIT &middot; a local vault, or Vaultwarden and Bitwarden. Not affiliated with Bitwarden, Inc.</span>
     <span><a href="https://github.com/dinhkarate/keyshroud">GitHub</a> &middot; <a href="https://www.npmjs.com/package/keyshroud">npm</a> &middot; <a href="https://github.com/dinhkarate/keyshroud/blob/main/SECURITY.md">Security</a></span>
   </footer>
 </div>
