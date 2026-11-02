@@ -5,6 +5,8 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-02
+
 ### Added
 - A local encrypted vault, the default on a machine that has never used
   keyshroud with Vaultwarden. `~/.config/keyshroud/vault.json` is AES-256-GCM
