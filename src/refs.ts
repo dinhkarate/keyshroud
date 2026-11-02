@@ -3,47 +3,78 @@
 //   bw://<item>                 -> login password
 //   bw://<item>/<field>         -> password | username | notes | totp | uri | id
 //   bw://<item>/fields/<name>   -> custom field
+//   local://<item>[/...]        -> the same, from the local vault (the bare form is the item's value)
 //
 // Segments are percent-decoded, so an item named "a/b" is written bw://a%2Fb.
 // The legacy shell forms `!bw get <field> '<item>'` and `!…/bw-get '<item>'`
-// are recognized so existing auth.json entries keep resolving without a shell.
+// are recognized so existing auth.json entries keep resolving without a shell,
+// as is `!keyshroud get '<ref>'`, which auth.json holds for local items.
+import { BRAND } from "./brand.ts";
 
 export type RefField = "password" | "username" | "notes" | "totp" | "uri" | "id";
-export interface SecretRef { item: string; field: RefField | { custom: string } }
+// No scheme: bw.
+export interface SecretRef { item: string; field: RefField | { custom: string }; scheme?: "local" }
 
 const FIELDS: ReadonlySet<string> = new Set(["password", "username", "notes", "totp", "uri", "id"]);
 const LEGACY_RE = /^!\s*(?:bw\s+get\s+(password|username|notes|totp|uri)|(?:[^\s]*\/)?bw-get)\s+'([^']+)'\s*$/;
+// keyshroud itself, by name or path (keyshroud.cmd on Windows). Such a value is
+// read here, never run: run, it would ask keyshroud again, without end.
+const SELF = `^!\\s*(?:\\S*[\\\\/])?${BRAND.bin}(?:\\.cmd)?`;
+const SELF_RE = new RegExp(`${SELF}(?:\\s|$)`, "i");
+const SELF_GET_RE = new RegExp(`${SELF}\\s+get\\s+'([^']+)'\\s*$`, "i");
 
 function decode(segment: string): string {
   try { return decodeURIComponent(segment); } catch { throw new Error("Invalid percent-encoding in secret reference"); }
 }
 
+// `local:///x` is not a reference: a value like `local:///var/data` predates local://.
+function isLocalUrl(value: string): boolean { return value.startsWith("local://") && !value.startsWith("local:///"); }
+
 export function isRef(raw: string): boolean {
-  return raw.startsWith("bw://") || LEGACY_RE.test(raw);
+  return raw.startsWith("bw://") || isLocalUrl(raw) || LEGACY_RE.test(raw) || SELF_GET_RE.test(raw);
 }
+
+// A `!keyshroud …` value: never run through a shell.
+export function isSelfCommand(raw: string): boolean { return SELF_RE.test(raw.trim()); }
 
 export function parseRef(raw: string): SecretRef | null {
   const value = raw.trim();
   const legacy = LEGACY_RE.exec(value);
   if (legacy) return { item: legacy[2], field: (legacy[1] as RefField | undefined) ?? "password" };
-  if (!value.startsWith("bw://")) return null;
-  const [itemPart, ...rest] = value.slice("bw://".length).split("/");
+  const self = SELF_GET_RE.exec(value);
+  // Only a bw:// or local:// reference inside: anything else (a variable name) would ask auth.json again.
+  if (self) return parseUrlRef(self[1].trim());
+  return parseUrlRef(value);
+}
+
+function parseUrlRef(value: string): SecretRef | null {
+  const scheme = value.startsWith("bw://") ? "bw" : isLocalUrl(value) ? "local" : null;
+  if (!scheme) return null;
+  const [itemPart, ...rest] = value.slice(`${scheme}://`.length).split("/");
   const item = decode(itemPart ?? "");
   if (!item) throw new Error("Secret reference has no item name");
-  if (rest.length === 0 || (rest.length === 1 && rest[0] === "")) return { item, field: "password" };
+  const ref = (field: SecretRef["field"]): SecretRef => scheme === "local" ? { item, field, scheme } : { item, field };
+  if (rest.length === 0 || (rest.length === 1 && rest[0] === "")) return ref("password");
   if (rest[0] === "fields" && rest.length >= 2) {
     const custom = decode(rest.slice(1).join("/"));
     if (!custom) throw new Error("Secret reference has an empty custom field name");
-    return { item, field: { custom } };
+    return ref({ custom });
   }
-  if (rest.length === 1 && FIELDS.has(rest[0])) return { item, field: rest[0] as RefField };
+  if (rest.length === 1 && FIELDS.has(rest[0])) return ref(rest[0] as RefField);
   throw new Error(`Unsupported secret reference field: ${rest.join("/")}`);
 }
 
 export function formatRef(ref: SecretRef): string {
-  const item = encodeURIComponent(ref.item);
-  if (typeof ref.field === "object") return `bw://${item}/fields/${encodeURIComponent(ref.field.custom)}`;
-  return ref.field === "password" ? `bw://${item}` : `bw://${item}/${ref.field}`;
+  const base = `${ref.scheme ?? "bw"}://${encodeURIComponent(ref.item)}`;
+  if (typeof ref.field === "object") return `${base}/fields/${encodeURIComponent(ref.field.custom)}`;
+  return ref.field === "password" ? base : `${base}/${ref.field}`;
+}
+
+// A reference to an item's value as written into files: only the characters
+// that would end it early are encoded (a path, a quote, an env-file comment, a
+// {{ }} placeholder), so `bw://My item` reads as it did before local://.
+export function refFor(itemName: string, scheme: "bw" | "local" = "bw"): string {
+  return `${scheme}://${itemName.replace(/[%/'#}]/g, (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`)}`;
 }
 
 // auth.json keeps the legacy shell form so pi/omp can still resolve the entry
@@ -51,6 +82,12 @@ export function formatRef(ref: SecretRef): string {
 export function legacyRefFor(itemName: string): string {
   if (itemName.includes("'")) throw new Error("Vault item names used in auth.json references cannot contain single quotes");
   return `!bw get password '${itemName}'`;
+}
+
+// The auth.json form of a local item: pi/omp run it through the shell without
+// this package; with it, keyshroud reads it without running anything.
+export function localRefFor(itemName: string): string {
+  return `!${BRAND.bin} get '${refFor(itemName, "local")}'`;
 }
 
 export const ENV_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;

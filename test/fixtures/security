@@ -1,7 +1,8 @@
 #!/bin/sh
 # Fake macOS `security`: find-generic-password answers from $FAKE_KEYCHAIN_DIR/<service>;
 # add-generic-password stores the value read from stdin (the real tool prompts),
-# and records an empty -T (ask before every read) as <service>.confirm.
+# and records an empty -T (ask before every read) as <service>.confirm;
+# $FAKE_KEYCHAIN_GARBLE stores another value than the one given.
 # `security -i` reads one such command line from stdin; -w VALUE is then inline.
 if [ "$1" = "-i" ]; then IFS= read -r line; eval "set -- $line"; fi
 op="$1"; service=""; confirm=""; inline=""; want_value=""
@@ -17,6 +18,7 @@ if [ "$op" = "delete-generic-password" ]; then
 fi
 if [ "$op" = "add-generic-password" ]; then
   if [ -n "$inline" ]; then value="$inline"; else IFS= read -r value || [ -n "$value" ] || exit 1; fi
+  [ -n "$FAKE_KEYCHAIN_GARBLE" ] && value="garbled"
   printf '%s\n' "$value" > "$FAKE_KEYCHAIN_DIR/$service"
   [ -n "$confirm" ] && : > "$FAKE_KEYCHAIN_DIR/$service.confirm"
   exit 0

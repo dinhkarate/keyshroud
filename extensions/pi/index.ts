@@ -9,6 +9,14 @@ import { confirmInBorderedPopup, inputInBorderedPopup, selectInBorderedPopup } f
 export type UiContext = Pick<ExtensionContext, "ui">;
 let currentEnv: Record<string, string> = {};
 let redactor: Redactor = createRedactor({});
+// Masked values outlive a lock that removes them from the environment.
+let masked: Record<string, string> = {};
+// What this extension set in process.env, kept per process: pi loads a fresh
+// copy of this module on /reload, and process.env keeps what the last one set.
+const own = ((globalThis as Record<symbol, unknown>)[Symbol.for(`${BRAND.bin}.pi.injected`)] ??= {}) as Record<string, string>;
+// A passphrase vault's session can end (`lock`, or its time is up) while pi
+// runs: its state when the environment was last built (null: not such a vault).
+let sessionState: string | null = null;
 
 // omp injects its own TypeBox (or zod) builder; pi resolves the peer dependency.
 type Builder = { Object: (p: Record<string, unknown>) => TSchema; String: (o?: unknown) => TSchema };
@@ -25,9 +33,14 @@ async function getBuilder(pi: ExtensionAPI): Promise<Builder> {
   }
   throw new Error("No TypeBox-compatible schema builder available");
 }
+// Values pi was started with are left as they are.
 function applyEnv(next: Record<string, string>): void {
-  for (const key of Object.keys(currentEnv)) if (!(key in next)) delete process.env[key];
-  for (const [key, value] of Object.entries(next)) process.env[key] = value;
+  for (const key of Object.keys({ ...currentEnv, ...own })) if (!(key in next)) { delete process.env[key]; delete own[key]; }
+  for (const [key, value] of Object.entries(next)) {
+    if (process.env[key] === value && !(key in own)) continue;
+    process.env[key] = value;
+    own[key] = value;
+  }
   currentEnv = next;
 }
 
@@ -43,8 +56,11 @@ function refreshEnv(): Promise<void> {
   if (!refreshPromise) {
     refreshPromise = (async () => {
       try { await core.ensureSession(); } catch { scheduleRetry(); }
-      applyEnv(await core.buildEnvMap());
-      redactor = createRedactor(await core.redactionValues(currentEnv));
+      applyEnv(await core.buildEnvMap(own));
+      masked = { ...masked, ...await core.redactionValues(currentEnv) };
+      redactor = createRedactor(masked);
+      const local = await core.localStatus();
+      sessionState = local.key === "passphrase" ? local.status : null;
     })().finally(() => { refreshPromise = null; });
   }
   return refreshPromise;
@@ -59,12 +75,27 @@ function scheduleRetry(delay = 5000): void {
   if (typeof refreshTimer === "object" && "unref" in refreshTimer) refreshTimer.unref();
 }
 
+// Values from a passphrase vault leave pi when its session ends, and come back
+// once it is unlocked again. Reading the session never starts bw.
+async function recheckSession(): Promise<void> {
+  if (sessionState !== null && (await core.localStatus()).status !== sessionState) await refreshEnv();
+}
+
 async function hydratedEnv(): Promise<Record<string, string>> {
   await refreshEnv();
   return currentEnv;
 }
 
+// What the default backend is called in prompts and messages.
+async function vaultLabel(): Promise<string> { return (await core.defaultBackend()) === "local" ? "the local vault" : "Vaultwarden"; }
+
 async function report(): Promise<{ report: string; details: Record<string, unknown> }> {
+  if ((await core.defaultBackend()) === "local") {
+    const local = await core.localStatus();
+    const names = Object.keys(await hydratedEnv());
+    const report = `${BRAND.name}: local vault ${local.status} (${local.status === "none" ? "created by the first secret" : `${local.path}, key in ${local.key}`}) / items: ${local.items ?? "unknown"} / injected env (names only): ${names.length ? names.join(", ") : "none"} / redacting ${redactor.size} value(s) from tool output`;
+    return { report, details: { backend: "local", status: local.status, key: local.key, items: local.items, injectedEnvNames: names, redactedValues: redactor.size } };
+  }
   const status = await core.getStatus();
   const names = Object.keys(await hydratedEnv());
   const report = `${BRAND.name}: vault ${status.status} (bw ${status.version ?? "unknown"}) / server: ${status.serverUrl ?? "unknown"} / items: ${status.items ?? "unknown"} / injected env (names only): ${names.length ? names.join(", ") : "none"} / redacting ${redactor.size} value(s) from tool output`;
@@ -72,7 +103,7 @@ async function report(): Promise<{ report: string; details: Record<string, unkno
 }
 
 async function writeBoth(name: string, itemName: string, overwrite = false): Promise<void> {
-  const ref = core.referenceFor(itemName);
+  const ref = core.referenceFor(itemName, await core.defaultBackend());
   const targets = paths();
   const results = await Promise.all([
     core.writeAuthEntry(targets.omp, name, ref, { overwrite }),
@@ -88,19 +119,20 @@ async function addFlow(ctx: UiContext, envName: string, itemName: string, purpos
     await core.ensureSession();
     const secret = await inputInBorderedPopup(ctx, { title: `Paste secret for ${envName}`, prompt: "Value is not shown", mask: true });
     if (!secret) return "Cancelled.";
-    await core.createSecretItem({ itemName, secret, envName, notes: purpose });
+    const { created } = await core.createSecretItem({ itemName, secret, envName, notes: purpose });
     await writeBoth(envName, itemName);
     await refreshEnv();
-    const verified = (await core.resolveShellValue(core.referenceFor(itemName))) !== null;
-    return `created item=${itemName} env=${envName} verified=${verified ? "yes" : "no"}`;
+    const verified = (await core.resolveShellValue(core.referenceFor(itemName, await core.defaultBackend()))) !== null;
+    return `${created ? `${created}\n` : ""}created item=${itemName} env=${envName} verified=${verified ? "yes" : "no"}`;
   } catch (error) { return mappedError(error); }
 }
 
 async function chooseItem(ctx: UiContext, title: string): Promise<{ id: string; name: string } | null> {
-  const query = await inputInBorderedPopup(ctx, { title: "Search Vaultwarden", prompt: "Leave empty to list all items" });
+  const label = await vaultLabel();
+  const query = await inputInBorderedPopup(ctx, { title: `Search ${label}`, prompt: "Leave empty to list all items" });
   if (query === undefined) return null;
   const items = await core.findItems(query);
-  if (!items.length) { ctx.ui.notify("No Vaultwarden items found.", "warning"); return null; }
+  if (!items.length) { ctx.ui.notify(`No ${label} items found.`, "warning"); return null; }
   const id = await selectInBorderedPopup(ctx, { title, items: items.map((item) => ({ value: item.id, label: item.name })), maxVisible: 16 });
   return items.find((item) => item.id === id) ?? null;
 }
@@ -143,7 +175,7 @@ async function inferSecretPlan(description: string): Promise<SecretPlan> {
       signal: controller.signal,
       body: JSON.stringify({
         model: PLANNER_MODEL,
-        messages: [{ role: "system", content: "Return only JSON with keys itemName, envName, purpose. Choose a concise unique Vaultwarden itemName, an uppercase UPPER_SNAKE_CASE envName, and a short purpose. Never ask for or repeat a secret value." }, { role: "user", content: description }],
+        messages: [{ role: "system", content: "Return only JSON with keys itemName, envName, purpose. Choose a concise unique vault itemName, an uppercase UPPER_SNAKE_CASE envName, and a short purpose. Never ask for or repeat a secret value." }, { role: "user", content: description }],
         max_tokens: 160,
         temperature: 0,
         stream: false,
@@ -180,10 +212,10 @@ async function secretFlow(ctx: UiContext, rawDescription: string): Promise<void>
     const secret = await inputInBorderedPopup(ctx, { title: `Paste secret for ${plan.envName}`, prompt: "Value is not shown and never reaches the model", mask: true });
     if (!secret) return;
     await core.ensureSession();
-    await core.createSecretItem({ itemName: plan.itemName, secret, envName: plan.envName, notes: plan.purpose });
+    const { created } = await core.createSecretItem({ itemName: plan.itemName, secret, envName: plan.envName, notes: plan.purpose });
     await writeBoth(plan.envName, plan.itemName);
     await refreshEnv();
-    ctx.ui.notify(`Configured item=${plan.itemName} env=${plan.envName} for omp and pi.\n${secretUsage(plan)}`, "info");
+    ctx.ui.notify(`${created ? `${created}\n` : ""}Configured item=${plan.itemName} env=${plan.envName} for omp and pi.\n${secretUsage(plan)}`, "info");
   } catch (error) {
     ctx.ui.notify(`Secret configuration failed: ${mappedError(error)}`, "error");
   }
@@ -197,6 +229,9 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   // Fires on startup and every resume/fork; cache + single-flight make it free
   // while the vault is warm.
   pi.on("session_start", () => { void refreshEnv(); });
+  // Checked before every tool and `!command` starts.
+  pi.on("tool_call", recheckSession);
+  pi.on("user_bash", recheckSession);
   // The model never sees vault values: every tool result is scrubbed before it
   // enters the context, whatever the tool printed.
   pi.on("tool_result", (event) => {
@@ -220,28 +255,29 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   pi.registerTool({
     name: "vault_add_secret", label: "Add Vault Secret",
     description: "Prompt the user for a masked secret, create a vault item, and wire it as an environment variable. The value never passes through the model.",
-    parameters: T.Object({ env_name: T.String({ description: "UPPER_SNAKE_CASE environment variable name" }), item_name: T.String({ description: "Vaultwarden item name to create" }), purpose: T.String({ description: "Short note stored with the item" }) }),
+    parameters: T.Object({ env_name: T.String({ description: "UPPER_SNAKE_CASE environment variable name" }), item_name: T.String({ description: "Vault item name to create" }), purpose: T.String({ description: "Short note stored with the item" }) }),
     async execute(_id, params, _signal, _update, ctx) { const input = params as { env_name: string; item_name: string; purpose: string }; const text = await addFlow(ctx, input.env_name, input.item_name, input.purpose); return { content: [{ type: "text", text }], details: {} }; },
   });
 
   pi.registerCommand("secret", { description: "Describe a credential, confirm its name, and paste it into a masked prompt.", handler: async (args, ctx) => { await secretFlow(ctx, args); } });
   pi.registerCommand("vault_status", { description: "Show vault status, injected names, and redaction coverage.", handler: async (_args, ctx) => { const result = await report(); ctx.ui.notify(result.report, "info"); } });
   pi.registerCommand("vault_add", { description: "Create and wire a new vault secret.", handler: async (_args, ctx) => {
-    const itemName = await inputInBorderedPopup(ctx, { title: "Vaultwarden item name", prompt: "Name for the new login item" }); if (!itemName) return;
+    const itemName = await inputInBorderedPopup(ctx, { title: "Vault item name", prompt: "Name for the new item" }); if (!itemName) return;
     const envName = await inputInBorderedPopup(ctx, { title: "Environment variable", prompt: "Use UPPER_SNAKE_CASE" }); if (!envName) return;
     const purpose = await inputInBorderedPopup(ctx, { title: "Purpose", prompt: "Short note stored with the item" }); if (purpose === undefined) return;
     const secret = await inputInBorderedPopup(ctx, { title: `Paste secret for ${envName}`, prompt: "Value is not shown", mask: true }); if (!secret) return;
     if (!ENV_NAME_RE.test(envName)) { ctx.ui.notify("Invalid env var name; use UPPER_SNAKE_CASE.", "error"); return; }
-    if (!await confirmInBorderedPopup(ctx, { title: "Create and wire secret?", message: `"${envName}": "${core.referenceFor(itemName)}"` })) return;
-    try { await core.ensureSession(); await core.createSecretItem({ itemName, secret, envName, notes: purpose }); await writeBoth(envName, itemName); await refreshEnv(); const verified = (await core.resolveShellValue(core.referenceFor(itemName))) !== null; ctx.ui.notify(`Created item=${itemName} env=${envName} verified=${verified ? "yes" : "no"}`, verified ? "info" : "warning"); } catch (error) { ctx.ui.notify(mappedError(error), "error"); }
+    const backend = await core.defaultBackend();
+    if (!await confirmInBorderedPopup(ctx, { title: "Create and wire secret?", message: `"${envName}": "${core.referenceFor(itemName, backend)}"` })) return;
+    try { await core.ensureSession(); const { created } = await core.createSecretItem({ itemName, secret, envName, notes: purpose }); await writeBoth(envName, itemName); await refreshEnv(); const verified = (await core.resolveShellValue(core.referenceFor(itemName, backend))) !== null; ctx.ui.notify(`${created ? `${created}\n` : ""}Created item=${itemName} env=${envName} verified=${verified ? "yes" : "no"}`, verified ? "info" : "warning"); } catch (error) { ctx.ui.notify(mappedError(error), "error"); }
   } });
   pi.registerCommand("vault_wire", { description: "Wire an existing vault item to both agent auth stores.", handler: async (_args, ctx) => {
     try {
-      await core.ensureSession(); const item = await chooseItem(ctx, "Choose Vaultwarden item"); if (!item) return;
+      await core.ensureSession(); const item = await chooseItem(ctx, `Choose ${(await core.defaultBackend()) === "local" ? "a local vault" : "Vaultwarden"} item`); if (!item) return;
       const envName = await inputInBorderedPopup(ctx, { title: "Environment variable", prompt: "Use UPPER_SNAKE_CASE" }); if (!envName || !ENV_NAME_RE.test(envName)) { ctx.ui.notify("Invalid env var name; use UPPER_SNAKE_CASE", "error"); return; }
       const targets = paths(); const existing = (await core.readAuthEntries(targets.omp))[envName] !== undefined || (await core.readAuthEntries(targets.pi))[envName] !== undefined;
       let overwrite = false; if (existing) { const choice = await selectInBorderedPopup(ctx, { title: `${envName} already exists`, items: [{ value: "replace", label: "Replace" }, { value: "keep", label: "Keep" }] }); if (choice !== "replace") return; overwrite = true; }
-      if (!await confirmInBorderedPopup(ctx, { title: "Save reference?", message: `"${envName}": "${core.referenceFor(item.name)}"` })) return;
+      if (!await confirmInBorderedPopup(ctx, { title: "Save reference?", message: `"${envName}": "${core.referenceFor(item.name, await core.defaultBackend())}"` })) return;
       await writeBoth(envName, item.name, overwrite); await refreshEnv(); ctx.ui.notify("Saved; reload to apply", "info");
     } catch (error) { ctx.ui.notify(mappedError(error), "error"); }
   } });

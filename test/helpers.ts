@@ -22,14 +22,16 @@ export function item(id: string, name: string, password: string, extra: Record<s
   return { id, name, type: 1, notes: null, login: { username: "agent", password, uris: [] }, fields: [], ...extra };
 }
 
-export async function sandbox(items: Array<Record<string, unknown>>, opts: { locked?: boolean } = {}): Promise<Sandbox> {
+// `blank`: a machine keyshroud has never used (the local vault is the default);
+// otherwise an existing bw user, as before 0.8.
+export async function sandbox(items: Array<Record<string, unknown>>, opts: { locked?: boolean; blank?: boolean } = {}): Promise<Sandbox> {
   const dir = await mkdtemp(join(tmpdir(), "vault-test-"));
   const home = join(dir, "home");
   const configDir = join(dir, "config");
   const keychain = join(dir, "keychain");
   await mkdir(home, { recursive: true });
   await mkdir(keychain, { recursive: true });
-  await writeFile(join(keychain, "vaultwarden-master-password"), "master\n");
+  if (!opts.blank) await writeFile(join(keychain, "vaultwarden-master-password"), "master\n");
   const vaultFile = join(dir, "vault.json");
   const logFile = join(dir, "bw.log");
   await writeFile(vaultFile, JSON.stringify({ status: opts.locked === false ? "unlocked" : "locked", items }));
@@ -46,6 +48,7 @@ export async function sandbox(items: Array<Record<string, unknown>>, opts: { loc
     // No background lock timers outliving the test run; one test turns it back on.
     [`${BRAND.envPrefix}_LOCK_TIMER`]: "0",
     PI_CODING_AGENT_DIR: join(home, ".omp", "agent"),
+    ...(opts.blank ? {} : { [`${BRAND.envPrefix}_BACKEND`]: "bw" }),
   };
   return {
     dir, env, vaultFile, logFile, configDir,
@@ -97,6 +100,49 @@ sys.exit(os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1]))
 export function runCliTty(box: Sandbox, args: string[], waitFor: string, typed: string, extraEnv: Record<string, string> = {}): Promise<RunResult> {
   return new Promise((resolve) => {
     const child = spawn("python3", ["-c", PTY_SCRIPT, waitFor, typed, process.execPath, CLI, ...args], { env: { ...box.env, ...extraEnv }, cwd: box.dir });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.on("close", (code) => resolve({ code, stdout, stderr }));
+    child.on("error", () => resolve({ code: null, stdout, stderr: "python3 missing" }));
+  });
+}
+
+// Like runCliTty, for several prompts in turn: each [waitFor, typed] pair types
+// once its text appears after the previous one.
+const PTY_STEPS_SCRIPT = `
+import json, os, pty, select, signal, sys, time
+steps = json.loads(sys.argv[1])
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvp(sys.argv[2], sys.argv[2:])
+out, done, pos, deadline = b"", 0, 0, time.time() + 30
+while True:
+    if not select.select([fd], [], [], max(0, deadline - time.time()))[0]:
+        os.kill(pid, signal.SIGKILL)
+        break
+    try:
+        chunk = os.read(fd, 4096)
+    except OSError:
+        break
+    if not chunk:
+        break
+    out += chunk
+    while done < len(steps):
+        at = out.find(steps[done][0].encode(), pos)
+        if at < 0:
+            break
+        os.write(fd, steps[done][1].encode() + b"\\r")
+        pos = at + len(steps[done][0].encode())
+        done += 1
+sys.stdout.write(out.decode(errors="replace"))
+sys.exit(os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1]))
+`;
+
+export function runCliTtySteps(box: Sandbox, args: string[], steps: Array<[string, string]>, extraEnv: Record<string, string> = {}): Promise<RunResult> {
+  return new Promise((resolve) => {
+    const child = spawn("python3", ["-c", PTY_STEPS_SCRIPT, JSON.stringify(steps), process.execPath, CLI, ...args], { env: { ...box.env, ...extraEnv }, cwd: box.dir });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => { stdout += chunk; });

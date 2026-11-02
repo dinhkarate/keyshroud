@@ -5,6 +5,43 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+### Added
+- A local encrypted vault, the default on a machine that has never used
+  keyshroud with Vaultwarden. `~/.config/keyshroud/vault.json` is AES-256-GCM
+  (item names included); its key is in the macOS keychain, the Linux Secret
+  Service or Windows DPAPI, or is derived from a passphrase (scrypt) where none
+  of these works (containers, servers, SSH, Linux without systemd's `busctl`).
+  No account, no server and no `bw`: after `npm i -g keyshroud`, the first
+  `keyshroud add` creates it.
+- `local://Item` references (also `/notes` and `/id`) in env files, templates,
+  `get` and `inject`. pi/omp auth.json entries are written as
+  `!keyshroud get 'local://Item'`, which pi/omp can run without the extension.
+- `--item local://Name` or `--item bw://Name` picks the vault for one item in
+  `add`, `rotate`, `wire` and `api-key`; `import` writes `local://` references.
+- `KEYSHROUD_BACKEND=local|bw` and the file `~/.config/keyshroud/backend`
+  choose the default vault. `KEYSHROUD_VAULT_KEY=keychain|dpapi|passphrase`
+  chooses how a new local vault keeps its key.
+- Passphrase vaults: `keyshroud unlock` creates one in a terminal (typed twice,
+  at least 12 characters) and opens 30-minute sessions. `lock` and the end of a
+  session also close it for MCP servers and pi sessions that are already running:
+  pi removes its values from its environment before the next tool or `!command`.
+
+### Changed
+- A machine that used keyshroud 0.7 keeps Vaultwarden as the default: a `bw`
+  login, keyshroud's own files, `BW_SESSION`, `bw://` or `!bw` entries in
+  auth.json, or the master password in the keychain decide it, and the choice
+  is written to `~/.config/keyshroud/backend`. `setup` switches to Vaultwarden.
+- `status`, `doctor`, `unlock`, `lock`, the MCP `vault_status` tool and the pi
+  extension describe the local vault when it is the default, without starting `bw`.
+- Messages show paths in your home directory as `~/…` (not on Windows).
+
+### Fixed
+- An error while parsing `bw` output no longer quotes that output, which can
+  hold a secret.
+- `keyshroud lock` on a machine with no vault says there is nothing to lock.
+- On Windows, keyshroud no longer starts `security` or `secret-tool` by bare
+  name, which Windows looks up in the current directory first.
+
 ## [0.7.6] - 2026-10-24
 
 ### Added

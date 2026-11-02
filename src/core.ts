@@ -1,16 +1,20 @@
 // Runtime-neutral core: no pi/omp/Claude Code imports. Every caller (agent
 // extensions, CLI, MCP server, hooks) goes through these functions.
 import { execFile, spawn } from "node:child_process";
-import { randomBytes, scrypt, timingSafeEqual, type ScryptOptions } from "node:crypto";
+import { randomBytes, randomUUID, scrypt, timingSafeEqual, type ScryptOptions } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { appendFile, chmod, mkdir, readFile, realpath, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { appendFile, chmod, mkdir, open, readdir, readFile, realpath, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join, dirname } from "node:path";
+import { basename, delimiter, join, dirname } from "node:path";
 import process from "node:process";
 import { promisify } from "node:util";
 import { BRAND } from "./brand.ts";
 import { buildRedactIndex, type RedactIndex } from "./redact.ts";
-import { ENV_NAME_RE, isLoaderEnvName, itemNameProblem, legacyRefFor, parseEnvFile, parseRef, type SecretRef } from "./refs.ts";
+import { ENV_NAME_RE, isLoaderEnvName, isRef, isSelfCommand, itemNameProblem, legacyRefFor, localRefFor, parseEnvFile, parseRef, type SecretRef } from "./refs.ts";
+import {
+  derivePassphraseKey, findLocalItem, keychainService, newPassphraseKey, newVaultId, openSession, openVault, parseVaultFile, passphraseProblem,
+  sealSession, sealVault, serializeVault, VAULT_KIND, VaultFormatError, VaultVersionError, type VaultData, type VaultFile, type VaultHeader, type VaultKeyType,
+} from "./vault.ts";
 
 const P = BRAND.envPrefix;
 function setting(name: string): string | undefined {
@@ -26,6 +30,14 @@ export const REDACT_INDEX_FILE = join(CONFIG_DIR, "redact-index.json");
 export const AUDIT_FILE = join(CONFIG_DIR, "audit.jsonl");
 // The agent account's email and server: bw forgets both when it logs out.
 export const ACCOUNT_FILE = join(CONFIG_DIR, "account.json");
+// The local vault (format in vault.ts); a passphrase session keeps its secret
+// in one file and the vault key, sealed under it, in the other.
+export const VAULT_FILE = join(CONFIG_DIR, "vault.json");
+// The default backend keyshroud picked on a machine with no bw setup ("local"),
+// or "bw" after `setup`; write either to switch.
+export const BACKEND_FILE = join(CONFIG_DIR, "backend");
+const VAULT_TOKEN_FILE = join(CONFIG_DIR, "vault.token");
+const VAULT_SESSION_FILE = join(CONFIG_DIR, "vault.session");
 
 // After `setup`, keyshroud keeps its own bw login (a dedicated agent account) in
 // CONFIG_DIR/bw, with its own keychain entries, so the user's personal bw login
@@ -180,9 +192,11 @@ export function getAuthTargets(): AuthTargets {
   };
 }
 
-// auth.json entries use the legacy shell form so pi/omp resolve them even
-// without this package loaded.
-export const referenceFor = legacyRefFor;
+// auth.json entries use a shell form so pi/omp resolve them even without this
+// package loaded.
+export function referenceFor(itemName: string, backend: BackendName = "bw"): string {
+  return backend === "local" ? localRefFor(itemName) : legacyRefFor(itemName);
+}
 
 // Vault credentials never reach commands run on the agent's behalf: with the
 // session token a child could dump the whole vault, defeating `--only`.
@@ -270,9 +284,15 @@ function toVaultItem(raw: unknown): VaultItem | null {
   };
 }
 
+// bw output holds secrets, and a JSON.parse error quotes part of its input.
+async function bwJson(args: string[]): Promise<unknown> {
+  const output = await bw(args);
+  try { return JSON.parse(output); } catch { throw new Error(`bw ${args.slice(0, 2).join(" ")} returned output that is not JSON`); }
+}
+
 async function loadVault(): Promise<VaultIndex> {
   const index: VaultIndex = { byName: new Map(), byId: new Map() };
-  const parsed = JSON.parse(await bw(["list", "items"])) as unknown;
+  const parsed = await bwJson(["list", "items"]);
   if (!Array.isArray(parsed)) return index;
   for (const raw of parsed) {
     const item = toVaultItem(raw);
@@ -298,7 +318,7 @@ function vaultIndex(): Promise<VaultIndex> {
 let lastVaultError: string | null = null;
 // " (reason)" for an unresolved-names message: the unlock error, else why the vault could not be read.
 export function unresolvedReason(sessionError: string): string {
-  const reason = sessionError || lastVaultError;
+  const reason = sessionError || [lastVaultError, lastLocalError].filter(Boolean).join("; ");
   return reason ? ` (${reason})` : "";
 }
 function vaultErrorText(error: unknown): string {
@@ -320,7 +340,7 @@ async function lookupItem(itemName: string): Promise<VaultItem | null> {
   if (missedAt !== undefined && Date.now() - missedAt < SECRET_CACHE_TTL_MS) return null;
   (vaultMisses ??= new Map()).set(key, Date.now());
   try {
-    const item = toVaultItem(JSON.parse(await bw(["get", "item", itemName])));
+    const item = toVaultItem(await bwJson(["get", "item", itemName]));
     if (item) vaultMisses.delete(key);
     return item;
   } catch (error) {
@@ -331,7 +351,9 @@ async function lookupItem(itemName: string): Promise<VaultItem | null> {
 }
 
 export async function resolveRef(ref: SecretRef): Promise<string | null> {
-  try { await ensureSession(); } catch {}
+  if (ref.scheme === "local") return resolveLocalRef(ref);
+  bwInUse = true;
+  try { await ensureBwSession(); } catch {}
   const item = await lookupItem(ref.item);
   if (!item) return null;
   const field = ref.field;
@@ -349,6 +371,8 @@ export async function resolveRef(ref: SecretRef): Promise<string | null> {
 // The timeout leaves room for a macOS "allow access" prompt when the entry was
 // stored with `setup --confirm-unlock`; a missing entry still fails at once.
 export async function readKeychain(service: string): Promise<string | null> {
+  // Windows has neither tool, and looks a bare name up in the current directory first.
+  if (process.platform === "win32") return null;
   const user = process.env.USER || process.env.LOGNAME || "";
   try {
     const result = await runFile("security", ["find-generic-password", "-a", user, "-s", service, "-w"], { timeout: 120000, maxBuffer: 1024 * 1024 });
@@ -366,6 +390,7 @@ export async function readKeychain(service: string): Promise<string | null> {
 // for an unlock prompt, so callers check this to say why instead.
 export const KEYRING_LOCKED = "The Linux keyring is locked (log in to the desktop session, or unlock it with your keyring app)";
 export async function keychainLocked(): Promise<boolean> {
+  if (process.platform === "win32") return false;
   try {
     const result = await runFile("busctl", ["--user", "get-property", "org.freedesktop.secrets", "/org/freedesktop/secrets/aliases/default", "org.freedesktop.Secret.Collection", "Locked"], { timeout: 5000, maxBuffer: 1024 * 1024 });
     return result.stdout.trim() === "b true";
@@ -425,14 +450,42 @@ async function rawStatus(session?: string): Promise<{ status: string; serverUrl:
 }
 
 export interface SessionOptions {
-  // Ask the person at the keyboard when no master password is stored.
+  // Ask the person at the keyboard when no master password (or passphrase session) is stored.
   prompt?: boolean;
   // Always ask, and open a session without an end (hosts nobody sits at).
   unattended?: boolean;
 }
 
-export function ensureSession(opts: SessionOptions = {}): Promise<string> {
-  if (sessionPending) return opts.prompt || opts.unattended ? sessionPending.catch(() => ensureSession(opts)) : sessionPending;
+// Opens the default backend: bw's session (its token is returned), or the local vault ("").
+export async function ensureSession(opts: SessionOptions = {}): Promise<string> {
+  if ((await defaultBackend()) === "local") { await openLocal(opts); return ""; }
+  return ensureBwSession(opts);
+}
+
+export async function openBackend(backend: BackendName, opts: SessionOptions = {}): Promise<void> {
+  if (backend === "local") await openLocal(opts); else await ensureBwSession(opts);
+}
+
+// Opens what these values need, and the default backend (whose values are
+// masked too), so a master password or passphrase is asked once, up front.
+export async function ensureUnlocked(raws: string[], opts: SessionOptions = {}): Promise<void> {
+  const wanted = new Set<BackendName>([await defaultBackend()]);
+  for (const raw of raws) { const backend = backendOf(raw); if (backend) wanted.add(backend); }
+  const errors: string[] = [];
+  for (const backend of wanted) {
+    try { await openBackend(backend, opts); } catch (error) { errors.push(error instanceof Error ? error.message : String(error)); }
+  }
+  if (errors.length) throw new Error(errors.join("; "));
+}
+
+function backendOf(raw: string): BackendName | null {
+  try { const ref = parseRef(raw); if (ref) return ref.scheme === "local" ? "local" : "bw"; } catch { return null; }
+  return isBwSource(raw) ? "bw" : null;
+}
+
+export function ensureBwSession(opts: SessionOptions = {}): Promise<string> {
+  bwInUse = true;
+  if (sessionPending) return opts.prompt || opts.unattended ? sessionPending.catch(() => ensureBwSession(opts)) : sessionPending;
   if (sessionExpiresAt !== null && Date.now() >= sessionExpiresAt) {
     delete process.env.BW_SESSION;
     invalidateSecretCache();
@@ -518,7 +571,7 @@ async function lockedError(): Promise<Error> {
 async function useStoredSession(): Promise<string | null> {
   const stored = await readSession();
   if (!stored) return null;
-  if (stored.expiresAt !== null && Date.now() >= stored.expiresAt) { await lock(); return null; }
+  if (stored.expiresAt !== null && Date.now() >= stored.expiresAt) { await lockBw(); return null; }
   if ((await rawStatus(stored.token)).status !== "unlocked") return null;
   process.env.BW_SESSION = stored.token;
   sessionExpiresAt = stored.expiresAt;
@@ -683,6 +736,7 @@ async function unlocksVault(secret: string): Promise<boolean> {
 // user's terminal, so keyshroud never holds it in argv. `confirm` (macOS) trusts
 // no app, so every later read asks the user first.
 export async function storeKeychainInteractive(service: string, label: string, confirm: boolean): Promise<boolean> {
+  if (process.platform === "win32") return false;
   const user = process.env.USER || process.env.LOGNAME || "";
   const attempts: Array<[string, string[]]> = process.platform === "darwin"
     ? [["security", ["add-generic-password", "-U", "-a", user, "-s", service, "-l", label, ...(confirm ? ["-T", ""] : []), "-w"]]]
@@ -738,7 +792,9 @@ export async function readPersonalItems(): Promise<Array<Record<string, unknown>
   const token = (await runFile("bw", ["unlock", "--passwordenv", "BW_PASSWORD", "--raw"], { env: env({ BW_PASSWORD: master }), timeout: 30000, maxBuffer: 4 * 1024 * 1024 })).stdout.trim();
   if (!token) throw new Error("Personal vault unlock returned no session");
   try {
-    const parsed = JSON.parse((await runFile("bw", ["list", "items"], { env: env({ BW_SESSION: token }), timeout: 120000, maxBuffer: 256 * 1024 * 1024 })).stdout) as unknown;
+    const output = (await runFile("bw", ["list", "items"], { env: env({ BW_SESSION: token }), timeout: 120000, maxBuffer: 256 * 1024 * 1024 })).stdout;
+    let parsed: unknown;
+    try { parsed = JSON.parse(output); } catch { throw new Error("bw list items returned output that is not JSON"); }
     return Array.isArray(parsed) ? parsed as Array<Record<string, unknown>> : [];
   } finally {
     try { await runFile("bw", ["lock"], { env: env({}), timeout: 20000, maxBuffer: 1024 * 1024 }); } catch {}
@@ -755,9 +811,17 @@ export async function copyItemToOwnVault(item: Record<string, unknown>): Promise
 
 export async function syncOwnVault(): Promise<void> { await bw(["sync", "--quiet"]); invalidateSecretCache(); }
 
-// Forget the cached session and lock the bw CLI. The next resolve unlocks
-// again from the keychain, or asks.
-export async function lock(): Promise<void> {
+// Forget the cached sessions: bw locks (when keyshroud uses it), and a
+// passphrase vault needs its passphrase again. The next resolve unlocks again
+// from the keychain, or asks.
+export async function lock(): Promise<{ bw: boolean; local: boolean }> {
+  const local = await lockLocal();
+  const bwUsed = existsSync(SESSION_FILE) || await usesBw();
+  if (bwUsed) await lockBw();
+  return { bw: bwUsed, local };
+}
+
+async function lockBw(): Promise<void> {
   try { await unlink(SESSION_FILE); } catch {}
   try { await bw(["lock"]); } catch {}
   delete process.env.BW_SESSION;
@@ -801,8 +865,10 @@ export async function resolveShellValue(raw: unknown): Promise<string | null> {
   const ref = parseRef(value);
   if (ref) return resolveRef(ref);
   if (!value.startsWith("!")) return value;
+  // Any other `!keyshroud …` would ask keyshroud again, without end.
+  if (isSelfCommand(value)) return null;
   const command = value.slice(1).trim();
-  if (command.startsWith("bw ")) { try { await ensureSession(); } catch {} }
+  if (command.startsWith("bw ")) { try { await ensureBwSession(); } catch {} }
   try {
     const result = await runFile("/bin/sh", ["-c", command], { env: process.env, timeout: 15000, maxBuffer: 4 * 1024 * 1024 });
     return result.stdout.trim() || null;
@@ -811,7 +877,7 @@ export async function resolveShellValue(raw: unknown): Promise<string | null> {
 
 export function isSecretSource(raw: string): boolean {
   const value = raw.trim();
-  return value.startsWith("!") || value.startsWith("bw://");
+  return value.startsWith("!") || isRef(value);
 }
 
 export async function readAuthEntries(path: string): Promise<Record<string, unknown>> {
@@ -897,12 +963,13 @@ export interface ResolvedEnv {
   missing: string[];
 }
 
-export async function resolveEntries(entries: Array<{ name: string; raw: string }>, opts: { preferProcessEnv?: boolean } = {}): Promise<ResolvedEnv> {
+export async function resolveEntries(entries: Array<{ name: string; raw: string }>, opts: { preferProcessEnv?: boolean; injected?: Record<string, string> } = {}): Promise<ResolvedEnv> {
   const result: ResolvedEnv = { values: {}, secrets: {}, missing: [] };
   // Resolvers share the session and the batched vault snapshot, so the whole
   // pass costs one `bw list items` however many entries there are.
   const resolved = await Promise.all(entries.map(async ({ name, raw }) => {
-    const inherited = opts.preferProcessEnv ? process.env[name] : undefined;
+    const own = opts.injected?.[name] !== undefined && opts.injected[name] === process.env[name] && backendOf(raw) === "local";
+    const inherited = opts.preferProcessEnv && !own ? process.env[name] : undefined;
     if (inherited) return { name, value: inherited, secret: isSecretSource(raw) };
     if (!raw.trim()) return { name, value: "", secret: false };
     try { return { name, value: await resolveShellValue(raw), secret: isSecretSource(raw) }; } catch { return { name, value: null, secret: true }; }
@@ -920,7 +987,7 @@ export async function resolveEntries(entries: Array<{ name: string; raw: string 
 // references and literals are allowed; `!command` values would be code execution.
 export async function envFileEntries(path: string): Promise<Array<{ name: string; raw: string }>> {
   return parseEnvFile(await readFile(path, "utf8")).map(({ name, value }) => {
-    if (value.trim().startsWith("!")) throw new Error(`${path}: ${name} uses a shell command; env files accept only bw:// references and literals`);
+    if (value.trim().startsWith("!")) throw new Error(`${path}: ${name} uses a shell command; env files accept only bw:// references, local:// references and literals`);
     if (isLoaderEnvName(name)) throw new Error(`${path}: ${name} changes what programs load or run; env files cannot set it`);
     return { name, raw: value };
   });
@@ -939,29 +1006,39 @@ export async function authEnvEntries(): Promise<Array<{ name: string; raw: strin
 }
 
 // Environment wired through pi/omp auth.json. Values already present in the
-// process environment win, matching earlier releases.
-export async function buildEnvMap(): Promise<Record<string, string>> {
-  try { return (await resolveEntries(await authEnvEntries(), { preferProcessEnv: true })).values; } catch { return {}; }
+// process environment win, matching earlier releases, except local vault values
+// this process set itself (`injected`): those are resolved again, so `lock` and
+// the end of a passphrase session reach them.
+export async function buildEnvMap(injected: Record<string, string> = {}): Promise<Record<string, string>> {
+  try { return (await resolveEntries(await authEnvEntries(), { preferProcessEnv: true, injected })).values; } catch { return {}; }
 }
 
 // Values to redact in-process: wired secrets (labelled by variable name), the
-// vault session token, a master password file, and every other login password
-// in the snapshot.
+// vault session token, a master password file, every other login password in
+// the bw snapshot (when keyshroud uses bw), and every value in the local vault
+// (when it opens without asking).
 export async function redactionValues(wired: Record<string, string> = {}): Promise<Record<string, string>> {
+  let local: LocalVault | null = null;
+  try { local = await openLocal(); } catch {}
   const values = indexValues(wired);
   try { const master = (await readFile(MASTER_PASSWORD_FILE, "utf8")).trim(); if (master) values.MASTER_PASSWORD = master; } catch {}
-  try {
-    for (const item of (await vaultIndex()).byId.values()) if (item.password && !Object.hasOwn(values, item.name)) values[item.name] = item.password;
-  } catch {}
+  if (await usesBw()) {
+    try {
+      for (const item of (await vaultIndex()).byId.values()) if (item.password && !Object.hasOwn(values, item.name)) values[item.name] = item.password;
+    } catch {}
+  }
+  for (const item of local?.data.items ?? []) if (item.value && !Object.hasOwn(values, item.name)) values[item.name] = item.value;
   return values;
 }
 
 // The on-disk index (for out-of-process hooks) covers only wired secrets and
-// the session token, so it never fingerprints the user's personal passwords.
+// the session tokens, so it never fingerprints the user's personal passwords.
 export function indexValues(wired: Record<string, string> = {}): Record<string, string> {
   const values: Record<string, string> = { ...wired };
   const session = process.env.BW_SESSION?.trim();
   if (session) values.BW_SESSION = session;
+  if (localOpen) values.LOCAL_VAULT_KEY = localOpen.key.toString("hex");
+  if (localSessionSecret) values.LOCAL_VAULT_SESSION = localSessionSecret;
   return values;
 }
 
@@ -993,8 +1070,12 @@ function mapItemError(error: unknown, name: string): Error {
   return error instanceof Error ? error : new Error(text);
 }
 
-export async function findItems(search: string): Promise<Array<{ id: string; name: string }>> {
-  const parsed = JSON.parse(await bw(["list", "items", "--search", search])) as unknown;
+export async function findItems(search: string, backend?: BackendName): Promise<Array<{ id: string; name: string }>> {
+  if ((backend ?? await defaultBackend()) === "local") {
+    const needle = search.toLowerCase();
+    return ((await openLocal())?.data.items ?? []).filter((item) => item.name.toLowerCase().includes(needle)).map(({ id, name }) => ({ id, name }));
+  }
+  const parsed = await bwJson(["list", "items", "--search", search]);
   if (!Array.isArray(parsed)) return [];
   return parsed.map((item) => {
     const value = item as { id?: unknown; name?: unknown };
@@ -1002,7 +1083,12 @@ export async function findItems(search: string): Promise<Array<{ id: string; nam
   }).filter((item) => item.id && item.name);
 }
 
-export async function getSecret(itemName: string): Promise<string> {
+export async function getSecret(itemName: string, backend?: BackendName): Promise<string> {
+  if ((backend ?? await defaultBackend()) === "local") {
+    const item = findLocalItem((await openLocal())?.data ?? { items: [] }, itemName);
+    if (!item) throw new Error(`Vault item not found: ${itemName}`);
+    return item.value;
+  }
   try { return await bw(["get", "password", itemName]); } catch (error) { throw mapItemError(error, itemName); }
 }
 
@@ -1015,9 +1101,11 @@ async function refuseMasterPassword(secret: string): Promise<void> {
   if (secret === stored || await matchesMasterVerifier(secret) || await unlocksVault(secret)) throw new Error("Refusing to store the vault master password as a secret");
 }
 
-export async function createSecretItem(opts: { itemName: string; secret: string; envName?: string; notes?: string }): Promise<{ id: string }> {
+// `created`: the notice to show when this item created the local vault.
+export async function createSecretItem(opts: { itemName: string; secret: string; envName?: string; notes?: string; backend?: BackendName }): Promise<{ id: string; created?: string }> {
   const problem = itemNameProblem(opts.itemName);
   if (problem) throw new Error(`Vault item name ${problem}`);
+  if ((opts.backend ?? await defaultBackend()) === "local") return createLocalItem(opts);
   await refuseMasterPassword(opts.secret);
   const existing = await findItems(opts.itemName);
   if (existing.some((item) => item.name.toLowerCase() === opts.itemName.toLowerCase())) throw new Error(`Vault item already exists: ${opts.itemName}`);
@@ -1034,10 +1122,11 @@ export async function createSecretItem(opts: { itemName: string; secret: string;
   return { id: String(created.id) };
 }
 
-export async function rotateSecretItem(opts: { itemName: string; secret: string }): Promise<{ id: string }> {
+export async function rotateSecretItem(opts: { itemName: string; secret: string; backend?: BackendName }): Promise<{ id: string }> {
+  if ((opts.backend ?? await defaultBackend()) === "local") return rotateLocalItem(opts);
   await refuseMasterPassword(opts.secret);
   let parsed: Record<string, unknown>;
-  try { parsed = JSON.parse(await bw(["get", "item", opts.itemName])) as Record<string, unknown>; } catch (error) { throw mapItemError(error, opts.itemName); }
+  try { parsed = await bwJson(["get", "item", opts.itemName]) as Record<string, unknown>; } catch (error) { throw mapItemError(error, opts.itemName); }
   const login = parsed.login && typeof parsed.login === "object" ? parsed.login as Record<string, unknown> : {};
   parsed.login = { ...login, password: opts.secret };
   const id = String(parsed.id ?? "");
@@ -1047,7 +1136,16 @@ export async function rotateSecretItem(opts: { itemName: string; secret: string 
   return { id };
 }
 
-export async function deleteItem(id: string, permanent = false): Promise<void> {
+export async function deleteItem(id: string, permanent = false, backend?: BackendName): Promise<void> {
+  if ((backend ?? await defaultBackend()) === "local") {
+    if (!(await readVaultFile())) throw new Error(`Vault item not found: ${id}`);
+    await updateLocal((data) => {
+      const index = data.items.findIndex((item) => item.id === id);
+      if (index < 0) throw new Error(`Vault item not found: ${id}`);
+      data.items.splice(index, 1);
+    });
+    return;
+  }
   await bw(["delete", "item", id, ...(permanent ? ["--permanent"] : [])]);
   invalidateSecretCache();
 }
@@ -1225,4 +1323,575 @@ function readMasked(prompt: string): Promise<string> {
     stdin.setRawMode(true); stdin.setEncoding("utf8"); stdin.resume(); stdin.on("data", onData);
     draw();
   });
+}
+
+// ---------------------------------------------------------------------------
+// The local vault: the default backend on a machine keyshroud has not used
+// with bw. Its key lives in the macOS keychain, the Linux Secret Service or
+// Windows DPAPI, so it opens without asking; where none of them works, the key
+// is derived from a passphrase and a session keeps it for 30 minutes.
+
+export type BackendName = "bw" | "local";
+export interface BackendChoice { backend: BackendName; reason: string }
+
+let backendChoice: Promise<BackendChoice> | null = null;
+// Set once this process opens bw or resolves a bw reference.
+let bwInUse = false;
+
+export async function defaultBackend(): Promise<BackendName> { return (await backendInfo()).backend; }
+
+// Where unqualified item names go, never asking bw itself: a machine set up
+// by 0.7 (any trace of it) stays on bw; a new one gets the local vault, and
+// that choice is written down so later traces (an index, an audit log) cannot
+// flip it. A 0.7 setup that left no trace at all looks like a new machine.
+export function backendInfo(): Promise<BackendChoice> { return backendChoice ??= detectBackend(); }
+
+async function detectBackend(): Promise<BackendChoice> {
+  const forced = setting("BACKEND");
+  if (forced === "bw" || forced === "local") return { backend: forced, reason: `${P}_BACKEND` };
+  const written = await readFile(BACKEND_FILE, "utf8").then((text) => text.trim(), () => "");
+  if (written === "bw" || written === "local") return { backend: written, reason: `${BACKEND_FILE} says ${written}` };
+  // Written down, so a signal that comes and goes (BW_SESSION, the session file) cannot flip it later.
+  const choose = async (backend: BackendName, reason: string): Promise<BackendChoice> => {
+    await writePrivateFile(BACKEND_FILE, `${backend}\n`).catch(() => {});
+    return { backend, reason };
+  };
+  if (existsSync(join(OWN_BW_DIR, "data.json"))) return choose("bw", `${BRAND.name}'s own bw login`);
+  if (existsSync(VAULT_FILE)) return choose("local", "the local vault exists");
+  const traces = [SESSION_FILE, MASTER_PASSWORD_FILE, MASTER_VERIFIER_FILE, ACCOUNT_FILE, AUDIT_FILE, REDACT_INDEX_FILE].filter((path) => existsSync(path));
+  if (traces.length) return choose("bw", `${BRAND.name} 0.7 files (${traces.map((path) => path.slice(CONFIG_DIR.length + 1)).join(", ")})`);
+  if (process.env.BW_SESSION?.trim()) return choose("bw", "BW_SESSION is set");
+  const targets = getAuthTargets();
+  for (const path of [targets.omp, targets.pi]) {
+    for (const entry of Object.values(await readAuthEntries(path))) if (isBwSource(authEntryRaw(entry) ?? "")) return choose("bw", `bw references in ${path}`);
+  }
+  if (await sharedBwLoggedIn()) return choose("bw", "bw is logged in");
+  for (const service of [KEYCHAIN_MASTER_SERVICE, KEYCHAIN_CLIENT_ID_SERVICE]) if (await keychainHas(service)) return choose("bw", `the keychain entry ${service}`);
+  return choose("local", "no bw setup found");
+}
+
+// bw's default login (the one 0.7 used before `setup`), read without spawning bw.
+async function sharedBwLoggedIn(): Promise<boolean> {
+  const configured = process.env.BITWARDENCLI_APPDATA_DIR;
+  const dir = configured ? configured
+    : process.platform === "darwin" ? join(homedir(), "Library", "Application Support", "Bitwarden CLI")
+    : process.platform === "win32" ? join(process.env.APPDATA ?? join(homedir(), "AppData", "Roaming"), "Bitwarden CLI")
+    : join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "Bitwarden CLI");
+  try {
+    const data = JSON.parse(await readFile(join(dir, "data.json"), "utf8")) as Record<string, unknown>;
+    return typeof data.global_account_activeAccountId === "string" || typeof data.activeUserId === "string";
+  } catch { return false; }
+}
+
+// A path as people read it: ~ for the home directory (not on Windows, where cmd has no ~).
+export function shownPath(path: string): string {
+  const home = homedir();
+  if (process.platform === "win32" || !home || !path.startsWith(`${home}/`)) return path;
+  return `~${path.slice(home.length)}`;
+}
+
+// `setup`: new items go to the agent account from now on.
+export async function rememberBackend(backend: BackendName): Promise<void> {
+  await writePrivateFile(BACKEND_FILE, `${backend}\n`);
+  backendChoice = Promise.resolve({ backend, reason: `${BACKEND_FILE} says ${backend}` });
+}
+
+// bw:// references and `!bw …` / `!…/bw-get …` commands.
+function isBwSource(raw: string): boolean {
+  const value = raw.trim();
+  return value.startsWith("bw://") || /^!\s*(?:\S*[\\/])?bw(?:-get|\.cmd|\.exe)?(?:\s|$)/i.test(value);
+}
+
+// Whether an entry exists, without reading it: a macOS entry stored with
+// `setup --confirm-unlock` would ask first.
+async function keychainHas(service: string): Promise<boolean> {
+  if (process.platform === "win32") return false;
+  if (process.platform !== "darwin") return (await readKeychain(service)) !== null;
+  const user = process.env.USER || process.env.LOGNAME || "";
+  return runFile("security", ["find-generic-password", "-a", user, "-s", service], { timeout: 10000, maxBuffer: 1024 * 1024 }).then(() => true, () => false);
+}
+
+async function usesBw(): Promise<boolean> {
+  return bwInUse || Boolean(process.env.BW_SESSION?.trim()) || (await defaultBackend()) === "bw";
+}
+
+// `local://Name` or `bw://Name` picks the backend; a plain name uses the default one.
+export async function parseItemArg(arg: string): Promise<{ backend: BackendName; name: string }> {
+  for (const scheme of ["local", "bw"] as const) {
+    if (!arg.startsWith(`${scheme}://`)) continue;
+    const ref = parseRef(arg);
+    if (!ref || ref.field !== "password") throw new Error(`An item is a name, or ${scheme}://NAME`);
+    return { backend: scheme, name: ref.item };
+  }
+  return { backend: await defaultBackend(), name: arg };
+}
+
+interface LocalVault { file: VaultFile; key: Buffer; data: VaultData; stamp: string }
+let localOpen: LocalVault | null = null;
+// A vault prepared in memory: its file is written, and its key stored, with its first change.
+let localPending: { header: VaultHeader; key: Buffer } | null = null;
+let localSessionSecret: string | null = null;
+let lastLocalError: string | null = null;
+
+// A passphrase vault without a session, when nobody may be asked.
+export class LocalLockedError extends Error {}
+const LOCAL_LOCKED = `The local vault is locked: run \`${BRAND.bin} unlock\` in a terminal`;
+const LOCAL_NEEDS_TERMINAL = `No local vault yet, and creating one here needs a passphrase: run \`${BRAND.bin} unlock\` in a terminal to create it`;
+
+function localFileError(error: unknown): Error {
+  if (error instanceof VaultVersionError) return new Error(`The local vault ${shownPath(VAULT_FILE)} was written by a newer ${BRAND.name}; update it (npm i -g ${BRAND.bin}@latest)`);
+  if (error instanceof VaultFormatError) return new Error(`The local vault ${shownPath(VAULT_FILE)} failed its integrity check; nothing was changed`);
+  return error instanceof Error ? error : new Error(String(error));
+}
+
+// One open file, so the stamp (inode, size, mtime) belongs to the text read.
+async function readVaultFile(): Promise<{ file: VaultFile; stamp: string } | null> {
+  let handle;
+  try { handle = await open(VAULT_FILE, "r"); } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+  try {
+    const info = await handle.stat();
+    const text = await handle.readFile("utf8");
+    try { return { file: parseVaultFile(text), stamp: `${info.ino}:${info.size}:${info.mtimeMs}` }; } catch (error) { throw localFileError(error); }
+  } finally { await handle.close(); }
+}
+
+// The key of an existing vault: from the keychain or DPAPI without asking; a
+// passphrase vault from its session, else (opts.prompt) by asking.
+async function localKey(file: VaultFile, opts: SessionOptions = {}): Promise<Buffer> {
+  if (localOpen?.file.id === file.id && file.key.type !== "passphrase") return localOpen.key;
+  const spec = file.key;
+  if (spec.type === "keychain") {
+    const hex = await readKeychain(spec.service);
+    if (hex && /^[0-9a-f]{64}$/.test(hex)) return Buffer.from(hex, "hex");
+    if (await keychainLocked()) throw new Error(KEYRING_LOCKED);
+    throw new Error(`The key of the local vault (keychain entry ${spec.service}) is missing, so ${shownPath(VAULT_FILE)} cannot be opened; move that file aside to start a new vault`);
+  }
+  if (spec.type === "dpapi") {
+    const hex = await dpapi("unprotect", spec.blob, file.id);
+    if (!/^[0-9a-f]{64}$/.test(hex)) throw new Error(`Windows could not unprotect the key of the local vault ${shownPath(VAULT_FILE)} (DPAPI): it opens only for the Windows user who created it`);
+    return Buffer.from(hex, "hex");
+  }
+  if (!opts.unattended) { const key = await readLocalSession(file.id); if (key) return key; }
+  if (!opts.prompt && !opts.unattended) throw new LocalLockedError(LOCAL_LOCKED);
+  const key = await derivePassphraseKey(await askPassphrase(opts), spec);
+  if (!openVault(file, key)) throw new Error("Wrong passphrase; nothing was unlocked");
+  await writeLocalSession(file.id, key, Boolean(opts.unattended));
+  return key;
+}
+
+// The local vault, opened, or null when there is none yet. A passphrase vault
+// is open only while its session lasts, checked on every call, so `lock` and
+// the session's end also close it in long-lived processes (MCP, pi).
+async function openLocal(opts: SessionOptions = {}): Promise<LocalVault | null> {
+  const read = await readVaultFile();
+  if (!read) return null;
+  let key: Buffer | null = null;
+  if (read.file.key.type === "passphrase" && !opts.unattended) {
+    key = await readLocalSession(read.file.id);
+    if (!key && localOpen?.file.id === read.file.id) localOpen = null;
+  }
+  if (localOpen && localOpen.stamp === read.stamp && localOpen.file.id === read.file.id && !opts.unattended) return localOpen;
+  key ??= await localKey(read.file, opts);
+  let data: VaultData | null;
+  try { data = openVault(read.file, key); } catch (error) { throw localFileError(error); }
+  if (!data) throw localFileError(new VaultFormatError("not opened by its key"));
+  localOpen = { file: read.file, key, data, stamp: read.stamp };
+  return localOpen;
+}
+
+// With no local vault yet: decide how its key is kept, and (opts.prompt, in a
+// terminal) ask for a new passphrase if one is needed, before any value is
+// read. Nothing is written.
+export async function prepareLocalVault(opts: { prompt?: boolean } = {}): Promise<void> {
+  if (localPending || await readVaultFile()) return;
+  const mode = await vaultKeyMode();
+  const id = newVaultId();
+  if (mode === "passphrase") {
+    if (!opts.prompt) throw new Error(LOCAL_NEEDS_TERMINAL);
+    const spec = newPassphraseKey();
+    const key = await derivePassphraseKey(await askNewPassphrase(), spec);
+    localPending = { header: { v: 1, kind: VAULT_KIND, id, key: spec }, key };
+    return;
+  }
+  // The DPAPI blob is made when the file is written.
+  localPending = { header: { v: 1, kind: VAULT_KIND, id, key: mode === "keychain" ? { type: "keychain", service: keychainService(id) } : { type: "dpapi", blob: "" } }, key: randomBytes(32) };
+}
+
+async function vaultKeyMode(): Promise<VaultKeyType> {
+  const forced = setting("VAULT_KEY");
+  if (forced === "keychain" && process.platform === "win32") throw new Error(`${P}_VAULT_KEY=keychain: Windows has no keychain here; use dpapi or passphrase`);
+  if (forced === "keychain" || forced === "dpapi" || forced === "passphrase") return forced;
+  if (process.platform === "win32") return "dpapi";
+  if (process.platform === "darwin") return "keychain";
+  return await secretServiceReady() ? "keychain" : "passphrase";
+}
+
+// Linux: only a Secret Service that answers and is unlocked (not over SSH
+// without a desktop login, not in a container).
+async function secretServiceReady(): Promise<boolean> {
+  const onPath = (name: string) => (process.env.PATH ?? "").split(delimiter).some((dir) => dir && existsSync(join(dir, name)));
+  if (!onPath("secret-tool")) return false;
+  try {
+    const result = await runFile("busctl", ["--user", "get-property", "org.freedesktop.secrets", "/org/freedesktop/secrets/aliases/default", "org.freedesktop.Secret.Collection", "Locked"], { timeout: 5000, maxBuffer: 1024 * 1024 });
+    return result.stdout.trim() === "b false";
+  } catch { return false; }
+}
+
+// Read, change and write the vault under its lock, so concurrent writers each
+// keep the other's items. With `create`, a missing vault is created here.
+// Everything slow (asking, the OS key store, DPAPI) happens before the lock,
+// which is held only to read, seal and write.
+async function updateLocal(change: (data: VaultData) => void, opts: SessionOptions & { create?: boolean } = {}): Promise<{ created: string | null }> {
+  for (let attempt = 1; ; attempt++) {
+    const opened = await openLocal(opts);
+    let fresh: { header: VaultHeader; key: Buffer } | null = null;
+    if (!opened) {
+      if (!opts.create) throw new Error(`There is no local vault yet (${shownPath(VAULT_FILE)})`);
+      await prepareLocalVault(opts);
+      fresh = await commitVaultKey(localPending!);
+    }
+    let outcome: { created: string | null } | null;
+    try {
+      await mkdir(CONFIG_DIR, { recursive: true, mode: 0o700 });
+      outcome = await withVaultLock(async (held) => {
+        const current = await readVaultFile();
+        let header: VaultHeader, key: Buffer, data: VaultData | null;
+        if (current) {
+          // Created or replaced since it was opened: start over with that vault.
+          if (!opened || opened.file.id !== current.file.id) return null;
+          header = current.file;
+          key = opened.key;
+          try { data = openVault(current.file, key); } catch (error) { throw localFileError(error); }
+          if (!data) throw localFileError(new VaultFormatError("not opened by its key"));
+        } else {
+          if (!fresh) return null;
+          ({ header, key } = fresh);
+          data = { items: [] };
+        }
+        change(data);
+        const file = sealVault(header, data, key);
+        await writeVaultFile(serializeVault(file), held);
+        const info = await stat(VAULT_FILE);
+        localOpen = { file, key, data, stamp: `${info.ino}:${info.size}:${info.mtimeMs}` };
+        return { created: current ? null : creationNotice(header) };
+      });
+    } catch (error) {
+      // A vault that was not written leaves no key behind.
+      if (fresh && (await readVaultFile().catch(() => null))?.file.id !== fresh.header.id) {
+        localPending = null;
+        if (fresh.header.key.type === "keychain") await forgetVaultKey(fresh.header.key.service);
+      }
+      throw error;
+    }
+    if (fresh) localPending = null;
+    if (outcome) {
+      if (outcome.created && fresh?.header.key.type === "passphrase") await writeLocalSession(fresh.header.id, fresh.key, false);
+      return outcome;
+    }
+    // Another process created the vault first: its key is the one to use.
+    if (fresh?.header.key.type === "keychain") await forgetVaultKey(fresh.header.key.service);
+    if (attempt >= 3) throw new Error("The local vault kept changing while this command ran; nothing was written");
+  }
+}
+
+// Store a prepared vault's key: in the keychain, or protected by DPAPI (the blob goes in the header).
+async function commitVaultKey(pending: { header: VaultHeader; key: Buffer }): Promise<{ header: VaultHeader; key: Buffer }> {
+  const { header, key } = pending;
+  if (header.key.type === "keychain") await storeVaultKey(header.key.service, key);
+  if (header.key.type === "dpapi") return { header: { ...header, key: { type: "dpapi", blob: await dpapi("protect", key.toString("hex"), header.id) } }, key };
+  return pending;
+}
+
+async function forgetVaultKey(service: string): Promise<void> {
+  const user = process.env.USER || process.env.LOGNAME || "";
+  const [command, args]: [string, string[]] = process.platform === "darwin"
+    ? ["security", ["delete-generic-password", "-a", user, "-s", service]]
+    : ["secret-tool", ["clear", "service", service, "account", user]];
+  await runFile(command, args, { timeout: 10000, maxBuffer: 1024 * 1024 }).catch(() => {});
+}
+
+// The vault's lock: a directory holding its owner's token. It is held for
+// milliseconds and broken after 30 s; a holder that lost it (a paused process)
+// neither writes nor removes its successor's lock. Temp files found on taking
+// it were left by such a holder: removing them makes its late rename fail
+// rather than overwrite the vault (see writeVaultFile). Exported for tests.
+export async function withVaultLock<T>(fn: (held: () => Promise<boolean>) => Promise<T>): Promise<T> {
+  const dir = `${VAULT_FILE}.lock`;
+  const owner = join(dir, "owner");
+  const token = randomBytes(8).toString("hex");
+  const start = Date.now();
+  for (;;) {
+    try { await mkdir(dir); await writeFile(owner, token, { mode: 0o600 }); break; } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      const lockedAt = await stat(dir).then((info) => info.mtimeMs, () => 0);
+      if (Date.now() - lockedAt > 30000) { await rm(dir, { recursive: true, force: true }); continue; }
+      if (Date.now() - start > 60000) throw new Error(`Timed out waiting for the lock ${dir}`);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+  const held = async () => (await readFile(owner, "utf8").catch(() => "")) === token;
+  const temp = `${basename(VAULT_FILE)}.tmp.`;
+  for (const name of await readdir(CONFIG_DIR).catch(() => [])) if (name.startsWith(temp)) await rm(join(CONFIG_DIR, name), { force: true }).catch(() => {});
+  try { return await fn(held); } finally { if (await held()) await rm(dir, { recursive: true, force: true }); }
+}
+
+// The lock must still be held once the new text is on disk. A successor that
+// broke it after that removed the temp file, so the rename either lands before
+// the successor reads the vault or fails.
+async function writeVaultFile(text: string, held: () => Promise<boolean>): Promise<void> {
+  const tmp = `${VAULT_FILE}.tmp.${randomBytes(6).toString("hex")}`;
+  const handle = await open(tmp, "wx", 0o600);
+  try { await handle.writeFile(text, "utf8"); await handle.sync(); } finally { await handle.close(); }
+  await chmod(tmp, 0o600);
+  const lost = new Error("This process lost the lock of the local vault (it was paused for over 30 seconds); nothing was written");
+  if (!(await held())) { await rm(tmp, { force: true }); throw lost; }
+  // Windows: a reader holding the file open makes the rename fail for a moment.
+  for (let attempt = 1; ; attempt++) {
+    try { await rename(tmp, VAULT_FILE); break; } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code ?? "";
+      if (code === "ENOENT") throw lost;
+      if (process.platform !== "win32" || attempt >= 5 || !["EPERM", "EACCES", "EBUSY"].includes(code)) { await rm(tmp, { force: true }); throw error; }
+      await new Promise((resolve) => setTimeout(resolve, 50 * attempt));
+    }
+  }
+  await chmod(VAULT_FILE, 0o600);
+  // The rename itself reaches the disk with its directory (not on Windows, which cannot open one).
+  if (process.platform !== "win32") {
+    const dir = await open(CONFIG_DIR, "r").catch(() => null);
+    if (dir) { try { await dir.sync(); } catch {} finally { await dir.close(); } }
+  }
+}
+
+function creationNotice(header: VaultHeader): string {
+  const where = header.key.type === "keychain"
+    ? `its key is in the ${process.platform === "darwin" ? "macOS keychain" : "Secret Service keyring"} (${header.key.service}), so programs running as you can open it without asking`
+    : header.key.type === "dpapi" ? "its key is protected by Windows DPAPI for your account, so programs running as you can open it without asking"
+    : `it opens with your passphrase; sessions end after ${Math.round(SESSION_TTL_MS / 60000)} minutes`;
+  return `${BRAND.bin}: created the local vault ${shownPath(VAULT_FILE)}; ${where}.`;
+}
+
+// The key goes to the keychain tool on stdin, never in argv; its output (which
+// could echo the line) never reaches an error.
+async function storeVaultKey(service: string, key: Buffer): Promise<void> {
+  const user = process.env.USER || process.env.LOGNAME || "";
+  const hex = key.toString("hex");
+  const failed = new Error(`Could not store the key of the local vault in the ${process.platform === "darwin" ? "macOS keychain" : "Secret Service keyring"} (locked, or none in this session); nothing was created. Unlock it, or use a passphrase instead: ${P}_VAULT_KEY=passphrase ${BRAND.bin} unlock`);
+  if (/["\\\r\n]/.test(user)) throw failed;
+  if (process.platform === "darwin") {
+    await runFile("security", ["-i"], { timeout: 20000, maxBuffer: 1024 * 1024 }, `add-generic-password -U -a "${user}" -s "${service}" -l "${BRAND.name} vault" -w ${hex}\n`).catch(() => { throw failed; });
+  } else {
+    if (await keychainLocked()) throw new Error(KEYRING_LOCKED);
+    await runFile("secret-tool", ["store", `--label=${BRAND.name} vault`, "service", service, "account", user], { timeout: 20000, maxBuffer: 1024 * 1024 }, hex).catch(() => { throw failed; });
+  }
+  if ((await readKeychain(service)) !== hex) { await forgetVaultKey(service); throw failed; }
+}
+
+// Windows DPAPI through PowerShell 5.1 (on every Windows 10/11). The key or
+// blob goes on stdin and comes back on stdout; the vault id (the entropy) in
+// the environment. "" when it fails.
+function dpapi(op: "protect" | "unprotect", input: string, id: string): Promise<string> {
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    "$ProgressPreference = 'SilentlyContinue'",
+    "Add-Type -AssemblyName System.Security",
+    "$in = [Console]::In.ReadToEnd().Trim()",
+    `$e = [Text.Encoding]::UTF8.GetBytes($env:${P}_VAULT_ID)`,
+    op === "protect"
+      ? "$b = [Security.Cryptography.ProtectedData]::Protect([Text.Encoding]::ASCII.GetBytes($in), $e, 'CurrentUser'); [Console]::Out.Write([Convert]::ToBase64String($b))"
+      : "$b = [Security.Cryptography.ProtectedData]::Unprotect([Convert]::FromBase64String($in), $e, 'CurrentUser'); [Console]::Out.Write([Text.Encoding]::ASCII.GetString($b))",
+  ].join("\n");
+  return new Promise((resolve, reject) => {
+    const child = execFile(POWERSHELL, ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")],
+      { windowsHide: true, timeout: 30000, maxBuffer: 1024 * 1024, env: childEnv({ [`${P}_VAULT_ID`]: id }) }, (error, stdout) => {
+        const out = String(stdout ?? "").trim();
+        if (op === "protect" && (error || !out)) reject(new Error("Windows DPAPI could not protect the key of the local vault; nothing was created"));
+        else resolve(error ? "" : out);
+      });
+    child.on("error", () => {});
+    child.stdin?.on("error", () => {});
+    child.stdin?.end(input);
+  });
+}
+
+// Terminal only: a new passphrase is never typed into a dialog an agent opened.
+async function askNewPassphrase(): Promise<string> {
+  if (!(process.stdin.isTTY && process.stderr.isTTY)) throw new Error(LOCAL_NEEDS_TERMINAL);
+  process.stderr.write(`${BRAND.name}: a passphrase protects the new local vault ${shownPath(VAULT_FILE)}. Nothing can recover it.\n`);
+  const passphrase = await readMasked("New passphrase for the local vault: ");
+  const problem = passphraseProblem(passphrase);
+  if (problem) throw new Error(`The passphrase ${problem}; nothing was created`);
+  if ((await readMasked("Repeat it: ")) !== passphrase) throw new Error("The passphrases differ; nothing was created");
+  return passphrase;
+}
+
+async function askPassphrase(opts: SessionOptions): Promise<string> {
+  const span = opts.unattended ? "with no time limit (unattended)" : `for ${Math.round(SESSION_TTL_MS / 60000)} minutes`;
+  const tty = process.stdin.isTTY && process.stderr.isTTY;
+  if (opts.unattended && !tty) throw new Error("An unattended session needs a terminal: run this command in one");
+  if (tty) {
+    process.stderr.write(`${BRAND.name}: unlocking the local vault ${span}.\n`);
+    const value = await readMasked("Passphrase of the local vault: ");
+    if (!value) throw new Error("Cancelled");
+    return value;
+  }
+  const value = await nativePasswordDialog([
+    "A program on this computer, usually an AI agent, needs a secret and the local vault is locked.",
+    "",
+    `Unlock it ${span}?`,
+    "",
+    "Enter the passphrase of the local vault.",
+  ].join("\n"), "Unlock");
+  if (value === null) throw new LocalLockedError(LOCAL_LOCKED);
+  if (value === "") throw new Error("Cancelled");
+  return value;
+}
+
+// vault.token holds "<session id> <secret>"; vault.session the key sealed under
+// that secret, with its end. A pair caught mid-write (ids differ) is left alone.
+async function readLocalSession(vaultId: string): Promise<Buffer | null> {
+  let token: string, wrap: string;
+  try { [token, wrap] = await Promise.all([readFile(VAULT_TOKEN_FILE, "utf8"), readFile(VAULT_SESSION_FILE, "utf8")]); } catch { return null; }
+  const [id = "", secret = ""] = token.trim().split(" ");
+  if (!/^[0-9a-f]{64}$/.test(secret)) return null;
+  let wrapId: unknown;
+  try { wrapId = (JSON.parse(wrap) as { id?: unknown }).id; } catch {}
+  if (wrapId !== id) return null;
+  const opened = openSession(wrap, Buffer.from(secret, "hex"), vaultId, Date.now());
+  if (!opened) { await lockLocal(id); return null; }
+  localSessionSecret = secret;
+  return opened.key;
+}
+
+async function writeLocalSession(vaultId: string, key: Buffer, unattended: boolean): Promise<void> {
+  const secret = randomBytes(32);
+  const expires = unattended ? null : Date.now() + SESSION_TTL_MS;
+  const wrap = sealSession(vaultId, expires, secret, key);
+  await writePrivateFile(VAULT_SESSION_FILE, `${JSON.stringify(wrap)}\n`);
+  await writePrivateFile(VAULT_TOKEN_FILE, `${wrap.id} ${secret.toString("hex")}\n`);
+  localSessionSecret = secret.toString("hex");
+  if (expires !== null) armLocalLockTimer(wrap.id, expires);
+}
+
+// Deletes the sealed key when the session ends, even if nothing calls
+// keyshroud then, so a copied token stops working. A newer session is left alone.
+function armLocalLockTimer(id: string, expiresAt: number): void {
+  if (setting("LOCK_TIMER") === "0") return;
+  const script = [
+    `const fs = require("fs"), e = process.env;`,
+    `const tick = () => { const left = Number(e.${P}_LOCK_AT) - Date.now(); if (left > 0) return setTimeout(tick, Math.min(left, 30000));`,
+    `  try { if (JSON.parse(fs.readFileSync(e.${P}_LOCK_FILE, "utf8")).id === e.${P}_LOCK_ID) fs.rmSync(e.${P}_LOCK_FILE, { force: true }); } catch {} };`,
+    `tick();`,
+  ].join("\n");
+  const child = spawn(process.execPath, ["-e", script], {
+    detached: true, stdio: "ignore", windowsHide: true,
+    env: childEnv({ [`${P}_LOCK_AT`]: String(expiresAt), [`${P}_LOCK_FILE`]: VAULT_SESSION_FILE, [`${P}_LOCK_ID`]: id }),
+  });
+  child.on("error", () => {});
+  child.unref();
+}
+
+// true when a passphrase session was ended. With `id`, only that session: one
+// another process wrote meanwhile is left alone.
+async function lockLocal(id?: string): Promise<boolean> {
+  const idOf = { [VAULT_SESSION_FILE]: (text: string) => (JSON.parse(text) as { id?: unknown }).id, [VAULT_TOKEN_FILE]: (text: string) => text.trim().split(" ")[0] };
+  let ended = false;
+  for (const path of [VAULT_SESSION_FILE, VAULT_TOKEN_FILE]) {
+    if (id !== undefined && await readFile(path, "utf8").then(idOf[path]).catch(() => null) !== id) continue;
+    try { await unlink(path); ended = true; } catch {}
+  }
+  if (localOpen?.file.key.type === "passphrase") localOpen = null;
+  localSessionSecret = null;
+  return ended;
+}
+
+export interface LocalStatus { path: string; key: VaultKeyType | null; status: "none" | "unlocked" | "locked" | "error"; items: number | null; error: string | null; expiresAt?: number | null }
+
+// Never asks.
+export async function localStatus(): Promise<LocalStatus> {
+  const base = { path: shownPath(VAULT_FILE), key: null, items: null, error: null };
+  let read;
+  try { read = await readVaultFile(); } catch (error) { return { ...base, status: "error", error: error instanceof Error ? error.message : String(error) }; }
+  if (!read) return { ...base, status: "none" };
+  const key = read.file.key.type;
+  let expiresAt: number | null | undefined;
+  if (key === "passphrase") { try { expiresAt = (JSON.parse(await readFile(VAULT_SESSION_FILE, "utf8")) as { expires?: number | null }).expires; } catch {} }
+  try {
+    const opened = await openLocal();
+    return { ...base, key, status: "unlocked", items: opened?.data.items.length ?? 0, expiresAt };
+  } catch (error) {
+    if (error instanceof LocalLockedError) return { ...base, key, status: "locked" };
+    return { ...base, key, status: "error", error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+// `unlock` with the local vault as the default: a passphrase vault asks (and is
+// created here when there is none yet); a keychain or DPAPI vault has nothing to unlock.
+export async function unlockLocal(opts: { unattended?: boolean } = {}): Promise<{ key: VaultKeyType; created: string | null; expiresAt: number | null }> {
+  const read = await readVaultFile();
+  if (!read) {
+    const mode = await vaultKeyMode();
+    if (mode !== "passphrase") return { key: mode, created: null, expiresAt: null };
+    await prepareLocalVault({ prompt: true });
+    const { created } = await updateLocal(() => {}, { create: true });
+    if (opts.unattended) await writeLocalSession(localOpen!.file.id, localOpen!.key, true);
+    return { key: mode, created, expiresAt: opts.unattended ? null : (await localStatus()).expiresAt ?? null };
+  }
+  await openLocal({ prompt: true, unattended: opts.unattended });
+  return { key: read.file.key.type, created: null, expiresAt: opts.unattended ? null : (await localStatus()).expiresAt ?? null };
+}
+
+async function resolveLocalRef(ref: SecretRef): Promise<string | null> {
+  let opened: LocalVault | null;
+  try { opened = await openLocal(); lastLocalError = null; } catch (error) { lastLocalError = error instanceof Error ? error.message : String(error); return null; }
+  const item = opened ? findLocalItem(opened.data, ref.item) : null;
+  if (!item) return null;
+  const field = ref.field;
+  if (typeof field === "object") return item.fields?.[field.custom] ?? null;
+  switch (field) {
+    case "password": return item.value;
+    case "username": return item.username ?? null;
+    case "notes": return item.notes ?? null;
+    case "uri": return item.uris?.[0] ?? null;
+    case "id": return item.id;
+    case "totp": return null;
+  }
+}
+
+// An agent can start add/rotate, so a dialog could be used to phish the
+// passphrase into an item it can then read; refuse it outright.
+async function refuseLocalSecrets(secret: string): Promise<void> {
+  if (!secret) return;
+  if (await usesBw()) await refuseMasterPassword(secret);
+  const read = await readVaultFile().catch(() => null);
+  const target = read ? (read.file.key.type === "passphrase" && localOpen?.file.id === read.file.id ? { spec: read.file.key, key: localOpen.key } : null)
+    : localPending?.header.key.type === "passphrase" ? { spec: localPending.header.key, key: localPending.key } : null;
+  if (target && timingSafeEqual(await derivePassphraseKey(secret, target.spec), target.key)) throw new Error("Refusing to store the passphrase of the local vault as a secret");
+}
+
+async function createLocalItem(opts: { itemName: string; secret: string; envName?: string; notes?: string }): Promise<{ id: string; created?: string }> {
+  await refuseLocalSecrets(opts.secret);
+  const id = randomUUID();
+  const now = new Date().toISOString();
+  const { created } = await updateLocal((data) => {
+    if (findLocalItem(data, opts.itemName)) throw new Error(`Vault item already exists: ${opts.itemName}`);
+    data.items.push({ id, name: opts.itemName, value: opts.secret, ...(opts.envName ? { env: opts.envName } : {}), ...(opts.notes ? { notes: opts.notes } : {}), created: now, updated: now });
+  }, { create: true });
+  return created ? { id, created } : { id };
+}
+
+async function rotateLocalItem(opts: { itemName: string; secret: string }): Promise<{ id: string }> {
+  if (!(await readVaultFile())) throw new Error(`Vault item not found: ${opts.itemName}`);
+  await refuseLocalSecrets(opts.secret);
+  let id = "";
+  await updateLocal((data) => {
+    const item = findLocalItem(data, opts.itemName);
+    if (!item) throw new Error(`Vault item not found: ${opts.itemName}`);
+    item.value = opts.secret;
+    item.updated = new Date().toISOString();
+    id = item.id;
+  });
+  return { id };
 }

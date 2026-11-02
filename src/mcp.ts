@@ -19,7 +19,7 @@ const TOOLS = [
   {
     name: "secrets_list",
     description: "List the names of secrets wired for this machine. Never returns values.",
-    inputSchema: { type: "object", properties: { env_file: { type: "string", description: "Optional dotenv file of bw:// references to include" } } },
+    inputSchema: { type: "object", properties: { env_file: { type: "string", description: "Optional dotenv file of local:// or bw:// references to include" } } },
   },
   {
     name: "secrets_run",
@@ -31,7 +31,7 @@ const TOOLS = [
         command: { type: "string", description: "Shell command run with /bin/sh -c" },
         cwd: { type: "string", description: "Working directory" },
         only: { type: "array", items: { type: "string" }, description: "Inject only these names" },
-        env_file: { type: "string", description: "Dotenv file of bw:// references to add" },
+        env_file: { type: "string", description: "Dotenv file of local:// or bw:// references to add" },
         timeout_ms: { type: "number", description: "Kill the command after this many milliseconds (default 120000)" },
       },
     },
@@ -51,7 +51,7 @@ const TOOLS = [
   },
   {
     name: "vault_status",
-    description: "Report vault lock state, server, and item count. Never returns values.",
+    description: "Report the vault's backend, lock state, and item count. Never returns values.",
     inputSchema: { type: "object", properties: {} },
   },
 ];
@@ -76,7 +76,7 @@ async function runTool(args: Json): Promise<Json> {
     entries = entries.filter((entry) => only.includes(entry.name));
   }
   let vaultError = "";
-  try { await core.ensureSession({ prompt: true }); } catch (error) { vaultError = error instanceof Error ? error.message : String(error); }
+  try { await core.ensureUnlocked(entries.map((entry) => entry.raw), { prompt: true }); } catch (error) { vaultError = error instanceof Error ? error.message : String(error); }
   const env = await core.resolveEntries(entries);
   await core.audit("run", Object.keys(env.secrets), "mcp");
   const redactor = createRedactor(await core.redactionValues(env.secrets));
@@ -150,20 +150,22 @@ async function callTool(name: string, args: Json): Promise<Json> {
     if (problem) return text(`item_name ${problem}`, true);
     const notes = typeof args.purpose === "string" && args.purpose ? args.purpose.slice(0, 500) : undefined;
     try {
-      const reference = core.referenceFor(itemName);
-      await core.ensureSession({ prompt: true });
-      if ((await core.findItems(itemName)).some((item) => item.name.toLowerCase() === itemName.toLowerCase())) return text(`Vault item already exists: ${itemName}`, true);
+      const backend = await core.defaultBackend();
+      const reference = core.referenceFor(itemName, backend);
+      await core.openBackend(backend, { prompt: true });
+      if (backend === "local") await core.prepareLocalVault();
+      if ((await core.findItems(itemName, backend)).some((item) => item.name.toLowerCase() === itemName.toLowerCase())) return text(`Vault item already exists: ${itemName}`, true);
       const secret = await core.readSecretFromDialog({ itemName, envName });
       if (secret === "") return text("The user saved an empty value; nothing was stored.", true);
       if (secret !== null) {
-        await core.createSecretItem({ itemName, secret, envName, notes });
+        const { created } = await core.createSecretItem({ itemName, secret, envName, notes, backend });
         await core.audit("request", [envName], "mcp");
         const conflicts: string[] = [];
         for (const path of Object.values(core.getAuthTargets())) if (!(await core.writeAuthEntry(path, envName, reference)).ok) conflicts.push(path);
         await core.refreshRedactIndex();
         if (conflicts.length) return text(`created item=${itemName}, but ${envName} is already wired to another secret in ${conflicts.join(", ")} and was left unchanged. Ask the user before running \`${BRAND.bin} wire --env ${envName} --item ${shellQuote(itemName)} --force\`.`, true);
         const verified = (await core.resolveShellValue(reference)) !== null;
-        return text(`The user entered the value in a ${BRAND.name} dialog. created item=${itemName} env=${envName} verified=${verified ? "yes" : "no"}. Use secrets_run with $${envName}.`);
+        return text(`${created ? `${created}\n` : ""}The user entered the value in a ${BRAND.name} dialog. created item=${itemName} env=${envName} verified=${verified ? "yes" : "no"}. Use secrets_run with $${envName}.`);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -173,6 +175,11 @@ async function callTool(name: string, args: Json): Promise<Json> {
     return text(`No dialog can be shown here. Ask the user to run this in their own terminal (the value is entered in a masked prompt; it must never be pasted into the chat):\n\n  ${BRAND.bin} add --env ${envName} --item ${shellQuote(itemName)}${purpose}\n\nAfter it reports verified=yes, use secrets_run with $${envName}.`);
   }
   if (name === "vault_status") {
+    if ((await core.defaultBackend()) === "local") {
+      const l = await core.localStatus();
+      const vault = l.status === "none" ? "vault=none (created by the first secrets_request)" : `vault=${l.path} key=${l.key ?? "unknown"} items=${l.items ?? "unknown"}${l.error ? ` error=${l.error}` : ""}`;
+      return text(`status=${l.status === "none" ? "empty" : l.status} backend=local ${vault} ${BRAND.bin}=${runningVersion ?? "unknown"}`);
+    }
     try { await core.ensureSession(); } catch {}
     const s = await core.getStatus();
     return text(`status=${s.status} server=${s.serverUrl ?? "unconfigured"} items=${s.items ?? "unknown"} bw=${s.version ?? "missing"} ${BRAND.bin}=${runningVersion ?? "unknown"}`);
@@ -193,7 +200,7 @@ async function handle(message: Json): Promise<Json | null> {
       protocolVersion: SUPPORTED_VERSIONS.includes(requested) ? requested : SUPPORTED_VERSIONS[0],
       capabilities: { tools: {} },
       serverInfo: { name: BRAND.name, version: pkg.version },
-      instructions: `Secrets live in the user's Vaultwarden. Use secrets_run to run commands that need them; values are masked as <redacted:NAME>. Never ask the user to paste a secret into the chat; use secrets_request.`,
+      instructions: `Secrets live in the user's ${(await core.defaultBackend()) === "local" ? `local ${BRAND.name} vault` : "Vaultwarden"}. Use secrets_run to run commands that need them; values are masked as <redacted:NAME>. Never ask the user to paste a secret into the chat; use secrets_request.`,
     });
   }
   if (method === "ping") return reply({});

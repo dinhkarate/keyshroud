@@ -29,4 +29,10 @@ test("pi extension hydrates env, registers tools, and redacts tool results", asy
   const result = handlers.get("tool_result")!({ content: [{ type: "text", text: `token=${GH}` }, { type: "image", data: "x" }] }) as { content: Array<{ text?: string }> };
   assert.equal(result.content[0].text, "token=<redacted:GH_TOKEN>");
   assert.equal(handlers.get("tool_result")!({ content: [{ type: "text", text: "clean" }] }), undefined);
+
+  // Tools start without another vault call.
+  const calls = (await box.bwCalls()).length;
+  await handlers.get("tool_call")!({ type: "tool_call", toolName: "bash", toolCallId: "1", input: { command: "true" } });
+  assert.equal((await box.bwCalls()).length, calls);
+  assert.equal(process.env.GH_TOKEN, GH);
 });

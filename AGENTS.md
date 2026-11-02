@@ -1,6 +1,6 @@
 # keyshroud repository
 
-- Runtime-neutral core belongs in `src/core.ts` (plus `src/refs.ts`, `src/redact.ts`); it must not import pi, omp, or Claude Code APIs.
+- Runtime-neutral core belongs in `src/core.ts` (plus `src/vault.ts`, `src/refs.ts`, `src/redact.ts`); it must not import pi, omp, or Claude Code APIs.
 - Product naming lives only in `src/brand.ts`, `package.json`, plugin manifests, and docs.
 - Keep secret values out of logs, diagnostics, tool results, hook output, commit messages, and documentation examples.
 - Never put Vaultwarden session tokens or credentials in git.

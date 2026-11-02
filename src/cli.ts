@@ -12,20 +12,22 @@ import * as core from "./core.ts";
 import { runClaudeHook } from "./hooks.ts";
 import { serveMcp } from "./mcp.ts";
 import { buildRedactIndex, compileRedactIndex, createRedactor, createRedactStream, type RedactIndex } from "./redact.ts";
-import { ENV_NAME_RE, isLoaderEnvName, isRef, itemNameProblem, looksSecret, parseDotenvStrict, parseRef, type DotenvEntry } from "./refs.ts";
+import { ENV_NAME_RE, isLoaderEnvName, isRef, itemNameProblem, looksSecret, parseDotenvStrict, parseRef, refFor, type DotenvEntry } from "./refs.ts";
 
 const usage = `Usage: ${BRAND.bin} <command> [options]
 
 Secrets
-  get <ENV_NAME | bw://ref>        Print one resolved value to stdout
+  get <ENV_NAME | local://ref | bw://ref>
+                                   Print one resolved value to stdout
   run [--env-file F]... [--only A,B] [--no-auth] [--mask|--no-mask] -- <cmd> [args]
                                    Run a command with secrets injected (alias: exec)
   inject [-i template] [-o out] [--force]
-                                   Render {{ bw://ref }} placeholders
+                                   Render {{ local://ref }} and {{ bw://ref }} placeholders
   redact                           Copy stdin to stdout with vault secrets masked
   scan [paths...]                  Find vault secret values in files (exit 1 on leaks)
   env [--shell]                    List wired names (or print shell exports)
   add --env NAME --item ITEM [--notes TEXT] [--target pi|omp|both] [--stdin|--dialog]
+                                   ITEM is a name (default backend), local://NAME or bw://NAME
   import [--from F|-] [--out F] [--prefix P] [--only A,B] [--skip A,B] [--yes] [--replace] [--force]
                                    Move secrets from a .env into the vault and write .env.refs
                                    (dry run unless --yes; prints names only)
@@ -33,13 +35,13 @@ Secrets
   wire --env NAME --item ITEM [--target pi|omp|both] [--force]
   unwire --env NAME [--target pi|omp|both]
 
-Vault
+Vault (the local vault by default; bw/Vaultwarden once set up)
   setup --email EMAIL [--server URL] [--confirm-unlock | --unattended] [--registered]
                                    Give ${BRAND.name} its own bw login on a dedicated agent account
   migrate [--item NAME]... [--env-file F]... [--yes]
                                    Copy the wired items from your personal vault to that account
                                    (dry run unless --yes; prints names only)
-  unlock [--unattended]            Unlock now (asks unless a master password is stored);
+  unlock [--unattended]            Unlock now (asks unless the key or master password is stored);
                                    the session ends after 30 minutes
                                    (--unattended: no end, for hosts nobody sits at; in a terminal)
   status | lock | doctor
@@ -89,10 +91,21 @@ function failureCode(error: unknown): number {
   if (/not found|Ambiguous|Empty secret|unresolved|No value|reference/i.test(text)) return 4;
   return 3;
 }
-async function authValue(name: string): Promise<string | null> {
+async function authRaw(name: string): Promise<string | undefined> {
   const merged = { ...(await core.readAuthEntries(targetPaths.pi)), ...(await core.readAuthEntries(targetPaths.omp)) };
-  return core.resolveShellValue(core.authEntryRaw(merged[name]));
+  return core.authEntryRaw(merged[name]);
 }
+async function authValue(name: string): Promise<string | null> {
+  return core.resolveShellValue(await authRaw(name));
+}
+async function parseItem(arg: string): Promise<{ backend: core.BackendName; name: string }> {
+  try { return await core.parseItemArg(arg); } catch (error) { fail(error instanceof Error ? error.message : String(error), 2); }
+}
+function localLine(s: core.LocalStatus): string {
+  if (s.status === "none") return "vault=none";
+  return `vault=${s.path} key=${s.key ?? "unknown"} status=${s.status} items=${s.items ?? "unknown"}${s.error ? ` (${s.error})` : ""}`;
+}
+function keySource(key: string | null): string { return key === "dpapi" ? "Windows DPAPI" : "the keychain"; }
 function timestamp(): string {
   const d = new Date(); const p = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
@@ -118,7 +131,7 @@ async function runCommand(args: string[]): Promise<void> {
   // Later sources win: env files override auth.json.
   const deduped = [...new Map(selected.map((entry) => [entry.name, entry])).values()];
   let vaultError = "";
-  try { await core.ensureSession({ prompt: true }); } catch (error) { vaultError = error instanceof Error ? error.message : String(error); }
+  try { await core.ensureUnlocked(deduped.map((entry) => entry.raw), { prompt: true }); } catch (error) { vaultError = error instanceof Error ? error.message : String(error); }
   const env = await core.resolveEntries(deduped);
   await core.audit("run", Object.keys(env.secrets), command);
   if (env.missing.length) console.error(`${BRAND.bin}: unresolved (names only): ${env.missing.join(", ")}${core.unresolvedReason(vaultError)}`);
@@ -149,10 +162,10 @@ async function inject(args: string[]): Promise<void> {
   const input = valueAfter(args, "-i");
   const output = valueAfter(args, "-o");
   const template = input ? await readFile(input, "utf8") : await readStdin();
-  let vaultError = "";
-  try { await core.ensureSession({ prompt: true }); } catch (error) { vaultError = error instanceof Error ? error.message : String(error); }
-  const pattern = /\{\{\s*(bw:\/\/[^\s}]+(?:\s+[^\s}]+)*?)\s*\}\}/g;
+  const pattern = /\{\{\s*((?:bw|local):\/\/[^\s}]+(?:\s+[^\s}]+)*?)\s*\}\}/g;
   const refs = [...new Set([...template.matchAll(pattern)].map((match) => match[1]))];
+  let vaultError = "";
+  try { await core.ensureUnlocked(refs, { prompt: true }); } catch (error) { vaultError = error instanceof Error ? error.message : String(error); }
   const values = new Map<string, string>();
   await Promise.all(refs.map(async (raw) => {
     const ref = parseRef(raw);
@@ -288,6 +301,8 @@ async function setupCommand(args: string[]): Promise<void> {
   }
   await core.rememberAccount(email, server);
   console.log(`${BRAND.name} now keeps its own bw login in ${core.OWN_BW_DIR}; your personal bw login is untouched.`);
+  await core.rememberBackend("bw");
+  if (existsSync(core.VAULT_FILE)) console.log("New items now go to the agent account; local:// items keep resolving.");
   await core.audit("setup", [], "cli");
   const minutes = Math.round(core.SESSION_TTL_MS / 60000);
   console.log(`ready: bw login=${email} (own). ${unattended ? "The session stays open (unattended)." : `Sessions end after ${minutes} minutes; then ${kept ? "keyshroud unlocks again from the keychain" : "keyshroud asks for the master password again"}.`}`);
@@ -302,7 +317,7 @@ async function migrateCommand(args: string[]): Promise<void> {
   const entries = [...await core.authEnvEntries()];
   for (const file of valuesAfter(args, "--env-file")) entries.push(...await core.envFileEntries(file));
   const names = new Map<string, string>();
-  for (const entry of entries) { try { const ref = parseRef(entry.raw); if (ref) names.set(ref.item.toLowerCase(), ref.item); } catch {} }
+  for (const entry of entries) { try { const ref = parseRef(entry.raw); if (ref && !ref.scheme) names.set(ref.item.toLowerCase(), ref.item); } catch {} }
   for (const name of valuesAfter(args, "--item")) names.set(name.toLowerCase(), name);
   await core.ensureSession({ prompt: true });
   const own = await core.findItems("");
@@ -367,8 +382,10 @@ async function importCommand(args: string[]): Promise<void> {
   }
   for (const name of [...only, ...skip]) if (!entries.some((entry) => entry.name === name)) fail(`--only/--skip name not in ${from}: ${name}`, 2);
 
-  await core.ensureSession({ prompt: true });
-  const existing = await core.findItems(prefix);
+  const backend = await core.defaultBackend();
+  const ref = (item: string) => backend === "local" ? { item, field: "password" as const, scheme: "local" as const } : { item, field: "password" as const };
+  await core.openBackend(backend, { prompt: true });
+  const existing = await core.findItems(prefix, backend);
   const rows: ImportRow[] = [];
   for (const entry of entries) {
     if (isRef(entry.value)) { rows.push({ entry, kind: "ref" }); continue; }
@@ -378,7 +395,7 @@ async function importCommand(args: string[]): Promise<void> {
     const matches = existing.filter((candidate) => candidate.name.toLowerCase() === item.toLowerCase());
     if (matches.length > 1) { rows.push({ entry, item, kind: "conflict", note: "more than one vault item has this name" }); continue; }
     if (matches.length === 0) { rows.push({ entry, item, kind: "new" }); continue; }
-    const current = await core.resolveRef({ item: matches[0].id, field: "password" });
+    const current = await core.resolveRef(ref(matches[0].id));
     rows.push(current === entry.value
       ? { entry, item, kind: "reuse", note: "same value already in the vault" }
       : { entry, item, kind: "conflict", note: "vault item exists with a different value" });
@@ -389,7 +406,7 @@ async function importCommand(args: string[]): Promise<void> {
   for (const row of rows) {
     const label = row.kind === "literal" ? "literal   kept" : row.kind === "ref" ? "reference kept"
       : row.kind === "conflict" ? `secret    conflict: ${row.note} ("${row.item}")`
-      : `secret    ${row.kind.padEnd(8)} -> bw://${row.item}${row.note ? `  (${row.note})` : ""}`;
+      : `secret    ${row.kind.padEnd(8)} -> ${refFor(row.item!, backend)}${row.note ? `  (${row.note})` : ""}`;
     const short = row.item && row.entry.value.length < 6 ? "  [under 6 characters: stored, but too short to be masked]" : "";
     console.log(`  ${row.entry.name.padEnd(width)}  ${label}${short}`);
   }
@@ -402,22 +419,25 @@ async function importCommand(args: string[]): Promise<void> {
   if (outExists && !replace && !args.includes("--force")) fail(`${out} already exists; use --force to overwrite it`, 5);
   if (!yes) { console.log(`Dry run: nothing written. Re-run with --yes to create ${count("new")} item(s) and write ${out}`); return; }
 
+  if (backend === "local") await core.prepareLocalVault({ prompt: true });
   const created: string[] = [];
   for (const row of rows) {
     if (row.kind !== "new") continue;
-    try { await core.createSecretItem({ itemName: row.item!, secret: row.entry.value, envName: row.entry.name, notes: `Imported by ${BRAND.bin} from ${basename(from === "-" ? "stdin" : from)}` }); }
-    catch { if (created.length) console.error(`Created before the failure: ${created.join(", ")}`); fail(`Failed to create the vault item for ${row.entry.name}; nothing was written to ${out}`, 3); }
+    try {
+      const result = await core.createSecretItem({ itemName: row.item!, secret: row.entry.value, envName: row.entry.name, notes: `Imported by ${BRAND.bin} from ${basename(from === "-" ? "stdin" : from)}`, backend });
+      if (result.created) console.error(result.created);
+    } catch { if (created.length) console.error(`Created before the failure: ${created.join(", ")}`); fail(`Failed to create the vault item for ${row.entry.name}; nothing was written to ${out}`, 3); }
     created.push(row.entry.name);
   }
   for (const row of toStore) {
     let value: string | null = null;
-    try { value = await core.resolveRef({ item: row.item!, field: "password" }); } catch {}
+    try { value = await core.resolveRef(ref(row.item!)); } catch {}
     if (value !== row.entry.value) fail(`Verification failed for ${row.entry.name}: the vault does not return the imported value; nothing was written to ${out}`, 4);
   }
 
   const eol = text.includes("\r\n") ? "\r\n" : "\n";
   const lines = text.split(/\r?\n/);
-  for (const row of toStore) lines[row.entry.line - 1] = `${row.entry.exported ? "export " : ""}${row.entry.name}=bw://${row.item}`;
+  for (const row of toStore) lines[row.entry.line - 1] = `${row.entry.exported ? "export " : ""}${row.entry.name}=${refFor(row.item!, backend)}`;
   const mode = replace ? (await stat(out)).mode & 0o777 : 0o600;
   const tmp = `${out}.tmp.${randomBytes(6).toString("hex")}`;
   await writeFile(tmp, lines.join(eol), { mode, flag: "wx" });
@@ -425,6 +445,20 @@ async function importCommand(args: string[]): Promise<void> {
   await core.audit("import", toStore.map((row) => row.entry.name), "cli");
   console.log(`imported ${toStore.length} secret(s) (${created.length} new); wrote ${out}`);
   if (!replace && from !== "-") console.log(`${from} still holds the plaintext values. Check with \`${BRAND.bin} run --env-file ${relative(process.cwd(), out) || out} -- <cmd>\`, then delete it or re-run with --replace.`);
+}
+
+// doctor with the local vault as the default backend: no bw lines, no bw call
+// (unless auth.json wires a bw reference).
+async function localDoctor(reason: string): Promise<void> {
+  const l = await core.localStatus();
+  console.log(`backend=local (${reason})`);
+  console.log(`local ${localLine(l)}`);
+  if (l.key === "passphrase" && l.status === "unlocked" && l.expiresAt !== undefined) console.log(`session expires=${l.expiresAt === null ? "never (unattended)" : new Date(l.expiresAt).toISOString()}`);
+  for (const path of [targetPaths.omp, targetPaths.pi]) for (const name of Object.keys(await core.readAuthEntries(path))) console.log(`${path} ${name} resolved=${(await authValue(name)) ? "yes" : "no"}`);
+  console.log(`redact index=${(await core.readRedactIndex()) ? "present" : "missing"}`);
+  const settings = JSON.parse(await readFile(join(homedir(), ".claude", "settings.json"), "utf8").catch(() => "{}")) as Record<string, unknown>;
+  console.log(`apiKeyHelper wired=${settings.apiKeyHelper ? "yes" : "no"}`);
+  if (l.status === "locked" || l.status === "error") process.exitCode = 3;
 }
 
 async function main(): Promise<void> {
@@ -438,20 +472,41 @@ async function main(): Promise<void> {
   }
   try {
     if (command === "status") {
+      if ((await core.defaultBackend()) === "local") {
+        const l = await core.localStatus();
+        console.log(l.status === "none" ? `backend=local vault=none: no secrets yet (${BRAND.bin} add --env NAME --item ITEM)` : `backend=local ${localLine(l)}`);
+        if (l.status === "locked" || l.status === "error") process.exitCode = 3;
+        return;
+      }
       try { await core.ensureSession(); } catch {}
       const s = await core.getStatus();
       console.log(`server=${s.serverUrl ?? "unconfigured"} status=${s.status} items=${s.items ?? "unknown"} bw=${s.version ?? "missing"}`);
+      const l = await core.localStatus();
+      if (l.status !== "none") console.log(`local ${localLine(l)}`);
       if (s.status !== "unlocked") process.exitCode = 3;
       return;
     }
     if (command === "unlock") {
       requireKnownFlags(args, [], ["--unattended"]);
+      if ((await core.defaultBackend()) === "local") {
+        const result = await core.unlockLocal({ unattended: args.includes("--unattended") });
+        if (result.created) console.error(result.created);
+        if (result.key !== "passphrase") console.log(`the local vault opens with its key from ${keySource(result.key)}; nothing to unlock`);
+        else console.log(result.expiresAt ? `unlocked until ${new Date(result.expiresAt).toLocaleTimeString()}` : "unlocked (no time limit)");
+        return;
+      }
       await core.ensureSession({ prompt: true, unattended: args.includes("--unattended") });
       const stored = await core.readSession();
       console.log(!stored ? "unlocked" : stored.expiresAt ? `unlocked until ${new Date(stored.expiresAt).toLocaleTimeString()}` : "unlocked (no time limit)");
       return;
     }
-    if (command === "lock") { requireKnownFlags(args, []); await core.lock(); console.log("locked"); return; }
+    if (command === "lock") {
+      requireKnownFlags(args, []);
+      const result = await core.lock();
+      const local = result.bw || result.local ? null : await core.localStatus();
+      console.log(local?.key === "keychain" || local?.key === "dpapi" ? `nothing to lock: the local vault opens with its key from ${keySource(local.key)}` : local?.status === "none" ? "nothing to lock: no local vault yet" : "locked");
+      return;
+    }
     if (command === "scan") { await scan(args); return; }
     if (command === "env") {
       if (args.some((arg) => arg !== "--shell")) fail(usage, 2);
@@ -463,8 +518,9 @@ async function main(): Promise<void> {
     if (command === "get") {
       if (args.length !== 1) fail(usage, 2);
       const ref = parseRef(args[0]);
+      const raw = ref ? args[0] : await authRaw(args[0]);
       let vaultError = "";
-      try { await core.ensureSession({ prompt: true }); } catch (error) { vaultError = error instanceof Error ? error.message : String(error); }
+      try { await core.ensureUnlocked(raw ? [raw] : [], { prompt: true }); } catch (error) { vaultError = error instanceof Error ? error.message : String(error); }
       const value = ref ? await core.resolveRef(ref) : await authValue(args[0]);
       if (value === null) fail(`Secret unresolved: ${args[0]}${core.unresolvedReason(vaultError)}`, 4);
       await core.audit("get", [args[0]], "cli");
@@ -489,25 +545,30 @@ async function main(): Promise<void> {
     if (command === "api-key") {
       requireKnownFlags(args, ["--item"]);
       const item = valueAfter(args, "--item"); if (!item) fail(usage, 2);
-      await core.ensureSession({ prompt: true }); process.stdout.write(await core.getSecret(item)); return;
+      const { backend, name } = await parseItem(item);
+      await core.openBackend(backend, { prompt: true }); process.stdout.write(await core.getSecret(name, backend)); return;
     }
     if (command === "add") {
       requireKnownFlags(args, ["--env", "--item", "--notes", "--target"], ["--stdin", "--dialog"]);
-      const envName = valueAfter(args, "--env"); const itemName = valueAfter(args, "--item"); const notes = valueAfter(args, "--notes");
-      if (!envName || !itemName || !ENV_NAME_RE.test(envName)) fail(usage, 2);
+      const envName = valueAfter(args, "--env"); const itemArg = valueAfter(args, "--item"); const notes = valueAfter(args, "--notes");
+      if (!envName || !itemArg || !ENV_NAME_RE.test(envName)) fail(usage, 2);
+      const { backend, name: itemName } = await parseItem(itemArg);
       checkNames(envName, itemName);
-      const reference = core.referenceFor(itemName);
+      const reference = core.referenceFor(itemName, backend);
       const targets = targetList(valueAfter(args, "--target"));
-      await core.ensureSession({ prompt: true });
-      if ((await core.findItems(itemName)).some((item) => item.name.toLowerCase() === itemName.toLowerCase())) fail(`Vault item already exists: ${itemName}`, 5);
+      await core.openBackend(backend, { prompt: true });
+      // A passphrase for a new local vault is asked before the value; nothing is written until both are in hand.
+      if (backend === "local") await core.prepareLocalVault({ prompt: true });
+      if ((await core.findItems(itemName, backend)).some((item) => item.name.toLowerCase() === itemName.toLowerCase())) fail(`Vault item already exists: ${itemName}`, 5);
       const secret = await readSecret(args, `Paste secret for ${envName}: `, itemName, envName);
-      await core.createSecretItem({ itemName, secret, envName, notes });
+      const { created } = await core.createSecretItem({ itemName, secret, envName, notes, backend });
+      if (created) console.error(created);
       await core.audit("add", [envName], "cli");
       let conflict = false;
       for (const path of targets) { const result = await core.writeAuthEntry(path, envName, reference); if (!result.ok) conflict = true; }
       const verified = (await core.resolveShellValue(reference)) !== null;
       await core.refreshRedactIndex();
-      console.log(`created item=${itemName} env=${envName} targets=${targets.join(",")} verified=${verified ? "yes" : "no"}`);
+      console.log(`created item=${itemName} env=${envName} targets=${targets.map(core.shownPath).join(",")} verified=${verified ? "yes" : "no"}`);
       if (conflict) { console.error("Item created, but one or more auth targets already contained the environment name."); process.exitCode = 5; }
       return;
     }
@@ -516,27 +577,29 @@ async function main(): Promise<void> {
     if (command === "migrate") { await migrateCommand(args); return; }
     if (command === "rotate") {
       requireKnownFlags(args, ["--item"], ["--stdin", "--dialog"]);
-      const itemName = valueAfter(args, "--item"); if (!itemName) fail(usage, 2);
-      await core.ensureSession({ prompt: true }); const secret = await readSecret(args, "Paste replacement secret: ", itemName);
-      await core.rotateSecretItem({ itemName, secret }); await core.audit("rotate", [itemName], "cli"); await core.refreshRedactIndex();
+      const itemArg = valueAfter(args, "--item"); if (!itemArg) fail(usage, 2);
+      const { backend, name: itemName } = await parseItem(itemArg);
+      await core.openBackend(backend, { prompt: true }); const secret = await readSecret(args, "Paste replacement secret: ", itemName);
+      await core.rotateSecretItem({ itemName, secret, backend }); await core.audit("rotate", [itemName], "cli"); await core.refreshRedactIndex();
       console.log(`rotated item=${itemName}`); return;
     }
     if (command === "wire") {
       requireKnownFlags(args, ["--env", "--item", "--target"], ["--force"]);
-      const envName = valueAfter(args, "--env"); const itemName = valueAfter(args, "--item");
-      if (!envName || !itemName || !ENV_NAME_RE.test(envName)) fail(usage, 2);
+      const envName = valueAfter(args, "--env"); const itemArg = valueAfter(args, "--item");
+      if (!envName || !itemArg || !ENV_NAME_RE.test(envName)) fail(usage, 2);
       if (isLoaderEnvName(envName)) fail(`${envName} changes what programs load or run; it cannot be wired to a secret`, 2);
-      const reference = core.referenceFor(itemName);
+      const { backend, name: itemName } = await parseItem(itemArg);
+      const reference = core.referenceFor(itemName, backend);
       const targets = targetList(valueAfter(args, "--target"));
       for (const path of targets) { const result = await core.writeAuthEntry(path, envName, reference, { overwrite: args.includes("--force") }); if (!result.ok) fail(result.message, 5); }
-      console.log(`wired env=${envName} item=${itemName} targets=${targets.join(",")}`); return;
+      console.log(`wired env=${envName} item=${itemName} targets=${targets.map(core.shownPath).join(",")}`); return;
     }
     if (command === "unwire") {
       requireKnownFlags(args, ["--env", "--target"]);
       const envName = valueAfter(args, "--env"); if (!envName) fail(usage, 2);
       const targets = targetList(valueAfter(args, "--target")); const names: string[] = [];
       for (const path of targets) if (await core.deleteAuthEntry(path, envName)) names.push(path);
-      console.log(`removed env=${envName} targets=${names.join(",") || "none"}`); return;
+      console.log(`removed env=${envName} targets=${names.map(core.shownPath).join(",") || "none"}`); return;
     }
     if (command === "link-cli") {
       requireKnownFlags(args, ["--dir"], ["--force"]);
@@ -562,6 +625,8 @@ async function main(): Promise<void> {
     }
     if (command === "doctor") {
       requireKnownFlags(args, []);
+      const choice = await core.backendInfo();
+      if (choice.backend === "local") { await localDoctor(choice.reason); return; }
       try { await core.ensureSession(); } catch {}
       const s = await core.getStatus(); console.log(`bw login=${core.OWN_BW_LOGIN ? `own agent account (${core.OWN_BW_DIR})` : `shared with your personal bw (run: ${BRAND.bin} setup)`}`); console.log(`bw version=${s.version ?? "missing (install @bitwarden/cli)"}`); console.log(`bw server=${s.serverUrl ?? "unconfigured (run: bw config server <url>)"}`); console.log(`session=${s.status}`);
       const session = await core.readSession();
@@ -579,7 +644,9 @@ async function main(): Promise<void> {
       for (const path of [targetPaths.omp, targetPaths.pi]) for (const name of Object.keys(await core.readAuthEntries(path))) console.log(`${path} ${name} resolved=${loggedOut ? `unknown (bw is ${s.status})` : (await authValue(name)) ? "yes" : "no"}`);
       console.log(`redact index=${(await core.readRedactIndex()) ? "present" : "missing"}`);
       const settings = JSON.parse(await readFile(join(homedir(), ".claude", "settings.json"), "utf8").catch(() => "{}")) as Record<string, unknown>;
-      console.log(`apiKeyHelper wired=${settings.apiKeyHelper ? "yes" : "no"}`); if (s.status !== "unlocked") process.exitCode = 3; return;
+      console.log(`apiKeyHelper wired=${settings.apiKeyHelper ? "yes" : "no"}`);
+      console.log(`local ${localLine(await core.localStatus())}`);
+      if (s.status !== "unlocked") process.exitCode = 3; return;
     }
     fail(usage, 2);
   } catch (error) { console.error(error instanceof Error ? error.message : String(error)); process.exitCode = failureCode(error); }
