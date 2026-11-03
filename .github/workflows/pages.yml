@@ -19,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         if: env.CF_TOKEN != ''
-      - uses: cloudflare/wrangler-action@v3
+      - uses: cloudflare/wrangler-action@v4
         if: env.CF_TOKEN != ''
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
