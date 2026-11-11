@@ -5,6 +5,14 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.9.3] - 2026-11-11
+
+### Changed
+- Runs on Node.js 18.19 or newer (was 22.18), so the Node.js that Ubuntu 24.04 and Debian 13 install
+  with apt is enough. CI runs the whole test suite against the built CLI on Node 18.19 and 20.
+- The agent install guide (`keyshroud.dev/install.md`) says how to install Node.js on each OS, asking
+  the user first, and how to install without sudo when `npm install -g` fails with `EACCES`.
+
 ## [0.9.2] - 2026-11-11
 
 ### Added

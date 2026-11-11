@@ -6,7 +6,7 @@ import { cp, mkdir, readdir, readFile, stat, symlink, unlink, utimes, writeFile 
 import { join } from "node:path";
 import { test } from "node:test";
 import { BRAND } from "../src/brand.ts";
-import { CLI, item, runCli, runCliTty, runCliTtySteps, sandbox, writeAuth } from "./helpers.ts";
+import { CLI, NODE, item, runCli, runCliTty, runCliTtySteps, sandbox, writeAuth } from "./helpers.ts";
 
 const GH = "ghp_FAKE0123456789abcdef";
 const NPM = "npm_FAKEabcdefghijklmnop";
@@ -407,7 +407,7 @@ test("Claude Code hooks: session-start writes the index, post-tool-use redacts",
 
 test("MCP secrets_request stores the value from a native dialog", async () => {
   const box = await wired();
-  const child = spawn(process.execPath, [CLI, "mcp"], { env: { ...box.env, DISPLAY: ":0", FAKE_DIALOG_VALUE: "mcp-zq-value" }, cwd: box.dir });
+  const child = spawn(NODE, [CLI, "mcp"], { env: { ...box.env, DISPLAY: ":0", FAKE_DIALOG_VALUE: "mcp-zq-value" }, cwd: box.dir });
   let out = "";
   child.stdout.on("data", (chunk) => { out += chunk; });
   child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "secrets_request", arguments: { env_name: "STRIPE_KEY", item_name: "Stripe" } } })}\n`);
@@ -420,7 +420,7 @@ test("MCP secrets_request stores the value from a native dialog", async () => {
 });
 
 async function mcpCall(box: Awaited<ReturnType<typeof wired>>, name: string, args: object, env: Record<string, string> = {}) {
-  const child = spawn(process.execPath, [CLI, "mcp"], { env: { ...box.env, ...env }, cwd: box.dir });
+  const child = spawn(NODE, [CLI, "mcp"], { env: { ...box.env, ...env }, cwd: box.dir });
   let out = "";
   child.stdout.on("data", (chunk) => { out += chunk; });
   child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } })}\n`);
@@ -473,7 +473,7 @@ test("MCP secrets_run never leaks a partial secret when output hits the collecti
 
 test("MCP server lists tools and runs commands with masked output", async () => {
   const box = await wired();
-  const child = spawn(process.execPath, [CLI, "mcp"], { env: box.env, cwd: box.dir });
+  const child = spawn(NODE, [CLI, "mcp"], { env: box.env, cwd: box.dir });
   const responses: Array<Record<string, any>> = [];
   let buffer = "";
   child.stdout.on("data", (chunk) => {

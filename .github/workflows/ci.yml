@@ -24,6 +24,25 @@ jobs:
           xcrun swiftc -O -swift-version 5 -o "$RUNNER_TEMP/touchid" src/touchid.swift
           code=0; "$RUNNER_TEMP/touchid" </dev/null || code=$?; test "$code" -eq 1
       - run: npm pack --dry-run
+  # The tests need a Node that strips types; the published CLI (dist/) runs them under the oldest Node in "engines".
+  old-node:
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["18.19", "20"]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with: { node-version: "${{ matrix.node }}" }
+      - run: echo "OLD_NODE=$(command -v node)" >> "$GITHUB_ENV"
+      - uses: actions/setup-node@v5
+        with: { node-version: "24", cache: npm }
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+        env: { KEYSHROUD_TEST_NODE: "${{ env.OLD_NODE }}", KEYSHROUD_TEST_CLI: dist/cli.js }
+      - run: '"$OLD_NODE" dist/cli.js --version'
   no-ai-coauthor:
     runs-on: ubuntu-latest
     steps:

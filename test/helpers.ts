@@ -1,11 +1,14 @@
 import { spawn } from "node:child_process";
 import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BRAND } from "../src/brand.ts";
 
-export const CLI = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
+// KEYSHROUD_TEST_NODE + KEYSHROUD_TEST_CLI run the built CLI under an older Node while the tests themselves
+// need one that strips types (CI checks the oldest Node in package.json "engines" this way).
+export const NODE = process.env.KEYSHROUD_TEST_NODE || process.execPath;
+export const CLI = process.env.KEYSHROUD_TEST_CLI ? resolve(process.env.KEYSHROUD_TEST_CLI) : fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 const FIXTURES = fileURLToPath(new URL("./fixtures", import.meta.url));
 
 export interface Sandbox {
@@ -61,7 +64,7 @@ export interface RunResult { code: number | null; stdout: string; stderr: string
 
 export function runCli(box: Sandbox, args: string[], input?: string, extraEnv: Record<string, string> = {}): Promise<RunResult> {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [CLI, ...args], { env: { ...box.env, ...extraEnv }, cwd: box.dir });
+    const child = spawn(NODE, [CLI, ...args], { env: { ...box.env, ...extraEnv }, cwd: box.dir });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => { stdout += chunk; });
@@ -99,7 +102,7 @@ sys.exit(os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1]))
 
 export function runCliTty(box: Sandbox, args: string[], waitFor: string, typed: string, extraEnv: Record<string, string> = {}): Promise<RunResult> {
   return new Promise((resolve) => {
-    const child = spawn("python3", ["-c", PTY_SCRIPT, waitFor, typed, process.execPath, CLI, ...args], { env: { ...box.env, ...extraEnv }, cwd: box.dir });
+    const child = spawn("python3", ["-c", PTY_SCRIPT, waitFor, typed, NODE, CLI, ...args], { env: { ...box.env, ...extraEnv }, cwd: box.dir });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => { stdout += chunk; });
@@ -142,7 +145,7 @@ sys.exit(os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1]))
 
 export function runCliTtySteps(box: Sandbox, args: string[], steps: Array<[string, string]>, extraEnv: Record<string, string> = {}): Promise<RunResult> {
   return new Promise((resolve) => {
-    const child = spawn("python3", ["-c", PTY_STEPS_SCRIPT, JSON.stringify(steps), process.execPath, CLI, ...args], { env: { ...box.env, ...extraEnv }, cwd: box.dir });
+    const child = spawn("python3", ["-c", PTY_STEPS_SCRIPT, JSON.stringify(steps), NODE, CLI, ...args], { env: { ...box.env, ...extraEnv }, cwd: box.dir });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => { stdout += chunk; });

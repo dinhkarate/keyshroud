@@ -63,7 +63,7 @@ Coding agent 要做实际工作就需要凭据：`gh`、`npm publish`、云厂�
 
 ## 快速开始
 
-**环境要求：** Node.js ≥ 22.18。除此之外什么都不需要：没有账号，没有服务器。
+**环境要求：** Node.js ≥ 18.19。除此之外什么都不需要：没有账号，没有服务器。
 
 ```bash
 npm install -g keyshroud

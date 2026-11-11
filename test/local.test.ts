@@ -5,7 +5,7 @@ import { existsSync } from "node:fs";
 import { chmod, mkdir, readdir, readFile, stat, unlink, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
-import { CLI, item, runCli, runCliTtySteps, sandbox, writeAuth, type Sandbox } from "./helpers.ts";
+import { CLI, NODE, item, runCli, runCliTtySteps, sandbox, writeAuth, type Sandbox } from "./helpers.ts";
 
 const TOKEN = "ghp_LOCAL0123456789abcdefXYZ";
 const PASS = "correct horse battery staple";
@@ -36,7 +36,7 @@ const PATCH_FS = `
 
 // A long-lived MCP server, as agents keep one.
 function mcpServer(box: Sandbox, env: Record<string, string> = {}) {
-  const child = spawn(process.execPath, [CLI, "mcp"], { env: { ...box.env, ...env }, cwd: box.dir });
+  const child = spawn(NODE, [CLI, "mcp"], { env: { ...box.env, ...env }, cwd: box.dir });
   const responses = new Map<number, { result: { content: Array<{ text: string }> } }>();
   let buffer = "";
   child.stdout.on("data", (chunk) => {
@@ -211,7 +211,7 @@ test("a writer paused past 30 s after checking its lock never overwrites what it
         stalled = true;
         const old = new Date(Date.now() - 40000);
         await fsp.utimes(to + ".lock", old, old);
-        require("node:child_process").execFileSync(process.execPath, [${JSON.stringify(CLI)}, "add", "--env", "B_TOKEN", "--item", "Item B", "--stdin"], { input: "second-value-456", stdio: ["pipe", "ignore", "ignore"] });
+        require("node:child_process").execFileSync(${JSON.stringify(NODE)}, [${JSON.stringify(CLI)}, "add", "--env", "B_TOKEN", "--item", "Item B", "--stdin"], { input: "second-value-456", stdio: ["pipe", "ignore", "ignore"] });
       }
       return real(from, to);
     });

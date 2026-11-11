@@ -62,7 +62,7 @@ Agent cần credential để làm việc thật: `gh`, `npm publish`, CLI của 
 
 ## Bắt đầu nhanh
 
-**Cần:** Node.js ≥ 22.18. Ngoài ra không cần gì: không tài khoản, không server.
+**Cần:** Node.js ≥ 18.19. Ngoài ra không cần gì: không tài khoản, không server.
 
 ```bash
 npm install -g keyshroud

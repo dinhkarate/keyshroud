@@ -22,10 +22,28 @@ the **user** must run it. Report each result in one line.
 ## 1. Check prerequisites
 
 ```bash
-node --version          # needs v22.18 or newer
+node --version          # needs v18.19 or newer
+npm --version
 ```
 
-If Node.js is older than 22.18, stop and tell the user to upgrade it.
+If both print a version and Node.js is 18.19 or newer, go on to step 2.
+
+If `node` or `npm` is missing or too old, tell the user in one line and ask
+before installing Node.js (it changes their system). Then use the usual way for
+their OS:
+
+| OS | Install Node.js |
+|---|---|
+| macOS | `brew install node`, or the installer from <https://nodejs.org> |
+| Windows | `winget install OpenJS.NodeJS.LTS`, then open a new terminal |
+| Debian, Ubuntu | `sudo apt-get install -y nodejs npm` (Ubuntu 24.04 gives 18.19, Debian 13 gives 20: both work) |
+| Fedora, RHEL, Rocky | `sudo dnf install -y nodejs npm` |
+| Alpine | `sudo apk add nodejs npm` |
+| Arch | `sudo pacman -S --needed nodejs npm` |
+
+Without sudo, use the official build from <https://nodejs.org/en/download>.
+If you cannot install it, tell the user what is missing and the command to run;
+never stop without saying why.
 
 ## 2. Install the CLI
 
@@ -33,6 +51,15 @@ If Node.js is older than 22.18, stop and tell the user to upgrade it.
 npm install -g keyshroud
 keyshroud --version
 keyshroud status
+```
+
+If `npm install -g` fails with `EACCES` (Linux, Node.js from the distro), install
+it for this user instead of using sudo:
+
+```bash
+npm config set prefix ~/.local
+npm install -g keyshroud
+export PATH="$HOME/.local/bin:$PATH"   # new login shells add it themselves on most distros
 ```
 
 `status` prints `backend=local …` on a machine that has never used keyshroud with

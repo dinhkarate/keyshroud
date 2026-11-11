@@ -104,7 +104,7 @@ there. It never enters the chat.
 
 ## Quickstart
 
-**Requirements:** Node.js ≥ 22.18. Nothing else: no account, no server.
+**Requirements:** Node.js ≥ 18.19. Nothing else: no account, no server.
 
 ```bash
 npm install -g keyshroud
