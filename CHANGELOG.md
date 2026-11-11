@@ -5,6 +5,14 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-11-11
+
+### Added
+- `keyshroud unlock --stdin` reads a passphrase vault's passphrase from stdin, for CI jobs and
+  containers: copy the encrypted `vault.json` in and keep only the passphrase in the CI's secret store.
+  It opens an existing vault only (a new passphrase is still chosen in a terminal), and its session
+  ends after 30 minutes.
+
 ## [0.9.0] - 2026-11-11
 
 ### Added
