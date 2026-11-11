@@ -612,6 +612,40 @@ test("rekey moves a vault between keychain, Touch ID and a passphrase, with a ne
   assert.ok((await lines()).length > 0);
 });
 
+test("unlock --stdin opens an existing passphrase vault (CI, containers) but never creates one", { skip: process.platform === "win32" }, async () => {
+  const box = await blank();
+  const env = { KEYSHROUD_VAULT_KEY: "passphrase" };
+  const none = await runCli(box, ["unlock", "--stdin"], `${PASS}\n`, env);
+  assert.equal(none.code, 3);
+  assert.match(none.stderr, /No local vault here: --stdin opens an existing one/);
+  assert.ok(!existsSync(vaultPath(box)));
+
+  assert.equal((await runCliTtySteps(box, ["unlock"], [["New passphrase", PASS], ["Repeat it", PASS]], env)).code, 0);
+  assert.equal((await add(box, "A_TOKEN", "Item A", "value-aaaa-1111", env)).code, 0);
+  assert.equal((await runCli(box, ["lock"], undefined, env)).stdout, "locked\n");
+  assert.notEqual((await runCli(box, ["get", "A_TOKEN"], undefined, env)).code, 0);
+
+  const wrong = await runCli(box, ["unlock", "--stdin"], "not the passphrase\n", env);
+  assert.notEqual(wrong.code, 0);
+  assert.match(wrong.stderr, /Wrong passphrase/);
+  assert.equal((await runCli(box, ["unlock", "--stdin"], "", env)).code, 2);
+  assert.equal((await runCli(box, ["unlock", "--stdin", "--unattended"], `${PASS}\n`, env)).code, 2);
+
+  const ok = await runCli(box, ["unlock", "--stdin"], `${PASS}\n`, env);
+  assert.equal(ok.code, 0, ok.stderr);
+  assert.match(ok.stdout, /^unlocked until /);
+  assert.ok(!ok.stdout.includes(PASS) && !ok.stderr.includes(PASS));
+  assert.equal((await runCli(box, ["run", "--", "sh", "-c", 'echo "${#A_TOKEN}"'], undefined, env)).stdout, "15\n");
+});
+
+test("unlock --stdin refuses a vault whose key is not a passphrase", { skip: process.platform === "win32" }, async () => {
+  const box = await blank();
+  assert.equal((await add(box, "A_TOKEN", "Item A", "value-aaaa-1111")).code, 0);
+  const refused = await runCli(box, ["unlock", "--stdin"], `${PASS}\n`);
+  assert.equal(refused.code, 3);
+  assert.match(refused.stderr, /--stdin is for a passphrase vault; this one opens with its keychain key/);
+});
+
 test("wiring is written to env.json, and to pi's or omp's auth.json only when installed or named", async () => {
   const box = await blank();
   const own = join(box.configDir, "env.json"), pi = join(box.env.HOME, ".pi", "agent", "auth.json"), omp = join(box.env.PI_CODING_AGENT_DIR, "auth.json");

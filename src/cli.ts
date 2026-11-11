@@ -45,9 +45,10 @@ Vault (the local vault by default; bw/Vaultwarden once set up)
   migrate [--item NAME]... [--env-file F]... [--yes]
                                    Copy the wired items from your personal vault to that account
                                    (dry run unless --yes; prints names only)
-  unlock [--unattended]            Unlock now (asks unless the key or master password is stored);
+  unlock [--unattended | --stdin]  Unlock now (asks unless the key or master password is stored);
                                    the session ends after 30 minutes
                                    (--unattended: no end, for hosts nobody sits at; in a terminal)
+                                   (--stdin: a passphrase vault's passphrase from stdin, e.g. in CI)
   rekey [--to keychain|secure-enclave|passphrase|dpapi]
                                    Give the local vault a new key, kept that way (in a terminal)
   status | lock | doctor
@@ -575,9 +576,16 @@ async function main(): Promise<void> {
       return;
     }
     if (command === "unlock") {
-      requireKnownFlags(args, [], ["--unattended"]);
+      requireKnownFlags(args, [], ["--unattended", "--stdin"]);
+      let passphrase: string | undefined;
+      if (args.includes("--stdin")) {
+        if (args.includes("--unattended")) fail("--unattended needs a terminal; --stdin opens a session that ends after 30 minutes", 2);
+        if ((await core.defaultBackend()) !== "local") fail("--stdin unlocks a local passphrase vault only", 2);
+        passphrase = (await readStdin()).replace(/\r?\n$/, "");
+        if (!passphrase) fail("No passphrase on stdin", 2);
+      }
       if ((await core.defaultBackend()) === "local") {
-        const result = await core.unlockLocal({ unattended: args.includes("--unattended") });
+        const result = await core.unlockLocal({ unattended: args.includes("--unattended"), passphrase });
         if (result.created) console.error(result.created);
         if (!core.keyHasSessions(result.key)) console.log(`the local vault opens with its key from ${keySource(result.key)}; nothing to unlock`);
         else console.log(result.expiresAt ? `unlocked until ${new Date(result.expiresAt).toLocaleTimeString()}` : "unlocked (no time limit)");

@@ -460,6 +460,8 @@ export interface SessionOptions {
   prompt?: boolean;
   // Always ask, and open a session without an end (hosts nobody sits at).
   unattended?: boolean;
+  // The local vault's passphrase, read from stdin by `unlock --stdin` (CI, containers), instead of asking.
+  passphrase?: string;
 }
 
 // Opens the default backend: bw's session (its token is returned), or the local vault ("").
@@ -1904,6 +1906,7 @@ async function askNewPassphrase(): Promise<string> {
 }
 
 async function askPassphrase(opts: SessionOptions): Promise<string> {
+  if (opts.passphrase !== undefined) return opts.passphrase;
   const span = opts.unattended ? "with no time limit (unattended)" : `for ${Math.round(SESSION_TTL_MS / 60000)} minutes`;
   const tty = process.stdin.isTTY && process.stderr.isTTY;
   if (opts.unattended && !tty) throw new Error("An unattended session needs a terminal: run this command in one");
@@ -2005,8 +2008,11 @@ export async function localStatus(): Promise<LocalStatus> {
 
 // `unlock` with the local vault as the default: a passphrase or Touch ID vault asks
 // (and is created here when there is none yet); a keychain or DPAPI vault has nothing to unlock.
-export async function unlockLocal(opts: { unattended?: boolean } = {}): Promise<{ key: VaultKeyType; created: string | null; expiresAt: number | null }> {
+export async function unlockLocal(opts: { unattended?: boolean; passphrase?: string } = {}): Promise<{ key: VaultKeyType; created: string | null; expiresAt: number | null }> {
   const read = await readVaultFile();
+  // --stdin only opens an existing passphrase vault; a new passphrase is chosen in a terminal.
+  if (opts.passphrase !== undefined && !read) throw new Error(`No local vault here: --stdin opens an existing one. Create it with \`${BRAND.bin} unlock\` in a terminal, or copy its ${shownPath(VAULT_FILE)} here`);
+  if (opts.passphrase !== undefined && read!.file.key.type !== "passphrase") throw new Error(`--stdin is for a passphrase vault; this one opens with its ${read!.file.key.type} key`);
   if (!read) {
     const mode = await vaultKeyMode();
     if (!keyHasSessions(mode)) return { key: mode, created: null, expiresAt: null };
@@ -2016,7 +2022,7 @@ export async function unlockLocal(opts: { unattended?: boolean } = {}): Promise<
     if (opts.unattended) await writeLocalSession(localOpen!.file.id, localOpen!.key, true);
     return { key: mode, created, expiresAt: opts.unattended ? null : (await localStatus()).expiresAt ?? null };
   }
-  await openLocal({ prompt: true, unattended: opts.unattended });
+  await openLocal({ prompt: true, unattended: opts.unattended, passphrase: opts.passphrase });
   return { key: read.file.key.type, created: null, expiresAt: opts.unattended ? null : (await localStatus()).expiresAt ?? null };
 }
 

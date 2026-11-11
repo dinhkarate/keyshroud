@@ -409,7 +409,7 @@ keyshroud list                                     item references and the varia
 keyshroud rm --item ITEM [--yes]                   delete an item and unwire it (dry run unless --yes)
 keyshroud setup --email EMAIL [--server URL] [--confirm-unlock | --unattended] [--registered]   (Vaultwarden)
 keyshroud migrate [--item NAME]... [--env-file F]... [--yes]                                    (Vaultwarden)
-keyshroud unlock [--unattended]
+keyshroud unlock [--unattended | --stdin]
 keyshroud rekey [--to keychain|secure-enclave|passphrase|dpapi]                                 (in a terminal)
 keyshroud status | lock | doctor
 keyshroud mcp
@@ -508,10 +508,19 @@ looks new and gets the local vault; set `KEYSHROUD_BACKEND=bw` there if it shoul
 its key, which stays in this machine's keychain (or your passphrase). If you lose the machine, you lose
 the key. For a real backup, or the same secrets on several machines, use Vaultwarden or Bitwarden.
 
-**Can I use it in CI or a Docker build?** Not with the local vault: it belongs to one machine, and its
-passphrase is typed in a terminal, which a build job never has. Give those jobs their secrets from the
-CI's own secret store. A server you reach over SSH is fine: run `keyshroud unlock --unattended` there
-once, and the session has no end.
+**Can I use it in CI or a Docker build?** Yes, with a passphrase vault. Create it once in a terminal
+(`KEYSHROUD_VAULT_KEY=passphrase keyshroud unlock`), add the secrets, and copy `vault.json` into the job
+(it is encrypted, so it can live in the repository or an artifact). Keep only the passphrase in the CI's
+secret store, then:
+
+```bash
+mkdir -p ~/.config/keyshroud && cp vault.json ~/.config/keyshroud/
+printf '%s' "$KEYSHROUD_PASSPHRASE" | keyshroud unlock --stdin   # a session of 30 minutes
+keyshroud run --env-file .env.refs -- npm test
+```
+
+`--stdin` only opens an existing passphrase vault; a new passphrase is always chosen in a terminal. A
+server you reach over SSH can instead run `keyshroud unlock --unattended` there once (no time limit).
 
 **Can the agent still use the key?** Yes. The command gets the real value; only the text
 the model reads is masked.
