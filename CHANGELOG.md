@@ -5,6 +5,15 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-11-11
+
+### Added
+- `keyshroud migrate --to local [--yes]` moves off Vaultwarden: every Vaultwarden item a wired name
+  uses is copied into the local vault, read back, and the names are rewired to it; the local vault then
+  becomes the default for new items. Fields other than the password become items of their own. A dry run
+  unless `--yes`; Vaultwarden keeps the originals, and the previous references are saved to
+  `migrate-local-<time>.json` (references only, `0600`).
+
 ## [0.9.1] - 2026-11-11
 
 ### Added
