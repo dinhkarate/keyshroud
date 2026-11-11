@@ -646,6 +646,54 @@ test("unlock --stdin refuses a vault whose key is not a passphrase", { skip: pro
   assert.match(refused.stderr, /--stdin is for a passphrase vault; this one opens with its keychain key/);
 });
 
+test("migrate --to local moves wired Vaultwarden items into the local vault and rewires their names", async () => {
+  const box = await sandbox([
+    item("id-1", "GitHub token", "gh-value-0001"),
+    item("id-2", "Sentry", "sentry-pass-02", { fields: [{ type: 0, name: "dsn", value: "https://dsn-value-03" }] }),
+    item("id-3", "Shared", "shared-value-04"),
+  ]);
+  await writeAuth(box, {
+    GH_TOKEN: { type: "api_key", key: "!bw get password 'GitHub token'" },
+    SENTRY_DSN: { type: "api_key", key: "bw://Sentry/fields/dsn" },
+    A_TOKEN: { type: "api_key", key: "bw://Shared" },
+    B_TOKEN: { type: "api_key", key: "bw://Shared" },
+    GONE_TOKEN: { type: "api_key", key: "bw://Missing" },
+  });
+  const values = ["gh-value-0001", "sentry-pass-02", "dsn-value-03", "shared-value-04"];
+  const dry = await runCli(box, ["migrate", "--to", "local"]);
+  assert.equal(dry.code, 0, dry.stderr);
+  assert.match(dry.stdout, /Sentry \(field dsn\)\s+copy\s+<- SENTRY_DSN/);
+  assert.match(dry.stdout, /Shared\s+copy\s+<- A_TOKEN, B_TOKEN/);
+  assert.match(dry.stdout, /Dry run: nothing copied/);
+  assert.ok(!existsSync(vaultPath(box)));
+
+  const moved = await runCli(box, ["migrate", "--to", "local", "--yes"]);
+  assert.equal(moved.code, 4, moved.stderr);
+  assert.match(moved.stdout, /moved 3 item\(s\) into the local vault and rewired 8 name\(s\)/);
+  assert.match(moved.stderr, /Not moved: Missing \(unresolved in Vaultwarden\)/);
+  for (const text of [dry.stdout, dry.stderr, moved.stdout, moved.stderr]) for (const value of values) assert.ok(!text.includes(value));
+  assert.equal(await readFile(join(box.configDir, "backend"), "utf8"), "local\n");
+  const backup = (await readdir(box.configDir)).find((name) => name.startsWith("migrate-local-"))!;
+  assert.equal((await stat(join(box.configDir, backup))).mode & 0o777, 0o600);
+  const saved = await readFile(join(box.configDir, backup), "utf8");
+  assert.match(saved, /bw:\/\/Sentry\/fields\/dsn/);
+  for (const value of values) assert.ok(!saved.includes(value));
+  const auth = await readFile(join(box.env.HOME, ".pi", "agent", "auth.json"), "utf8");
+  assert.match(auth, /local:\/\/Sentry \(field dsn\)/);
+  assert.match(auth, /bw:\/\/Missing/);
+
+  // Vaultwarden can go away: the moved names resolve from the local vault alone.
+  await unlink(join(box.dir, "keychain", "vaultwarden-master-password"));
+  const env = { KEYSHROUD_BACKEND: "local" };
+  const run = await runCli(box, ["run", "--no-mask", "--only", "GH_TOKEN,SENTRY_DSN,A_TOKEN,B_TOKEN", "--", "sh", "-c", 'echo "$GH_TOKEN $SENTRY_DSN $A_TOKEN $B_TOKEN"'], undefined, env);
+  assert.equal(run.stdout, "gh-value-0001 https://dsn-value-03 shared-value-04 shared-value-04\n", run.stderr);
+
+  // A second run moves nothing new; the Missing one is still reported.
+  const again = await runCli(box, ["migrate", "--to", "local", "--yes"], undefined, env);
+  assert.match(again.stdout, /Missing\s+copy\s+<- GONE_TOKEN/);
+  assert.doesNotMatch(again.stdout, /GitHub token/);
+});
+
 test("wiring is written to env.json, and to pi's or omp's auth.json only when installed or named", async () => {
   const box = await blank();
   const own = join(box.configDir, "env.json"), pi = join(box.env.HOME, ".pi", "agent", "auth.json"), omp = join(box.env.PI_CODING_AGENT_DIR, "auth.json");

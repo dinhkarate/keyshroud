@@ -409,6 +409,7 @@ keyshroud list                                     item references and the varia
 keyshroud rm --item ITEM [--yes]                   delete an item and unwire it (dry run unless --yes)
 keyshroud setup --email EMAIL [--server URL] [--confirm-unlock | --unattended] [--registered]   (Vaultwarden)
 keyshroud migrate [--item NAME]... [--env-file F]... [--yes]                                    (Vaultwarden)
+keyshroud migrate --to local [--yes]                                                            (Vaultwarden -> local vault)
 keyshroud unlock [--unattended | --stdin]
 keyshroud rekey [--to keychain|secure-enclave|passphrase|dpapi]                                 (in a terminal)
 keyshroud status | lock | doctor
@@ -503,6 +504,13 @@ environment of the command you run.
 `bw://` or `!bw` entries, `BW_SESSION`, or the master password in the keychain keeps Vaultwarden as the
 default and writes that down in `~/.config/keyshroud/backend`. Only a machine where none of these exist
 looks new and gets the local vault; set `KEYSHROUD_BACKEND=bw` there if it should not.
+
+**How do I leave Vaultwarden?** `keyshroud migrate --to local` shows which Vaultwarden items your wired
+names use; `--yes` copies them into the local vault, checks each copy, rewires the names and makes the
+local vault the default for new items. A field other than the password becomes an item of its own
+(`Sentry (field dsn)`). Vaultwarden keeps the originals, the previous references are saved next to the
+vault (names and references only), and `.env.refs` files keep their `bw://` references until you change
+them. Other machines that use the same Vaultwarden are not affected.
 
 **How do I back up the local vault?** `vault.json` is encrypted, so copy it anywhere; it opens only with
 its key, which stays in this machine's keychain (or your passphrase). If you lose the machine, you lose

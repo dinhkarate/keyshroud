@@ -12,7 +12,7 @@ import * as core from "./core.ts";
 import { runClaudeHook } from "./hooks.ts";
 import { serveMcp } from "./mcp.ts";
 import { buildRedactIndex, compileRedactIndex, createRedactor, createRedactStream, type RedactIndex } from "./redact.ts";
-import { ENV_NAME_RE, isLoaderEnvName, isRef, itemNameProblem, looksSecret, parseDotenvStrict, parseRef, refFor, type DotenvEntry } from "./refs.ts";
+import { ENV_NAME_RE, isLoaderEnvName, isRef, itemNameProblem, looksSecret, parseDotenvStrict, parseRef, refFor, type DotenvEntry, type SecretRef } from "./refs.ts";
 import type { VaultKeyType } from "./vault.ts";
 
 const usage = `Usage: ${BRAND.bin} <command> [options]
@@ -45,6 +45,8 @@ Vault (the local vault by default; bw/Vaultwarden once set up)
   migrate [--item NAME]... [--env-file F]... [--yes]
                                    Copy the wired items from your personal vault to that account
                                    (dry run unless --yes; prints names only)
+  migrate --to local [--yes]       Move every wired Vaultwarden item into the local vault and rewire
+                                   its names (dry run unless --yes; Vaultwarden keeps the originals)
   unlock [--unattended | --stdin]  Unlock now (asks unless the key or master password is stored);
                                    the session ends after 30 minutes
                                    (--unattended: no end, for hosts nobody sits at; in a terminal)
@@ -325,7 +327,71 @@ async function setupCommand(args: string[]): Promise<void> {
 
 // migrate: copy the items that wired names (and env files) reference from the
 // personal vault into the agent account. Same names, so references keep working.
+// migrate --to local: copies every Vaultwarden item a wired name points at into the local vault and
+// rewires those names to it. Vaultwarden keeps the originals; the old references are saved to a file.
+async function migrateLocalCommand(args: string[]): Promise<void> {
+  requireKnownFlags(args, ["--to"], ["--yes"]);
+  if (valueAfter(args, "--to") !== "local") fail("--to must be local", 2);
+  type Wire = { path: string; name: string; raw: string };
+  type Group = { ref: SecretRef; local: string; wires: Wire[] };
+  const groups = new Map<string, Group>();
+  for (const path of core.wiringFiles()) for (const [name, entry] of Object.entries(await core.readAuthEntries(path))) {
+    const raw = core.authEntryRaw(entry);
+    let ref: SecretRef | null = null;
+    try { ref = raw === undefined ? null : parseRef(raw); } catch {}
+    if (!ref || ref.scheme) continue;
+    // A field other than the password becomes an item of its own: "Item (username)", "Item (field dsn)".
+    const local = ref.field === "password" ? ref.item : `${ref.item} (${typeof ref.field === "object" ? `field ${ref.field.custom}` : ref.field})`;
+    const group = groups.get(local.toLowerCase()) ?? { ref, local, wires: [] };
+    group.wires.push({ path, name, raw: raw! });
+    groups.set(local.toLowerCase(), group);
+  }
+  const rows = [...groups.values()].sort((a, b) => a.local.localeCompare(b.local));
+  if (!rows.length) { console.log("Nothing to migrate: no wired name points at Vaultwarden."); return; }
+  const existing = new Set((await core.findItems("", "local").catch(() => [])).map((item) => item.name.toLowerCase()));
+  const width = Math.max(4, ...rows.map((row) => row.local.length));
+  console.log("migrate plan (Vaultwarden -> local vault):");
+  for (const row of rows) {
+    const problem = itemNameProblem(row.local);
+    console.log(`  ${row.local.padEnd(width)}  ${problem ? `refused: the name ${problem}` : existing.has(row.local.toLowerCase()) ? "in the local vault already (kept if the value is the same)" : "copy"}  <- ${[...new Set(row.wires.map((wire) => wire.name))].join(", ")}`);
+  }
+  console.log(`${rows.length} item(s) for ${rows.reduce((n, row) => n + row.wires.length, 0)} wired name(s); Vaultwarden keeps the originals.`);
+  if (!args.includes("--yes")) { console.log("Dry run: nothing copied. Re-run with --yes."); return; }
+
+  await core.openBackend("bw", { prompt: true });
+  await core.prepareLocalVault({ prompt: true });
+  const moved: Group[] = [], failed: string[] = [];
+  for (const row of rows) {
+    if (itemNameProblem(row.local)) { failed.push(`${row.local} (name)`); continue; }
+    const value = await core.resolveRef(row.ref).catch(() => null);
+    if (value === null) { failed.push(`${row.local} (unresolved in Vaultwarden)`); continue; }
+    const localRef: SecretRef = { item: row.local, field: "password", scheme: "local" };
+    try {
+      if (existing.has(row.local.toLowerCase())) {
+        if ((await core.resolveRef(localRef)) !== value) { failed.push(`${row.local} (a different value is already in the local vault)`); continue; }
+      } else await core.createSecretItem({ itemName: row.local, secret: value, envName: row.wires[0].name, backend: "local" });
+      if ((await core.resolveRef(localRef)) !== value) { failed.push(`${row.local} (not read back)`); continue; }
+      moved.push(row);
+    } catch (error) { failed.push(`${row.local} (${error instanceof Error ? error.message : String(error)})`); }
+  }
+  // References only, never values: enough to rewire by hand.
+  const backup = join(core.CONFIG_DIR, `migrate-local-${new Date().toISOString().replace(/[:.]/g, "-")}.json`);
+  const wires = moved.flatMap((row) => row.wires);
+  await writeFile(backup, `${JSON.stringify(wires, null, 2)}\n`, { mode: 0o600 });
+  for (const row of moved) for (const wire of row.wires) {
+    const result = await core.writeAuthEntry(wire.path, wire.name, core.referenceFor(row.local, "local"), { overwrite: true });
+    if (!result.ok) failed.push(`${wire.name} in ${wire.path} (not rewired)`);
+  }
+  if (moved.length) await core.rememberBackend("local");
+  await core.audit("migrate", moved.map((row) => row.local), "cli");
+  await core.refreshRedactIndex();
+  console.log(`moved ${moved.length} item(s) into the local vault and rewired ${wires.length} name(s); new items go to the local vault.`);
+  console.log(`Vaultwarden still holds the originals. The previous references are in ${core.shownPath(backup)}; .env.refs files with bw:// references still use Vaultwarden.`);
+  if (failed.length) fail(`Not moved: ${failed.join("; ")}`, 4);
+}
+
 async function migrateCommand(args: string[]): Promise<void> {
+  if (args.includes("--to")) return migrateLocalCommand(args);
   requireKnownFlags(args, ["--item", "--env-file"], ["--yes"]);
   if (!core.OWN_BW_LOGIN) fail(`Run \`${BRAND.bin} setup\` first: migrate copies items into ${BRAND.name}'s own agent account`, 2);
   const entries = [...await core.authEnvEntries()];
