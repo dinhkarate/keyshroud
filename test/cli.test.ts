@@ -136,6 +136,17 @@ test("run --no-mask passes values through and --only limits injection", async ()
   assert.equal(unknown.code, 4);
 });
 
+test("run without -- (Windows PowerShell drops it): the command starts after run's own options", async () => {
+  const box = await wired();
+  await writeFile(join(box.dir, ".env.refs"), "MODE=debug\n");
+  const result = await runCli(box, ["run", "--env-file", ".env.refs", "--only", "GH_TOKEN,MODE", "/bin/sh", "-c", "echo gh=$GH_TOKEN npm=$NPM_TOKEN mode=$MODE"]);
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(result.stdout, "gh=<redacted:GH_TOKEN> npm= mode=debug\n");
+  // An option that is not run's own still fails, and so does run with no command.
+  assert.equal((await runCli(box, ["run", "--bogus", "true"])).code, 2);
+  assert.equal((await runCli(box, ["run", "--mask"])).code, 2);
+});
+
 test("inject renders templates and refuses to overwrite", async () => {
   const box = await wired();
   await writeFile(join(box.dir, "npmrc.tpl"), "//registry.npmjs.org/:_authToken={{ bw://npm publish }}\n");

@@ -1871,7 +1871,8 @@ async function storeVaultKey(service: string, key: Buffer): Promise<void> {
 
 // Windows DPAPI through PowerShell 5.1 (on every Windows 10/11). The key or
 // blob goes on stdin and comes back on stdout; the vault id (the entropy) in
-// the environment. "" when it fails.
+// the environment. "" when it fails; an error when PowerShell does not answer in time.
+const DPAPI_TIMEOUT_MS = 120_000;
 function dpapi(op: "protect" | "unprotect", input: string, id: string): Promise<string> {
   const script = [
     "$ErrorActionPreference = 'Stop'",
@@ -1885,9 +1886,11 @@ function dpapi(op: "protect" | "unprotect", input: string, id: string): Promise<
   ].join("\n");
   return new Promise((resolve, reject) => {
     const child = execFile(POWERSHELL, ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")],
-      { windowsHide: true, timeout: 30000, maxBuffer: 1024 * 1024, env: childEnv({ [`${P}_VAULT_ID`]: id }) }, (error, stdout) => {
+      // PowerShell can take a minute to start on a slow or busy machine (seen on a fresh Windows 11 VM).
+      { windowsHide: true, timeout: DPAPI_TIMEOUT_MS, maxBuffer: 1024 * 1024, env: childEnv({ [`${P}_VAULT_ID`]: id }) }, (error, stdout) => {
         const out = String(stdout ?? "").trim();
-        if (op === "protect" && (error || !out)) reject(new Error("Windows DPAPI could not protect the key of the local vault; nothing was created"));
+        if (error?.killed) reject(new Error(`Windows PowerShell, which keyshroud uses for DPAPI, did not answer within ${DPAPI_TIMEOUT_MS / 1000} seconds; ${op === "protect" ? "nothing was created" : "the vault is unchanged"}. Try again once the machine is less busy`));
+        else if (op === "protect" && (error || !out)) reject(new Error("Windows DPAPI could not protect the key of the local vault; nothing was created"));
         else resolve(error ? "" : out);
       });
     child.on("error", () => {});

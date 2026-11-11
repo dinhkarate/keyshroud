@@ -5,6 +5,16 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.9.5] - 2026-11-11
+
+### Fixed
+- Windows PowerShell drops `--` when it runs npm's `keyshroud.ps1`, so `keyshroud run -- <cmd>`
+  failed with the usage text there. Without `--`, the command now starts at the first argument that is
+  not one of `run`'s own options.
+- DPAPI on Windows waited only 30 seconds for PowerShell, which can take a minute to start on a slow
+  or busy machine: creating a vault failed with "DPAPI could not protect the key", and opening one
+  said it belonged to another Windows user. It now waits two minutes and says when PowerShell did not answer.
+
 ## [0.9.4] - 2026-11-11
 
 ### Fixed

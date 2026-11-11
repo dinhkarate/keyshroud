@@ -133,10 +133,18 @@ async function readStdin(): Promise<string> {
 }
 
 async function runCommand(args: string[]): Promise<void> {
-  const separator = args.indexOf("--");
-  if (separator < 0 || !args[separator + 1]) fail(usage, 2);
+  // Windows PowerShell drops `--` when it calls npm's keyshroud.ps1, so without one the command
+  // starts at the first argument that is not one of run's own options.
+  let separator = args.indexOf("--");
+  let start = separator + 1;
+  if (separator < 0) {
+    separator = 0;
+    while (separator < args.length && args[separator].startsWith("-")) separator += ["--env-file", "--only"].includes(args[separator]) ? 2 : 1;
+    start = separator;
+  }
+  if (!args[start]) fail(usage, 2);
   const flags = args.slice(0, separator);
-  const [command, ...commandArgs] = args.slice(separator + 1);
+  const [command, ...commandArgs] = args.slice(start);
   requireKnownFlags(flags, ["--env-file", "--only"], ["--no-auth", "--mask", "--no-mask"]);
 
   const entries = flags.includes("--no-auth") ? [] : await core.authEnvEntries();
