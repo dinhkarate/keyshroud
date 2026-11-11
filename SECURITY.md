@@ -33,6 +33,13 @@ each value so hooks can redact without plaintext. Anyone who can read this
 `bw` session file next to it, which unlocks the whole vault, and as the local
 vault's key in the OS keychain.
 
+Touch ID vaults (macOS, `KEYSHROUD_VAULT_KEY=secure-enclave`): in scope is any way to open one while no
+session is open without the person at the Mac approving a sheet, any key material from the helper
+(`src/touchid.swift`) reaching argv, logs or errors, and a rekey or rm that changes the vault without
+the approval it asks for. Out of scope: a process already running as the user that shows its own Touch
+ID sheet, rewrites keyshroud, its cached helper or tools on PATH to capture the next approval, or reads
+`vault.session` + `vault.token` during a session (Touch ID proves presence, not intent).
+
 Out of scope (documented limitations, see the README's *Security model*): an
 agent deliberately exfiltrating a value it was given (for example over the
 network, or after encoding it); secrets shorter than 6 characters; values the

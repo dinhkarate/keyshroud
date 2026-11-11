@@ -86,6 +86,12 @@ asks for the master password or passphrase. Never ask for it in chat and never
 retry in a loop after a cancel. A local vault that needs a passphrase and does
 not exist yet is created by the user in a terminal (`keyshroud unlock`).
 
+On a Mac with a Touch ID vault, a command that needs a secret shows a Touch ID sheet. If an error says
+the vault "opens with Touch ID at the Mac", tell the user to approve the sheet, or to run
+`keyshroud unlock` at the Mac; never retry in a loop. `keyshroud list` shows item names and their
+wiring. Never run `keyshroud rm --yes` or `keyshroud rekey` on your own: they delete or re-key the
+user's vault, so only run them when the user asks.
+
 `migrate` is for Vaultwarden users: it needs the personal vault. You may start `setup --email`;
 the user picks the agent account's password on the signup page, never through you. If an item
 is missing after `setup`, ask the user to run `keyshroud migrate --item "NAME"`.

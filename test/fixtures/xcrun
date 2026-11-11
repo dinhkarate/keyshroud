@@ -1,0 +1,8 @@
+#!/bin/sh
+# Fake `xcrun swiftc ... -o OUT SRC`: "builds" the Touch ID helper by copying the fake one.
+[ -n "$FAKE_DIALOG_LOG" ] && printf 'xcrun|%s\n' "$*" >> "$FAKE_DIALOG_LOG"
+[ "$1" = "swiftc" ] || exit 1
+if [ -n "$FAKE_SWIFTC_FAIL" ]; then echo "error: simulated compiler failure" >&2; exit 1; fi
+out=""
+while [ $# -gt 0 ]; do [ "$1" = "-o" ] && out="$2"; shift; done
+[ -n "$out" ] && cp "$(dirname "$0")/touchid-helper" "$out" && chmod 755 "$out"

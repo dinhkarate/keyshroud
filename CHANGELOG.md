@@ -5,6 +5,39 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-11
+
+### Added
+- A Touch ID key for the local vault on Macs (`KEYSHROUD_VAULT_KEY=secure-enclave`). The vault key is
+  wrapped to a P-256 key in the Mac's Secure Enclave and opens only after Touch ID (or the Mac's
+  password); a session then lasts 30 minutes, as with a passphrase. The helper is built from
+  `src/touchid.swift` on first use (needs the Xcode Command Line Tools). Hooks, `status` and `doctor`
+  never ask; over SSH keyshroud says to run `keyshroud unlock` at the Mac.
+- `keyshroud rekey [--to TYPE]`: a new key and vault id for the local vault, between keychain,
+  secure-enclave, passphrase and dpapi. Terminal only; it always proves the current key afresh.
+- `keyshroud list`: item references and the variables wired to them, names only.
+- `keyshroud rm --item ITEM [--yes]`: deletes an item and unwires it. A dry run unless
+  `--yes`; `--yes` needs a terminal, or Touch ID on a Mac. bw items only on keyshroud's own agent
+  account (moved to the bw trash); the apiKeyHelper's item is refused.
+
+### Changed
+- Wiring (which variable points at which item) now lives in keyshroud's own
+  `~/.config/keyshroud/env.json`. pi's and omp's `auth.json` are written only when that agent is
+  installed (its `~/.pi/agent` or `~/.omp/agent` directory exists) or `--target` names it, so a
+  machine without them no longer gets those directories. Names already in an `auth.json` keep
+  working; `unwire` without `--target` clears a name from all three files.
+- An unknown `KEYSHROUD_VAULT_KEY` value is now an error instead of being ignored.
+- A second local unlock dialog waits for the one already open and uses its session.
+- The Save dialog also warns against typing the Mac's password.
+
+### Fixed
+- Two processes asking at the same moment could both take the dialog lock (one read the lock file
+  before the other had written to it) and show two dialogs.
+
+### Note
+- 0.8.x cannot read a Touch ID vault (format v2). Run `keyshroud rekey --to keychain` before
+  downgrading.
+
 ## [0.8.0] - 2026-11-02
 
 ### Added

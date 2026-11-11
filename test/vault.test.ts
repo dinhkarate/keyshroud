@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { randomBytes } from "node:crypto";
+import { createECDH, randomBytes } from "node:crypto";
 import { test } from "node:test";
 import {
   derivePassphraseKey, findLocalItem, keychainService, newPassphraseKey, newVaultId, openSession, openVault, parseVaultFile,
-  passphraseProblem, sealSession, sealVault, serializeVault, VAULT_KIND, VaultFormatError, VaultVersionError, type VaultData, type VaultHeader,
+  passphraseProblem, sealSession, sealVault, serializeVault, unwrapFromEnclave, VAULT_KIND, VaultFormatError, VaultVersionError, wrapForEnclave,
+  type VaultData, type VaultHeader,
 } from "../src/vault.ts";
 
 const item = (name: string, value: string) => ({ id: `id-${name}`, name, value, created: "2026-11-02T00:00:00.000Z", updated: "2026-11-02T00:00:00.000Z" });
@@ -61,7 +62,7 @@ test("unknown fields, key types, foreign keychain entries and weaker scrypt para
   ];
   for (const variant of refused) assert.throws(() => parseVaultFile(JSON.stringify(variant)), VaultFormatError);
   assert.throws(() => parseVaultFile("{"), VaultFormatError);
-  assert.throws(() => parseVaultFile(JSON.stringify({ ...file, v: 2, other: true })), VaultVersionError);
+  assert.throws(() => parseVaultFile(JSON.stringify({ ...file, v: 3, other: true })), VaultVersionError);
 });
 
 test("item fields a newer version adds survive a rewrite", () => {
@@ -109,4 +110,53 @@ test("a passphrase session opens only with its secret, for its vault, before its
   assert.equal(openSession(JSON.stringify({ ...wrap, expires: null }), secret, "aaaaaaaaaaaaaaaa", now), null);
   const forever = sealSession("aaaaaaaaaaaaaaaa", null, secret, key);
   assert.deepEqual(openSession(JSON.stringify(forever), secret, "aaaaaaaaaaaaaaaa", now + 1e12)?.key, key);
+});
+
+// A software P-256 key stands in for the Secure Enclave: z = ECDH(enclave key, epk).
+function softEnclave() {
+  const ecdh = createECDH("prime256v1");
+  const pub = ecdh.generateKeys().toString("base64");
+  const handle = randomBytes(64).toString("base64");
+  return { handle, pub, agree: (epk: string) => ecdh.computeSecret(Buffer.from(epk, "base64")) };
+}
+
+test("a vault key wrapped for the Secure Enclave unwraps only with the same id, handle and epk", () => {
+  const enclave = softEnclave();
+  const id = newVaultId();
+  const key = randomBytes(32);
+  const spec = wrapForEnclave(id, enclave.handle, enclave.pub, key);
+  const z = enclave.agree(spec.epk);
+  assert.ok(unwrapFromEnclave(id, spec, z)?.equals(key));
+  assert.equal(unwrapFromEnclave(newVaultId(), spec, z), null);
+  assert.equal(unwrapFromEnclave(id, { ...spec, handle: randomBytes(64).toString("base64") }, z), null);
+  const other = wrapForEnclave(id, enclave.handle, enclave.pub, key);
+  assert.notEqual(other.epk, spec.epk);
+  assert.equal(unwrapFromEnclave(id, { ...spec, epk: other.epk }, enclave.agree(other.epk)), null);
+  assert.equal(unwrapFromEnclave(id, spec, z.subarray(0, 31)), null);
+});
+
+test("a Touch ID vault is v2 with its key fields in one order; anything else is refused", () => {
+  const enclave = softEnclave();
+  const id = newVaultId();
+  const key = randomBytes(32);
+  const header: VaultHeader = { v: 1, kind: VAULT_KIND, id, key: wrapForEnclave(id, enclave.handle, enclave.pub, key) };
+  const text = serializeVault(sealVault(header, { items: [item("A", "value-a")] }, key));
+  const file = JSON.parse(text);
+  assert.equal(file.v, 2, "the version comes from the key type");
+  assert.deepEqual(Object.keys(file.key), ["type", "handle", "pub", "epk", "nonce", "wrapped"]);
+  assert.equal(openVault(parseVaultFile(text), key)?.items[0].value, "value-a");
+
+  const refused = (change: Record<string, unknown>, keyChange: Record<string, unknown> = {}) =>
+    assert.throws(() => parseVaultFile(JSON.stringify({ ...file, ...change, key: { ...file.key, ...keyChange } })), VaultFormatError);
+  refused({ v: 1 });
+  const compressed = Buffer.from(file.key.pub, "base64"); compressed[0] = 2;
+  refused({}, { pub: compressed.toString("base64") });
+  refused({}, { extra: "x" });
+  refused({}, { wrapped: randomBytes(47).toString("base64") });
+  refused({}, { handle: randomBytes(31).toString("base64") });
+  assert.throws(() => parseVaultFile(JSON.stringify({ ...file, v: 3 })), VaultVersionError);
+  const keychain = JSON.parse(keychainVault().text);
+  assert.throws(() => parseVaultFile(JSON.stringify({ ...keychain, v: 2 })), VaultFormatError);
+  const renonced = { ...file, key: { ...file.key, nonce: randomBytes(12).toString("base64") } };
+  assert.equal(openVault(parseVaultFile(JSON.stringify(renonced)), key), null, "the key object is part of the vault's AAD");
 });

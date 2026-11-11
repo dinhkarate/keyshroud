@@ -1,0 +1,27 @@
+#!/usr/bin/env node
+// Fake Touch ID helper, "built" by the fake xcrun. A software P-256 key stands in for the Secure
+// Enclave, kept in $FAKE_KEYCHAIN_DIR/se-<hash of the handle>. FAKE_DIALOG_VALUE approves,
+// FAKE_DIALOG_CANCEL declines (exit 3), neither means nobody can be asked (exit 5); FAKE_NO_ENCLAVE
+// exits 2 and a key that is not there exits 4. Logs the operation and reason, never key material.
+import { createECDH, createHash, randomBytes } from "node:crypto";
+import fs from "node:fs";
+const op = process.argv[2];
+const request = JSON.parse(fs.readFileSync(0, "utf8") || "{}");
+if (process.env.FAKE_DIALOG_LOG) fs.appendFileSync(process.env.FAKE_DIALOG_LOG, `touchid|${op}|${request.reason ?? ""}\n`);
+if (process.env.FAKE_NO_ENCLAVE) process.exit(2);
+const keyFile = (handle) => `${process.env.FAKE_KEYCHAIN_DIR}/se-${createHash("sha256").update(handle).digest("hex").slice(0, 16)}`;
+const answer = (value) => { fs.writeSync(1, JSON.stringify(value)); process.exit(0); };
+if (op === "create") {
+  const ecdh = createECDH("prime256v1"); ecdh.generateKeys();
+  const handle = randomBytes(64).toString("base64");
+  fs.writeFileSync(keyFile(handle), ecdh.getPrivateKey("hex"));
+  answer({ handle, pub: ecdh.getPublicKey("base64") });
+}
+if (op !== "agree" || !request.handle || !request.epk || !request.reason) process.exit(1);
+if (!fs.existsSync(keyFile(request.handle))) process.exit(4);
+await new Promise((resolve) => setTimeout(resolve, Number(process.env.FAKE_TOUCHID_DELAY_MS ?? 0)));
+if (process.env.FAKE_DIALOG_CANCEL) process.exit(3);
+if (!process.env.FAKE_DIALOG_VALUE) process.exit(5);
+const ecdh = createECDH("prime256v1");
+ecdh.setPrivateKey(fs.readFileSync(keyFile(request.handle), "utf8").trim(), "hex");
+answer({ z: ecdh.computeSecret(Buffer.from(request.epk, "base64")).toString("base64") });

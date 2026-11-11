@@ -44,7 +44,6 @@ function applyEnv(next: Record<string, string>): void {
   currentEnv = next;
 }
 
-function paths(): core.AuthTargets { return core.getAuthTargets(); }
 function mappedError(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 
 let refreshPromise: Promise<void> | null = null;
@@ -60,7 +59,7 @@ function refreshEnv(): Promise<void> {
       masked = { ...masked, ...await core.redactionValues(currentEnv) };
       redactor = createRedactor(masked);
       const local = await core.localStatus();
-      sessionState = local.key === "passphrase" ? local.status : null;
+      sessionState = core.keyHasSessions(local.key) ? local.status : null;
     })().finally(() => { refreshPromise = null; });
   }
   return refreshPromise;
@@ -104,11 +103,7 @@ async function report(): Promise<{ report: string; details: Record<string, unkno
 
 async function writeBoth(name: string, itemName: string, overwrite = false): Promise<void> {
   const ref = core.referenceFor(itemName, await core.defaultBackend());
-  const targets = paths();
-  const results = await Promise.all([
-    core.writeAuthEntry(targets.omp, name, ref, { overwrite }),
-    core.writeAuthEntry(targets.pi, name, ref, { overwrite }),
-  ]);
+  const results = await Promise.all(core.wiringTargets(["omp", "pi"]).map((path) => core.writeAuthEntry(path, name, ref, { overwrite })));
   const failed = results.find((result) => !result.ok);
   if (failed) throw new Error(failed.message);
 }
@@ -275,7 +270,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     try {
       await core.ensureSession(); const item = await chooseItem(ctx, `Choose ${(await core.defaultBackend()) === "local" ? "a local vault" : "Vaultwarden"} item`); if (!item) return;
       const envName = await inputInBorderedPopup(ctx, { title: "Environment variable", prompt: "Use UPPER_SNAKE_CASE" }); if (!envName || !ENV_NAME_RE.test(envName)) { ctx.ui.notify("Invalid env var name; use UPPER_SNAKE_CASE", "error"); return; }
-      const targets = paths(); const existing = (await core.readAuthEntries(targets.omp))[envName] !== undefined || (await core.readAuthEntries(targets.pi))[envName] !== undefined;
+      const existing = (await core.wiredEntries())[envName] !== undefined;
       let overwrite = false; if (existing) { const choice = await selectInBorderedPopup(ctx, { title: `${envName} already exists`, items: [{ value: "replace", label: "Replace" }, { value: "keep", label: "Keep" }] }); if (choice !== "replace") return; overwrite = true; }
       if (!await confirmInBorderedPopup(ctx, { title: "Save reference?", message: `"${envName}": "${core.referenceFor(item.name, await core.defaultBackend())}"` })) return;
       await writeBoth(envName, item.name, overwrite); await refreshEnv(); ctx.ui.notify("Saved; reload to apply", "info");

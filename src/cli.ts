@@ -13,6 +13,7 @@ import { runClaudeHook } from "./hooks.ts";
 import { serveMcp } from "./mcp.ts";
 import { buildRedactIndex, compileRedactIndex, createRedactor, createRedactStream, type RedactIndex } from "./redact.ts";
 import { ENV_NAME_RE, isLoaderEnvName, isRef, itemNameProblem, looksSecret, parseDotenvStrict, parseRef, refFor, type DotenvEntry } from "./refs.ts";
+import type { VaultKeyType } from "./vault.ts";
 
 const usage = `Usage: ${BRAND.bin} <command> [options]
 
@@ -32,6 +33,9 @@ Secrets
                                    Move secrets from a .env into the vault and write .env.refs
                                    (dry run unless --yes; prints names only)
   rotate --item ITEM [--stdin|--dialog]
+  list                             List vault items and the variables wired to them (names only)
+  rm --item ITEM [--yes]           Delete an item and unwire its variables (dry run unless --yes;
+                                   --yes needs a terminal or Touch ID; bw: own agent account only)
   wire --env NAME --item ITEM [--target pi|omp|both] [--force]
   unwire --env NAME [--target pi|omp|both]
 
@@ -44,6 +48,8 @@ Vault (the local vault by default; bw/Vaultwarden once set up)
   unlock [--unattended]            Unlock now (asks unless the key or master password is stored);
                                    the session ends after 30 minutes
                                    (--unattended: no end, for hosts nobody sits at; in a terminal)
+  rekey [--to keychain|secure-enclave|passphrase|dpapi]
+                                   Give the local vault a new key, kept that way (in a terminal)
   status | lock | doctor
 
 Agents
@@ -63,10 +69,18 @@ function requireKnownFlags(args: string[], withValue: string[], bare: string[] =
     if (!bare.includes(args[i])) fail(`Unknown argument: ${args[i]}\n\n${usage}`, 2);
   }
 }
+// Where add/wire write: env.json always, plus pi's and omp's auth.json when installed or named by --target.
 function targetList(value: string | undefined): string[] {
-  if (!value || value === "both") return [targetPaths.omp, targetPaths.pi];
-  if (value === "omp") return [targetPaths.omp];
-  if (value === "pi") return [targetPaths.pi];
+  if (!value) return core.wiringTargets();
+  if (value === "both") return core.wiringTargets(["omp", "pi"]);
+  if (value === "omp" || value === "pi") return core.wiringTargets([value]);
+  fail("--target must be omp, pi, or both", 2);
+}
+// What unwire clears: every wiring file, or only the named agent's auth.json.
+function unwireList(value: string | undefined): string[] {
+  if (!value) return core.wiringFiles();
+  if (value === "both") return [targetPaths.omp, targetPaths.pi];
+  if (value === "omp" || value === "pi") return [targetPaths[value]];
   fail("--target must be omp, pi, or both", 2);
 }
 // --stdin: piped value. Terminal: masked prompt. Otherwise (an agent's shell):
@@ -92,8 +106,7 @@ function failureCode(error: unknown): number {
   return 3;
 }
 async function authRaw(name: string): Promise<string | undefined> {
-  const merged = { ...(await core.readAuthEntries(targetPaths.pi)), ...(await core.readAuthEntries(targetPaths.omp)) };
-  return core.authEntryRaw(merged[name]);
+  return core.authEntryRaw((await core.wiredEntries())[name]);
 }
 async function authValue(name: string): Promise<string | null> {
   return core.resolveShellValue(await authRaw(name));
@@ -447,17 +460,92 @@ async function importCommand(args: string[]): Promise<void> {
   if (!replace && from !== "-") console.log(`${from} still holds the plaintext values. Check with \`${BRAND.bin} run --env-file ${relative(process.cwd(), out) || out} -- <cmd>\`, then delete it or re-run with --replace.`);
 }
 
+// Control and format characters in names are shown as "?".
+function shown(text: string): string { return text.replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, "?"); }
+
+async function listCommand(args: string[]): Promise<void> {
+  requireKnownFlags(args, []);
+  const backends: core.BackendName[] = [];
+  if (existsSync(core.VAULT_FILE)) backends.push("local");
+  if (core.OWN_BW_LOGIN) backends.push("bw");
+  else if ((await core.defaultBackend()) === "bw") console.error(`bw items are not listed: ${BRAND.bin} shares your personal bw login (run \`${BRAND.bin} setup\` to give it its own account)`);
+  let any = false;
+  for (const backend of backends) {
+    let rows: core.ItemRow[];
+    try { await core.openBackend(backend, { prompt: true }); rows = await core.listItems(backend); } catch (error) {
+      console.error(`${backend}: ${error instanceof Error ? error.message : String(error)}`); process.exitCode = 3; continue;
+    }
+    for (const row of rows) {
+      any = true;
+      console.log(`${shown(row.ref)}  wired=${row.wired.join(",") || "none"}${row.duplicate ? `  name=${shown(row.name)} (not unique)` : ""}`);
+    }
+  }
+  if (!any && !process.exitCode) console.error("no items");
+}
+
+// The item Claude Code's apiKeyHelper reads, if any (written by claude-setup).
+async function apiKeyHelperItem(): Promise<{ backend: core.BackendName; name: string } | null> {
+  try {
+    const settings = JSON.parse(await readFile(join(homedir(), ".claude", "settings.json"), "utf8")) as Record<string, unknown>;
+    const match = typeof settings.apiKeyHelper === "string" ? / api-key --item '((?:[^']|'\\'')*)'$/.exec(settings.apiKeyHelper) : null;
+    return match ? await core.parseItemArg(match[1].replaceAll("'\\''", "'")) : null;
+  } catch { return null; }
+}
+
+async function rmCommand(args: string[]): Promise<void> {
+  requireKnownFlags(args, ["--item"], ["--yes"]);
+  const itemArg = valueAfter(args, "--item"); if (!itemArg) fail(usage, 2);
+  const { backend, name } = await parseItem(itemArg);
+  if (backend === "bw" && !core.OWN_BW_LOGIN) fail(`${BRAND.bin} rm removes bw items only from its own agent account (${BRAND.bin} setup); remove this one in your Bitwarden app`, 2);
+  await core.openBackend(backend, { prompt: true });
+  const row = await core.findItemToRemove(name, backend);
+  const helper = await apiKeyHelperItem();
+  if (helper && helper.backend === backend && (helper.name === row.id || helper.name.trim().toLowerCase() === row.name.trim().toLowerCase())) {
+    fail(`Claude Code's apiKeyHelper uses ${shown(row.ref)}: point it at another item first (${BRAND.bin} claude-setup --item NEW --force)`, 5);
+  }
+  const wired = row.wired.join(",") || "none";
+  if (!args.includes("--yes")) {
+    console.log(`would ${backend === "local" ? `delete ${shown(row.ref)} permanently` : `move ${shown(row.ref)} to the bw trash`}; unwire ${wired}`);
+    console.log("Dry run: nothing removed. Re-run with --yes.");
+    return;
+  }
+  if (!(process.stdin.isTTY && process.stderr.isTTY)) {
+    if (process.platform !== "darwin" || process.env.SSH_CONNECTION || process.env.SSH_TTY) fail("rm --yes outside a terminal needs Touch ID on a Mac: run it in a terminal", 2);
+    try { await core.approveWithTouchId(`remove "${shown(row.name)}" from the ${BRAND.name} vault`); } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      fail(message === "Cancelled" ? "Touch ID was not approved; nothing was removed" : `${message}; nothing was removed`, 3);
+    }
+  }
+  const result = await core.removeItem(row);
+  await core.audit("rm", [row.name], "cli");
+  console.log(`removed ${shown(row.ref)} unwired=${result.unwired.join(",") || "none"} targets=${result.targets.map(core.shownPath).join(",") || "none"}`);
+  for (const failed of result.failed) { console.error(`removed ${shown(row.ref)}, but could not unwire it from ${failed.path} (${failed.error}): remove the entries for it there by hand`); process.exitCode = 3; }
+}
+
+const KEY_TYPES: readonly VaultKeyType[] = ["keychain", "secure-enclave", "passphrase", "dpapi"];
+async function rekeyCommand(args: string[]): Promise<void> {
+  requireKnownFlags(args, ["--to"]);
+  const to = valueAfter(args, "--to");
+  if (to !== undefined && !KEY_TYPES.includes(to as VaultKeyType)) fail("--to must be keychain, secure-enclave, passphrase or dpapi", 2);
+  if (!(process.stdin.isTTY && process.stderr.isTTY)) fail(`${BRAND.bin} rekey asks for the vault's current key: run it in a terminal`, 2);
+  const result = await core.rekeyLocal(to as VaultKeyType | undefined);
+  console.error(result.notice);
+  console.log(`rekeyed vault=${core.shownPath(core.VAULT_FILE)} key=${result.from} -> key=${result.to} items=${result.items}`);
+}
+
 // doctor with the local vault as the default backend: no bw lines, no bw call
 // (unless auth.json wires a bw reference).
 async function localDoctor(reason: string): Promise<void> {
   const l = await core.localStatus();
   console.log(`backend=local (${reason})`);
   console.log(`local ${localLine(l)}`);
-  if (l.key === "passphrase" && l.status === "unlocked" && l.expiresAt !== undefined) console.log(`session expires=${l.expiresAt === null ? "never (unattended)" : new Date(l.expiresAt).toISOString()}`);
-  for (const path of [targetPaths.omp, targetPaths.pi]) for (const name of Object.keys(await core.readAuthEntries(path))) console.log(`${path} ${name} resolved=${(await authValue(name)) ? "yes" : "no"}`);
+  if (core.keyHasSessions(l.key) && l.status === "unlocked" && l.expiresAt !== undefined) console.log(`session expires=${l.expiresAt === null ? "never (unattended)" : new Date(l.expiresAt).toISOString()}`);
+  for (const path of core.wiringFiles()) for (const name of Object.keys(await core.readAuthEntries(path))) console.log(`${path} ${name} resolved=${(await authValue(name)) ? "yes" : "no"}`);
   console.log(`redact index=${(await core.readRedactIndex()) ? "present" : "missing"}`);
   const settings = JSON.parse(await readFile(join(homedir(), ".claude", "settings.json"), "utf8").catch(() => "{}")) as Record<string, unknown>;
   console.log(`apiKeyHelper wired=${settings.apiKeyHelper ? "yes" : "no"}`);
+  // Never builds the helper and never asks.
+  if (l.key === "secure-enclave" || process.env[`${BRAND.envPrefix}_VAULT_KEY`]?.trim() === "secure-enclave") console.log(`touchid helper=${await core.touchIdHelperState()}`);
   if (l.status === "locked" || l.status === "error") process.exitCode = 3;
 }
 
@@ -491,7 +579,7 @@ async function main(): Promise<void> {
       if ((await core.defaultBackend()) === "local") {
         const result = await core.unlockLocal({ unattended: args.includes("--unattended") });
         if (result.created) console.error(result.created);
-        if (result.key !== "passphrase") console.log(`the local vault opens with its key from ${keySource(result.key)}; nothing to unlock`);
+        if (!core.keyHasSessions(result.key)) console.log(`the local vault opens with its key from ${keySource(result.key)}; nothing to unlock`);
         else console.log(result.expiresAt ? `unlocked until ${new Date(result.expiresAt).toLocaleTimeString()}` : "unlocked (no time limit)");
         return;
       }
@@ -573,6 +661,9 @@ async function main(): Promise<void> {
       return;
     }
     if (command === "import") { await importCommand(args); return; }
+    if (command === "list") { await listCommand(args); return; }
+    if (command === "rm") { await rmCommand(args); return; }
+    if (command === "rekey") { await rekeyCommand(args); return; }
     if (command === "setup") { await setupCommand(args); return; }
     if (command === "migrate") { await migrateCommand(args); return; }
     if (command === "rotate") {
@@ -597,8 +688,8 @@ async function main(): Promise<void> {
     if (command === "unwire") {
       requireKnownFlags(args, ["--env", "--target"]);
       const envName = valueAfter(args, "--env"); if (!envName) fail(usage, 2);
-      const targets = targetList(valueAfter(args, "--target")); const names: string[] = [];
-      for (const path of targets) if (await core.deleteAuthEntry(path, envName)) names.push(path);
+      const targets = unwireList(valueAfter(args, "--target")); const names: string[] = [];
+      for (const path of targets) if (existsSync(path) && await core.deleteAuthEntry(path, envName)) names.push(path);
       console.log(`removed env=${envName} targets=${names.map(core.shownPath).join(",") || "none"}`); return;
     }
     if (command === "link-cli") {
@@ -641,7 +732,7 @@ async function main(): Promise<void> {
       if (locked) console.log(`keyring=locked: ${core.KEYRING_LOCKED}`);
       // Logged out, every name would spawn a get that fails slowly: say why once instead.
       const loggedOut = s.status === "unauthenticated" || s.status === "unavailable";
-      for (const path of [targetPaths.omp, targetPaths.pi]) for (const name of Object.keys(await core.readAuthEntries(path))) console.log(`${path} ${name} resolved=${loggedOut ? `unknown (bw is ${s.status})` : (await authValue(name)) ? "yes" : "no"}`);
+      for (const path of core.wiringFiles()) for (const name of Object.keys(await core.readAuthEntries(path))) console.log(`${path} ${name} resolved=${loggedOut ? `unknown (bw is ${s.status})` : (await authValue(name)) ? "yes" : "no"}`);
       console.log(`redact index=${(await core.readRedactIndex()) ? "present" : "missing"}`);
       const settings = JSON.parse(await readFile(join(homedir(), ".claude", "settings.json"), "utf8").catch(() => "{}")) as Record<string, unknown>;
       console.log(`apiKeyHelper wired=${settings.apiKeyHelper ? "yes" : "no"}`);

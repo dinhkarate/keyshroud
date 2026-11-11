@@ -1,0 +1,20 @@
+Claude Code session with keyshroud's MCP server as the only tools, recorded 4 November 2026.
+The prompt never mentions keyshroud. Claude Desktop takes the same MCP entry.
+
+$ cat mcp.json
+{ "mcpServers": { "keyshroud": { "command": "keyshroud", "args": ["mcp"] } } }
+
+$ claude --model haiku --tools "" --mcp-config mcp.json
+> Check that my Acme API key still works: run scripts/smoke.sh, just the script, no extra commands
+
+* keyshroud - secrets_run (MCP)(command: "scripts/smoke.sh")
+
+exit: 0
+--- stdout ---
+> Authorization: Bearer <redacted:ACME_API_KEY>
+< HTTP/1.1 200 OK
+{"ok":true,"account":"acme-demo"}
+
+--- stderr ---
+
+Your Acme API key still works. `scripts/smoke.sh` exited 0 and the API returned `HTTP/1.1 200 OK` with `{"ok":true,"account":"acme-demo"}`. The key was injected from the vault and masked in the output.

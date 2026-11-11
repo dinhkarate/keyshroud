@@ -52,6 +52,6 @@ Type "keyshroud scan ." Sleep 500ms Enter
 Wait
 Sleep 2s
 
-Type "cat ~/.pi/agent/auth.json" Sleep 500ms Enter
+Type "cat ~/.config/keyshroud/env.json" Sleep 500ms Enter
 Wait
 Sleep 4s

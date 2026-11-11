@@ -77,7 +77,10 @@ test("a blank machine: add creates the local vault, run masks, and bw is never c
   assert.ok(!text.includes(TOKEN) && !text.includes("GitHub token"), "the file holds neither values nor names in the clear");
   assert.equal((await stat(vaultPath(box))).mode & 0o777, 0o600);
   assert.equal((await keyEntries(box)).length, 1);
-  assert.match(await readFile(join(box.env.HOME, ".pi", "agent", "auth.json"), "utf8"), /"!keyshroud get 'local:\/\/GitHub token'"/);
+  // Wiring is keyshroud's own file; no agent is installed here, so no agent directory appears.
+  assert.match(added.stdout, /targets=[^,]*env\.json verified=yes/);
+  assert.match(await readFile(join(box.configDir, "env.json"), "utf8"), /"!keyshroud get 'local:\/\/GitHub token'"/);
+  assert.ok(!existsSync(join(box.env.HOME, ".pi")) && !existsSync(join(box.env.HOME, ".omp")));
 
   const run = await runCli(box, ["run", "--mask", "--", "sh", "-c", 'echo "deploying with $GH_TOKEN"']);
   assert.equal(run.code, 0, run.stderr);
@@ -283,7 +286,7 @@ test("a changed vault is never overwritten; a newer format and a missing key are
   assert.equal(get.code, 4);
   assert.match(get.stderr, /integrity check/);
 
-  await writeFile(vaultPath(box), JSON.stringify({ ...file, v: 2 }));
+  await writeFile(vaultPath(box), JSON.stringify({ ...file, v: 3 }));
   const newer = await runCli(box, ["status"]);
   assert.equal(newer.code, 3);
   assert.match(newer.stdout, /written by a newer keyshroud/);
@@ -448,4 +451,221 @@ test("MCP on a blank machine: instructions, vault_status and secrets_request use
   } finally { server.close(); }
   assert.equal((await runCli(box, ["get", "MCP_TOKEN"])).stdout, "mcp-value-98765");
   assert.deepEqual(await box.bwCalls(), []);
+});
+
+// Touch ID vaults: the fake xcode-select/xcrun "build" test/fixtures/touchid-helper, a software
+// P-256 key stands in for the Secure Enclave, and every operation and reason goes to dialog.log.
+async function touchIdBox() {
+  const box = await blank();
+  const log = join(box.dir, "dialog.log");
+  await writeFile(log, "");
+  const env = { KEYSHROUD_VAULT_KEY: "secure-enclave", FAKE_DIALOG_LOG: log, FAKE_DIALOG_VALUE: "ok" };
+  const lines = async () => (await readFile(log, "utf8")).split("\n").filter(Boolean);
+  const count = async (prefix: string) => (await lines()).filter((line) => line.startsWith(prefix)).length;
+  return { box, env, log, lines, count };
+}
+const OPEN_REASON = "touchid|agree|open the keyshroud vault for 30 minutes";
+const sessionFiles = (box: Sandbox) => ["vault.session", "vault.token"].map((name) => join(box.configDir, name));
+
+test("a Touch ID vault: created with one approval, opens for a session, declines cool down, never asks from SSH or hooks", { skip: process.platform === "win32" }, async () => {
+  const { box, env, lines, count } = await touchIdBox();
+  const added = await add(box, "A_TOKEN", "A", "value-aaaa-1111", env);
+  assert.equal(added.code, 0, added.stderr);
+  assert.match(added.stderr, /building the Touch ID helper/);
+  assert.match(added.stderr, /created the local vault .*it opens with Touch ID \(or your Mac's password\) on this Mac only; sessions end after 30 minutes/);
+  const log = await lines();
+  assert.match(log[0], /^xcrun\|swiftc -O -swift-version 5 -o /);
+  assert.deepEqual(log.slice(1), ["touchid|create|", "touchid|agree|turn on Touch ID for the keyshroud vault"]);
+  const file = JSON.parse(await readFile(vaultPath(box), "utf8"));
+  assert.equal(file.v, 2);
+  assert.deepEqual(Object.keys(file.key), ["type", "handle", "pub", "epk", "nonce", "wrapped"]);
+  assert.deepEqual(await keyEntries(box), []);
+  assert.match((await runCli(box, ["status"], undefined, env)).stdout, /key=secure-enclave status=unlocked items=1/);
+  const masked = await runCli(box, ["run", "--", "sh", "-c", "echo \"[$A_TOKEN]\""], undefined, env);
+  assert.equal(masked.stdout, "[<redacted:A_TOKEN>]\n", masked.stderr);
+  assert.equal((await lines()).length, 3);
+
+  assert.equal((await runCli(box, ["lock"], undefined, env)).stdout, "locked\n");
+  const locked = await runCli(box, ["status"], undefined, env);
+  assert.equal(locked.code, 3);
+  assert.match(locked.stdout, /key=secure-enclave status=locked/);
+  const reopened = await runCli(box, ["get", "A_TOKEN"], undefined, env);
+  assert.equal(reopened.stdout, "value-aaaa-1111", reopened.stderr);
+  assert.equal(await count(OPEN_REASON), 1);
+  assert.equal(await count("xcrun|"), 1);
+  assert.equal((await runCli(box, ["get", "A_TOKEN"], undefined, env)).stdout, "value-aaaa-1111");
+  assert.equal(await count(OPEN_REASON), 1, "the session serves the next call");
+  await runCli(box, ["lock"], undefined, env);
+  assert.match((await runCli(box, ["unlock"], undefined, env)).stdout, /^unlocked until /);
+  assert.equal(await count(OPEN_REASON), 2);
+
+  await runCli(box, ["lock"], undefined, env);
+  const declined = await runCli(box, ["get", "A_TOKEN"], undefined, { ...env, FAKE_DIALOG_VALUE: "", FAKE_DIALOG_CANCEL: "1" });
+  assert.equal(declined.code, 4);
+  assert.match(declined.stderr, /Cancelled/);
+  assert.ok(sessionFiles(box).every((path) => !existsSync(path)));
+  const cooling = await runCli(box, ["get", "A_TOKEN"], undefined, env);
+  assert.match(cooling.stderr, /The last dialog was cancelled; wait 30 seconds/);
+  assert.equal(await count(OPEN_REASON), 3, "no sheet during the cooldown");
+  await unlink(join(box.configDir, "dialog.lock"));
+
+  const nobody = await runCli(box, ["get", "A_TOKEN"], undefined, { ...env, FAKE_DIALOG_VALUE: "" });
+  assert.match(nobody.stderr, /nobody can be asked from here/);
+  const before = (await lines()).length;
+  const ssh = await runCli(box, ["get", "A_TOKEN"], undefined, { ...env, SSH_CONNECTION: "x" });
+  assert.match(ssh.stderr, /nobody can be asked from here/);
+  assert.equal((await lines()).length, before, "nothing runs over SSH");
+
+  const hook = await runCli(box, ["hook", "claude", "session-start"], "{}", env);
+  assert.match(hook.stdout, /opens with Touch ID/);
+  const doctor = await runCli(box, ["doctor"], undefined, env);
+  assert.match(doctor.stdout, /touchid helper=built/);
+  assert.equal((await lines()).length, before, "hooks and doctor never ask");
+
+  const server = mcpServer(box, env);
+  try {
+    assert.match(await server.call("vault_status"), /status=locked/);
+    assert.match(await server.call("secrets_list"), /A_TOKEN/);
+    assert.equal((await lines()).length, before);
+    assert.match(await server.call("secrets_run", { command: "echo \"[$A_TOKEN]\"" }), /\[<redacted:A_TOKEN>\]/);
+    assert.equal(await count(OPEN_REASON), 5);
+  } finally { server.close(); }
+  assert.deepEqual(await box.bwCalls(), []);
+});
+
+test("Touch ID: parallel callers share one sheet; build, enclave and key failures are named", { skip: process.platform === "win32" }, async () => {
+  const { box, env, count } = await touchIdBox();
+  assert.equal((await add(box, "A_TOKEN", "A", "value-aaaa-1111", env)).code, 0);
+  await runCli(box, ["lock"], undefined, env);
+  const slow = { ...env, FAKE_TOUCHID_DELAY_MS: "1500" };
+  const runs = await Promise.all([1, 2, 3].map(() => runCli(box, ["run", "--", "sh", "-c", "test -n \"$A_TOKEN\""], undefined, slow)));
+  assert.deepEqual(runs.map((run) => run.code), [0, 0, 0], runs.map((run) => run.stderr).join("\n"));
+  assert.equal(await count(OPEN_REASON), 1);
+
+  // A lock file another process has created but not yet written is held, not stale.
+  await runCli(box, ["lock"], undefined, env);
+  await writeFile(join(box.configDir, "dialog.lock"), "", { mode: 0o600 });
+  const taken = await runCliTtySteps(box, ["unlock", "--unattended"], [], env);
+  assert.match(taken.stdout, /Another keyshroud dialog is already open/);
+  assert.equal(await count(OPEN_REASON), 1);
+  await unlink(join(box.configDir, "dialog.lock"));
+
+  await runCli(box, ["lock"], undefined, env);
+  await chmod(join(box.configDir, "touchid"), 0o700);
+  for (const dir of await readdir(join(box.configDir, "touchid"))) for (const name of await readdir(join(box.configDir, "touchid", dir))) await unlink(join(box.configDir, "touchid", dir, name));
+  assert.equal((await runCli(box, ["get", "A_TOKEN"], undefined, env)).code, 0);
+  assert.equal(await count("xcrun|"), 2, "a missing helper is built again");
+
+  await runCli(box, ["lock"], undefined, env);
+  for (const name of (await readdir(join(box.dir, "keychain"))).filter((name) => name.startsWith("se-"))) await unlink(join(box.dir, "keychain", name));
+  const foreign = await runCli(box, ["get", "A_TOKEN"], undefined, env);
+  assert.match(foreign.stderr, /does not work on this Mac/);
+
+  const fresh = await touchIdBox();
+  const noTools = await add(fresh.box, "A_TOKEN", "A", "v", { ...fresh.env, FAKE_NO_XCODE: "1" });
+  assert.match(noTools.stderr, /needs the Xcode Command Line Tools once/);
+  const noBuild = await add(fresh.box, "A_TOKEN", "A", "v", { ...fresh.env, FAKE_SWIFTC_FAIL: "1" });
+  assert.match(noBuild.stderr, /Could not build the Touch ID helper/);
+  const noEnclave = await add(fresh.box, "A_TOKEN", "A", "v", { ...fresh.env, FAKE_NO_ENCLAVE: "1" });
+  assert.match(noEnclave.stderr, /needs a Mac with a Secure Enclave/);
+  const bogus = await add(fresh.box, "A_TOKEN", "A", "v", { KEYSHROUD_VAULT_KEY: "bogus" });
+  assert.match(bogus.stderr, /KEYSHROUD_VAULT_KEY=bogus: use keychain, dpapi, passphrase or secure-enclave/);
+  assert.ok(!existsSync(vaultPath(fresh.box)));
+});
+
+test("rekey moves a vault between keychain, Touch ID and a passphrase, with a new key and id each time", { skip: process.platform === "win32" }, async () => {
+  const { box, env, lines, count } = await touchIdBox();
+  assert.equal((await add(box, "A_TOKEN", "A", "value-aaaa-1111", { KEYSHROUD_VAULT_KEY: "keychain" })).code, 0);
+  const firstId = JSON.parse(await readFile(vaultPath(box), "utf8")).id;
+  assert.deepEqual(await keyEntries(box), [`keyshroud-vault-${firstId}`]);
+  assert.equal((await runCli(box, ["rekey", "--to", "secure-enclave"], undefined, env)).code, 2, "terminal only");
+
+  const toSe = await runCliTtySteps(box, ["rekey", "--to", "secure-enclave"], [], env);
+  assert.equal(toSe.code, 0, toSe.stdout);
+  assert.match(toSe.stdout, /rekeyed vault=.*key=keychain -> key=secure-enclave items=1/);
+  const se = JSON.parse(await readFile(vaultPath(box), "utf8"));
+  assert.notEqual(se.id, firstId);
+  assert.equal(se.key.type, "secure-enclave");
+  assert.deepEqual(await keyEntries(box), [], "the old keychain entry is gone");
+  assert.equal(await count("touchid|agree|turn on Touch ID for the keyshroud vault"), 1);
+  assert.equal((await runCli(box, ["get", "A_TOKEN"], undefined, env)).stdout, "value-aaaa-1111");
+
+  const toPass = await runCliTtySteps(box, ["rekey", "--to", "passphrase"], [["New passphrase", PASS], ["Repeat it", PASS]], env);
+  assert.equal(toPass.code, 0, toPass.stdout);
+  assert.equal(await count("touchid|agree|move the keyshroud vault from Touch ID to a passphrase"), 1);
+  assert.equal((await runCli(box, ["get", "A_TOKEN"], undefined, env)).stdout, "value-aaaa-1111");
+
+  const before = await readFile(vaultPath(box), "utf8");
+  const wrong = await runCliTtySteps(box, ["rekey", "--to", "secure-enclave"], [["Passphrase of the local vault", "not the passphrase"]], env);
+  assert.match(wrong.stdout, /Wrong passphrase; nothing was changed/);
+  assert.equal(await readFile(vaultPath(box), "utf8"), before);
+
+  const back = await runCliTtySteps(box, ["rekey", "--to", "secure-enclave"], [["Passphrase of the local vault", PASS]], env);
+  assert.equal(back.code, 0, back.stdout);
+  const creates = await count("touchid|create|");
+  const same = await runCliTtySteps(box, ["rekey"], [], env);
+  assert.equal(same.code, 0, same.stdout);
+  assert.equal(await count("touchid|agree|give the keyshroud vault a new key"), 1);
+  assert.equal(await count("touchid|create|"), creates, "SE to SE reuses the enclave key");
+  assert.equal(JSON.parse(await readFile(vaultPath(box), "utf8")).key.type, "secure-enclave");
+  assert.equal((await runCli(box, ["get", "A_TOKEN"], undefined, env)).stdout, "value-aaaa-1111");
+  assert.ok((await lines()).length > 0);
+});
+
+test("wiring is written to env.json, and to pi's or omp's auth.json only when installed or named", async () => {
+  const box = await blank();
+  const own = join(box.configDir, "env.json"), pi = join(box.env.HOME, ".pi", "agent", "auth.json"), omp = join(box.env.PI_CODING_AGENT_DIR, "auth.json");
+  const names = async (path: string) => Object.keys(JSON.parse(await readFile(path, "utf8")));
+  assert.equal((await add(box, "A_TOKEN", "A", "value-aaaa-1111")).code, 0);
+  assert.equal((await runCli(box, ["wire", "--env", "B_TOKEN", "--item", "A", "--target", "pi"])).code, 0);
+  assert.deepEqual(await names(own), ["A_TOKEN", "B_TOKEN"]);
+  assert.deepEqual(await names(pi), ["B_TOKEN"]);
+  assert.ok(!existsSync(omp));
+  // pi is installed now, so a new name goes there without --target.
+  assert.match((await runCli(box, ["wire", "--env", "C_TOKEN", "--item", "A"])).stdout, /targets=.*env\.json,.*\.pi.*auth\.json$/m);
+  assert.equal((await runCli(box, ["env"])).stdout, "A_TOKEN\nB_TOKEN\nC_TOKEN\n");
+
+  assert.match((await runCli(box, ["unwire", "--env", "B_TOKEN", "--target", "pi"])).stdout, /removed env=B_TOKEN targets=.*\.pi.*auth\.json$/m);
+  assert.deepEqual(await names(own), ["A_TOKEN", "B_TOKEN", "C_TOKEN"]);
+  assert.match((await runCli(box, ["unwire", "--env", "C_TOKEN"])).stdout, /removed env=C_TOKEN targets=.*env\.json,.*auth\.json$/m);
+  assert.deepEqual(await names(own), ["A_TOKEN", "B_TOKEN"]);
+  assert.deepEqual(await names(pi), []);
+  assert.ok(!existsSync(omp), "unwire creates nothing");
+  assert.equal((await runCli(box, ["run", "--", "sh", "-c", 'echo "${#A_TOKEN} ${#B_TOKEN} ${#C_TOKEN}"'])).stdout, "15 15 0\n");
+});
+
+test("list shows names and wiring; rm is a dry run until --yes, then deletes and unwires", { skip: process.platform === "win32" }, async () => {
+  const box = await blank();
+  // pi and omp are installed here, so their auth.json files are wired too.
+  for (const dir of [join(box.env.HOME, ".pi", "agent"), box.env.PI_CODING_AGENT_DIR]) await mkdir(dir, { recursive: true });
+  assert.equal((await add(box, "A_TOKEN", "A", "value-aaaa-1111")).code, 0);
+  assert.equal((await add(box, "B_TOKEN", "B", "value-bbbb-2222")).code, 0);
+  const list = await runCli(box, ["list"]);
+  assert.equal(list.stdout, "local://A  wired=A_TOKEN\nlocal://B  wired=B_TOKEN\n");
+  assert.ok(!list.stdout.includes("value-"));
+
+  const before = await readFile(vaultPath(box), "utf8");
+  const dry = await runCli(box, ["rm", "--item", "A"]);
+  assert.equal(dry.stdout, "would delete local://A permanently; unwire A_TOKEN\nDry run: nothing removed. Re-run with --yes.\n");
+  assert.equal(await readFile(vaultPath(box), "utf8"), before);
+  assert.equal((await runCli(box, ["rm", "--item", "missing"])).code, 4);
+
+  await mkdir(join(box.env.HOME, ".claude"), { recursive: true });
+  await writeFile(join(box.env.HOME, ".claude", "settings.json"), JSON.stringify({ apiKeyHelper: "'node' '/x/cli.js' api-key --item 'B'" }));
+  const helper = await runCli(box, ["rm", "--item", "B", "--yes"]);
+  assert.equal(helper.code, 5);
+  assert.match(helper.stderr, /apiKeyHelper uses local:\/\/B/);
+
+  const agent = await runCli(box, ["rm", "--item", "A", "--yes"], undefined, { FAKE_DIALOG_CANCEL: "1" });
+  if (process.platform === "darwin") { assert.equal(agent.code, 3); assert.match(agent.stderr, /Touch ID was not approved; nothing was removed/); }
+  else assert.equal(agent.code, 2);
+  assert.equal(await readFile(vaultPath(box), "utf8"), before);
+
+  const removed = await runCliTtySteps(box, ["rm", "--item", "A", "--yes"], []);
+  assert.equal(removed.code, 0, removed.stdout);
+  assert.match(removed.stdout, /removed local:\/\/A unwired=A_TOKEN targets=.*env\.json,.*auth\.json,.*auth\.json/);
+  assert.equal((await runCli(box, ["list"])).stdout, "local://B  wired=B_TOKEN\n");
+  for (const path of [join(box.configDir, "env.json"), join(box.env.HOME, ".pi", "agent", "auth.json"), join(box.env.PI_CODING_AGENT_DIR, "auth.json")]) {
+    assert.deepEqual(Object.keys(JSON.parse(await readFile(path, "utf8"))), ["B_TOKEN"]);
+  }
 });

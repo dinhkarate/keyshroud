@@ -125,7 +125,7 @@ keyshroud doctor
 $ keyshroud add --env GH_TOKEN --item "GitHub token"
 Paste secret for GH_TOKEN: ****************************************
 keyshroud: created the local vault ~/.config/keyshroud/vault.json; its key is in the macOS keychain (keyshroud-vault-9f2c4e6a1b3d5f70), so programs running as you can open it without asking.
-created item=GitHub token env=GH_TOKEN targets=~/.omp/agent/auth.json,~/.pi/agent/auth.json verified=yes
+created item=GitHub token env=GH_TOKEN targets=~/.config/keyshroud/env.json verified=yes
 ```
 
 Without a terminal (an agent's shell), `add` opens a hidden-input dialog on your desktop instead,
@@ -139,6 +139,7 @@ so an agent can start it and you only paste. Already have a `.env`? `keyshroud i
 | Machine | Key | Unlocking |
 |---|---|---|
 | macOS | login keychain, entry `keyshroud-vault-<id>` | none |
+| macOS with `KEYSHROUD_VAULT_KEY=secure-enclave` (or `keyshroud rekey --to secure-enclave`) | wrapped to a key in the Mac's Secure Enclave | Touch ID (or the Mac's password) when a command needs a secret; a session ends after 30 minutes |
 | Linux with a desktop keyring and systemd | Secret Service (`secret-tool`; found with `busctl`) | none |
 | Windows | DPAPI, bound to your Windows account | none |
 | Docker, servers, SSH with a locked keyring, Linux without systemd | derived from a passphrase (scrypt) | `keyshroud unlock`; a session ends after 30 minutes |
@@ -147,6 +148,13 @@ The key mode is chosen once, when the vault is created. To be asked for a passph
 create it with `KEYSHROUD_VAULT_KEY=passphrase keyshroud unlock` in a terminal (typed twice, at least
 12 characters). When a session has ended, a command that needs a secret asks again: a masked prompt in
 a terminal, a dialog on the desktop, and over SSH it tells you to run `keyshroud unlock`.
+
+A Touch ID vault needs the Xcode Command Line Tools once (`xcode-select --install`): keyshroud builds
+a small helper from `src/touchid.swift` on first use, which takes a few seconds. The sheet appears for
+any caller that may ask (the CLI, `secrets_run`, Claude Code's apiKeyHelper); hooks, `status` and
+`doctor` never ask, and over SSH it tells you to run `keyshroud unlock` at the Mac. `keyshroud rekey`
+moves a vault between key types (a new key and vault id each time); run `rekey --to passphrase` before
+moving to another Mac.
 
 Nothing can recover a lost key or a forgotten passphrase, and the vault belongs to one machine.
 `vault.json` is safe to copy as long as its key is not. For backups and several machines, use
@@ -251,9 +259,10 @@ keyshroud migrate --yes                          # copy them; references keep wo
 ```
 
 1. **Wiring.** A secret is wired by *name*: `GH_TOKEN → local://GitHub token` (or
-   `bw://GitHub CLI token`). Wiring lives in `~/.pi/agent/auth.json` / `~/.omp/agent/auth.json`
-   (shared with pi/omp, which can run the `!keyshroud get '…'` entries on their own) and in
-   project `.env.refs` files. Both are safe to read.
+   `bw://GitHub CLI token`). Wiring lives in `~/.config/keyshroud/env.json` and in project `.env.refs`
+   files. When pi or omp is installed (`~/.pi/agent`, `~/.omp/agent` exists), a name is also
+   written to its `auth.json`, where pi/omp run the `!keyshroud get '…'` entries on their own
+   (`--target pi|omp|both` writes there in any case). All of these are safe to read.
 2. **Unlock.** The local vault's key comes from the OS keychain, or from a passphrase session that
    ends after 30 minutes. Vaultwarden: keyshroud asks for the master password (or reads one you
    stored in the OS keychain); the session token is cached in `~/.config/keyshroud/session`
@@ -396,9 +405,12 @@ keyshroud import [--from F|-] [--out F] [--prefix P] [--only A,B] [--skip A,B] [
 keyshroud rotate --item ITEM [--stdin|--dialog]
 keyshroud wire --env NAME --item ITEM [--target pi|omp|both] [--force]
 keyshroud unwire --env NAME [--target pi|omp|both]
+keyshroud list                                     item references and the variables wired to them (names only)
+keyshroud rm --item ITEM [--yes]                   delete an item and unwire it (dry run unless --yes)
 keyshroud setup --email EMAIL [--server URL] [--confirm-unlock | --unattended] [--registered]   (Vaultwarden)
 keyshroud migrate [--item NAME]... [--env-file F]... [--yes]                                    (Vaultwarden)
 keyshroud unlock [--unattended]
+keyshroud rekey [--to keychain|secure-enclave|passphrase|dpapi]                                 (in a terminal)
 keyshroud status | lock | doctor
 keyshroud mcp
 keyshroud hook claude <session-start|post-tool-use>
@@ -408,6 +420,12 @@ keyshroud link-cli [--dir DIR] [--force]
 ```
 
 `--item` takes a name (stored in the default vault), `local://Name` or `bw://Name`.
+
+`rm` prints what it would do (delete a local item permanently, or move a bw item to the bw trash, and
+which variables it unwires) until you add `--yes`. With `--yes` it needs a terminal, or
+a Touch ID approval on a Mac when an agent runs it. It works on bw only with keyshroud's own agent
+account, and refuses the item Claude Code's apiKeyHelper uses. `.env.refs` files that point at a
+removed item then fail as unresolved.
 
 `run` masks output whenever stdout is not a terminal (agents, CI, pipes) and
 passes the TTY through untouched for interactive use. Force either way with
@@ -444,7 +462,7 @@ missing or item name ambiguous · `5` refusing to overwrite existing state.
 |---|---|
 | `local://GitHub token` | the value stored in the local vault |
 | `local://GitHub token/notes` | its notes (`id` also works) |
-| `!keyshroud get 'local://Item'` | the auth.json form keyshroud writes for local items |
+| `!keyshroud get 'local://Item'` | the env.json / auth.json form keyshroud writes for local items |
 | `bw://GitHub CLI token` | login password |
 | `bw://GitHub CLI token/username` | login username (`notes`, `uri`, `id` also work) |
 | `bw://Sentry/fields/dsn` | custom field `dsn` |
@@ -460,11 +478,11 @@ closed (exit `4`) instead of guessing; the local vault refuses to create one.
 | Variable | Default | |
 |---|---|---|
 | `KEYSHROUD_BACKEND` | the `backend` file | `local` or `bw`: where new items go and which vault opens by default |
-| `KEYSHROUD_VAULT_KEY` | per OS | key mode when the local vault is created: `keychain`, `dpapi` or `passphrase` |
+| `KEYSHROUD_VAULT_KEY` | per OS | key mode when the local vault is created: `keychain`, `dpapi`, `passphrase` or `secure-enclave` (Touch ID); anything else is an error |
 | `KEYSHROUD_CACHE_TTL_MS` | `3600000` | in-memory Vaultwarden snapshot + session check lifetime; `0` disables |
-| `KEYSHROUD_SESSION_TTL_MS` | `1800000` | how long an unlocked session lasts (Vaultwarden, or a passphrase vault) |
+| `KEYSHROUD_SESSION_TTL_MS` | `1800000` | how long an unlocked session lasts (Vaultwarden, or a passphrase or Touch ID vault) |
 | `KEYSHROUD_LOCK_TIMER` | on | `0` skips the background timer (sessions then end on the next call) |
-| `KEYSHROUD_CONFIG_DIR` | `$XDG_CONFIG_HOME/keyshroud` | `vault.json`, `backend`, sessions, `bw/` (after `setup`), master-password hash, redact index, audit log |
+| `KEYSHROUD_CONFIG_DIR` | `$XDG_CONFIG_HOME/keyshroud` | `vault.json`, `env.json` (wiring), `backend`, sessions, `bw/` (after `setup`), master-password hash, redact index, audit log |
 | `KEYSHROUD_KEYCHAIN_MASTER` | `vaultwarden-master-password` | keychain service names (after `setup`: `keyshroud-…`) |
 | `KEYSHROUD_KEYCHAIN_CLIENT_ID` | `vaultwarden-api-client-id` | |
 | `KEYSHROUD_KEYCHAIN_CLIENT_SECRET` | `vaultwarden-api-client-secret` | |
@@ -489,6 +507,11 @@ looks new and gets the local vault; set `KEYSHROUD_BACKEND=bw` there if it shoul
 **How do I back up the local vault?** `vault.json` is encrypted, so copy it anywhere; it opens only with
 its key, which stays in this machine's keychain (or your passphrase). If you lose the machine, you lose
 the key. For a real backup, or the same secrets on several machines, use Vaultwarden or Bitwarden.
+
+**Can I use it in CI or a Docker build?** Not with the local vault: it belongs to one machine, and its
+passphrase is typed in a terminal, which a build job never has. Give those jobs their secrets from the
+CI's own secret store. A server you reach over SSH is fine: run `keyshroud unlock --unattended` there
+once, and the session has no end.
 
 **Can the agent still use the key?** Yes. The command gets the real value; only the text
 the model reads is masked.
@@ -530,7 +553,18 @@ keychain, Linux Secret Service, Windows DPAPI). Any program running as you can r
 included, so in this mode keyshroud does not ask before opening the vault: the same exposure as storing
 a Vaultwarden master password in the keychain, and weaker than Vaultwarden's ask-every-30-minutes
 default. Create the vault with `KEYSHROUD_VAULT_KEY=passphrase` to be asked (sessions end after 30
-minutes). A local vault belongs to one machine and has no recovery: back up with Vaultwarden or
+minutes).
+
+On a Mac, a **Touch ID vault** (`KEYSHROUD_VAULT_KEY=secure-enclave`, or `keyshroud rekey --to
+secure-enclave`) closes that gap while no session is open: its key is wrapped to a P-256 key held by
+the Mac's Secure Enclave, which answers only after the person at the Mac approves a Touch ID sheet (or
+types the Mac's password). For the session that follows (30 minutes), the key sits in `vault.session` +
+`vault.token` like a passphrase session, and any program running as you can read it; `keyshroud lock`
+or a shorter `KEYSHROUD_SESSION_TTL_MS` narrows that window. Touch ID proves someone is present, not
+what they meant to approve: a program already running as you can show its own sheet, or change
+keyshroud or its helper to capture the next approval. There is no recovery: the vault opens on that
+Mac only, so run `rekey --to passphrase` before erasing or moving it, and keep Vaultwarden for
+backups. A local vault belongs to one machine and has no recovery: back up with Vaultwarden or
 Bitwarden, which is also the option for several machines. `vault.json` is safe to copy only as long as
 its key is not.
 
@@ -546,7 +580,7 @@ Guarantees we test for:
 - the local vault is replaced atomically (temporary file, fsync, rename) under a lock, changes to any
   part of it fail its integrity check, and a vault that fails it is never overwritten;
 - a local vault's passphrase is set only in a terminal, never stored, and refused as a secret;
-- auth.json writes are locked and atomic and never overwrite without `--force`;
+- env.json and auth.json writes are locked and atomic and never overwrite without `--force`;
 - commands started by `run` and `secrets_run` never receive `BW_SESSION`,
   `BW_PASSWORD`, `BW_CLIENTID` or `BW_CLIENTSECRET`, so `--only` really limits
   what a command can read (inside pi/omp the agent process keeps the session for
@@ -555,7 +589,7 @@ Guarantees we test for:
   rejected, and so are variables that change what programs load or run (`PATH`,
   `NODE_OPTIONS`, `LD_*`, `DYLD_*`, `BASH_ENV`, `GIT_SSH_COMMAND`, …), which are
   also never wired or injected;
-- an unparseable `auth.json` is never overwritten.
+- an unparseable `env.json` or `auth.json` is never overwritten.
 
 Known limits: a `.env.refs` can reference **any** item in your vault, not only the
 ones you wired, so read a cloned repo's `.env.refs` before running `--env-file`

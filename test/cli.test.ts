@@ -6,7 +6,7 @@ import { cp, mkdir, readdir, readFile, stat, symlink, unlink, utimes, writeFile 
 import { join } from "node:path";
 import { test } from "node:test";
 import { BRAND } from "../src/brand.ts";
-import { CLI, item, runCli, runCliTty, sandbox, writeAuth } from "./helpers.ts";
+import { CLI, item, runCli, runCliTty, runCliTtySteps, sandbox, writeAuth } from "./helpers.ts";
 
 const GH = "ghp_FAKE0123456789abcdef";
 const NPM = "npm_FAKEabcdefghijklmnop";
@@ -233,7 +233,7 @@ test("the dialog refuses spoofed names, the master password, a second dialog, an
   await writeFile(join(box.configDir, "dialog.lock"), `open:${Date.now()}\n`);
   const busy = await mcpCall(box, "secrets_request", { env_name: "SECOND", item_name: "Second" }, { ...display, FAKE_DIALOG_VALUE: "x" });
   assert.match(busy.text, /already open/);
-  await writeFile(join(box.configDir, "dialog.lock"), "");
+  await unlink(join(box.configDir, "dialog.lock"));
   const cancelled = await mcpCall(box, "secrets_request", { env_name: "THIRD", item_name: "Third" }, { ...display, FAKE_DIALOG_CANCEL: "1" });
   assert.match(cancelled.text, /cancelled/);
   const again = await mcpCall(box, "secrets_request", { env_name: "THIRD", item_name: "Third" }, { ...display, FAKE_DIALOG_VALUE: "x" });
@@ -841,4 +841,45 @@ test("run masks a master password file that a command reads", async () => {
   assert.equal(run.code, 0, run.stderr);
   assert.ok(!run.stdout.includes("file-master-zq-1"));
   assert.match(run.stdout, /<redacted:MASTER_PASSWORD>/);
+});
+
+test("list and rm on bw: duplicate names by id, own agent account only, items go to the trash", { skip: process.platform === "win32" }, async () => {
+  const items = [item("id-1", "Dup", "value-one-1111"), item("id-2", "Dup", "value-two-2222"), item("id-3", "Solo", "value-solo-3333")];
+  const box = await sandbox(items);
+  await writeAuth(box, { SOLO_TOKEN: "!bw get password 'Solo'", TWO_TOKEN: "bw://id-2" });
+  const shared = await runCli(box, ["rm", "--item", "Solo"]);
+  assert.equal(shared.code, 2);
+  assert.match(shared.stderr, /removes bw items only from its own agent account/);
+
+  await mkdir(join(box.configDir, "bw"), { recursive: true });
+  await writeFile(join(box.configDir, "bw", "data.json"), "{}");
+  const own = join(box.configDir, "bw", "fake-vault.json");
+  await writeFile(own, JSON.stringify({ status: "locked", password: "agent-pw", items }));
+  await writeFile(join(box.dir, "keychain", "keyshroud-master-password"), "agent-pw\n");
+  const list = await runCli(box, ["list"]);
+  assert.equal(list.code, 0, list.stderr);
+  assert.equal(list.stdout, "bw://id-1  wired=none  name=Dup (not unique)\nbw://id-2  wired=TWO_TOKEN  name=Dup (not unique)\nbw://Solo  wired=SOLO_TOKEN\n");
+  const ambiguous = await runCli(box, ["rm", "--item", "Dup"]);
+  assert.equal(ambiguous.code, 4);
+  assert.match(ambiguous.stderr, /Ambiguous vault item name: Dup \(remove one by id: id-1, id-2\)/);
+  assert.equal((await runCli(box, ["rm", "--item", "id-2"])).stdout, "would move bw://id-2 to the bw trash; unwire TWO_TOKEN\nDry run: nothing removed. Re-run with --yes.\n");
+
+  const removed = await runCliTtySteps(box, ["rm", "--item", "id-2", "--yes"], []);
+  assert.equal(removed.code, 0, removed.stdout);
+  assert.match(removed.stdout, /removed bw:\/\/id-2 unwired=TWO_TOKEN/);
+  const calls = await box.bwCalls();
+  const deleted = calls.findIndex((call) => /delete item id-2/.test(call));
+  assert.ok(deleted >= 0 && /sync --quiet/.test(calls.slice(deleted + 1).join("\n")), calls.join("\n"));
+  const ownItems = async () => (JSON.parse(await readFile(own, "utf8")) as { items: Array<{ id: string }> }).items.map((entry) => entry.id);
+  assert.deepEqual(await ownItems(), ["id-1", "id-3"]);
+  assert.equal((await box.vault()).items.length, 3, "the personal vault is untouched");
+  if (process.platform === "darwin") {
+    const declined = await runCli(box, ["rm", "--item", "Solo", "--yes"], undefined, { FAKE_DIALOG_CANCEL: "1" });
+    assert.equal(declined.code, 3);
+    assert.match(declined.stderr, /Touch ID was not approved; nothing was removed/);
+    await unlink(join(box.configDir, "dialog.lock")); // past the 30 s pause after a decline
+    const approved = await runCli(box, ["rm", "--item", "Solo", "--yes"], undefined, { FAKE_DIALOG_VALUE: "ok" });
+    assert.equal(approved.code, 0, approved.stderr);
+    assert.match(approved.stdout, /removed bw:\/\/Solo unwired=SOLO_TOKEN/);
+  }
 });

@@ -1,0 +1,4 @@
+#!/bin/sh
+# Fake `xcode-select -p`: the Command Line Tools are there unless FAKE_NO_XCODE.
+if [ -n "$FAKE_NO_XCODE" ]; then echo "xcode-select: error: unable to get active developer directory" >&2; exit 2; fi
+echo /Library/Developer/CommandLineTools

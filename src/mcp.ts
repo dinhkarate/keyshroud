@@ -161,7 +161,7 @@ async function callTool(name: string, args: Json): Promise<Json> {
         const { created } = await core.createSecretItem({ itemName, secret, envName, notes, backend });
         await core.audit("request", [envName], "mcp");
         const conflicts: string[] = [];
-        for (const path of Object.values(core.getAuthTargets())) if (!(await core.writeAuthEntry(path, envName, reference)).ok) conflicts.push(path);
+        for (const path of core.wiringTargets()) if (!(await core.writeAuthEntry(path, envName, reference)).ok) conflicts.push(path);
         await core.refreshRedactIndex();
         if (conflicts.length) return text(`created item=${itemName}, but ${envName} is already wired to another secret in ${conflicts.join(", ")} and was left unchanged. Ask the user before running \`${BRAND.bin} wire --env ${envName} --item ${shellQuote(itemName)} --force\`.`, true);
         const verified = (await core.resolveShellValue(reference)) !== null;

@@ -1,19 +1,21 @@
 // Runtime-neutral core: no pi/omp/Claude Code imports. Every caller (agent
 // extensions, CLI, MCP server, hooks) goes through these functions.
 import { execFile, spawn } from "node:child_process";
-import { randomBytes, randomUUID, scrypt, timingSafeEqual, type ScryptOptions } from "node:crypto";
+import { createHash, randomBytes, randomUUID, scrypt, timingSafeEqual, type ScryptOptions } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { appendFile, chmod, mkdir, open, readdir, readFile, realpath, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { appendFile, chmod, mkdir, mkdtemp, open, readdir, readFile, realpath, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, delimiter, join, dirname } from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { BRAND } from "./brand.ts";
 import { buildRedactIndex, type RedactIndex } from "./redact.ts";
-import { ENV_NAME_RE, isLoaderEnvName, isRef, isSelfCommand, itemNameProblem, legacyRefFor, localRefFor, parseEnvFile, parseRef, type SecretRef } from "./refs.ts";
+import { ENV_NAME_RE, isLoaderEnvName, isRef, isSelfCommand, itemNameProblem, legacyRefFor, localRefFor, parseEnvFile, parseRef, refFor, type SecretRef } from "./refs.ts";
 import {
-  derivePassphraseKey, findLocalItem, keychainService, newPassphraseKey, newVaultId, openSession, openVault, parseVaultFile, passphraseProblem,
-  sealSession, sealVault, serializeVault, VAULT_KIND, VaultFormatError, VaultVersionError, type VaultData, type VaultFile, type VaultHeader, type VaultKeyType,
+  derivePassphraseKey, findLocalItem, formatVersion, keychainService, newPassphraseKey, newVaultId, openSession, openVault, parseVaultFile, passphraseProblem,
+  sealSession, sealVault, serializeVault, unwrapFromEnclave, VAULT_KIND, VaultFormatError, VaultVersionError, wrapForEnclave,
+  type EnclaveKey, type VaultData, type VaultFile, type VaultHeader, type VaultKeySpec, type VaultKeyType,
 } from "./vault.ts";
 
 const P = BRAND.envPrefix;
@@ -67,7 +69,7 @@ export const PROVIDER_KEYS: ReadonlySet<string> = new Set([
 ]);
 
 export interface VaultStatus { status: string; serverUrl: string | null; version: string | null; items: number | null }
-export interface AuthTargets { omp: string; pi: string }
+export interface AuthTargets { own: string; omp: string; pi: string }
 
 interface ExecResult { stdout: string; stderr: string }
 
@@ -185,8 +187,12 @@ function execRun(command: string, args: string[], options: Record<string, unknow
   });
 }
 
+// Wiring (ENV_NAME -> reference) lives in keyshroud's own env.json. pi and omp
+// read keys from their auth.json, so a name is also written there when that
+// agent is installed (its directory exists) or `--target` names it.
 export function getAuthTargets(): AuthTargets {
   return {
+    own: join(CONFIG_DIR, "env.json"),
     omp: join(process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".omp", "agent"), "auth.json"),
     pi: join(homedir(), ".pi", "agent", "auth.json"),
   };
@@ -993,9 +999,26 @@ export async function envFileEntries(path: string): Promise<Array<{ name: string
   });
 }
 
-export async function authEnvEntries(): Promise<Array<{ name: string; raw: string }>> {
+// Every file that holds wiring; a later one wins when they disagree.
+export function wiringFiles(): string[] {
   const targets = getAuthTargets();
-  const merged = { ...(await readAuthEntries(targets.pi)), ...(await readAuthEntries(targets.omp)) };
+  return [targets.own, targets.pi, targets.omp];
+}
+
+// Where a new name is written: env.json, plus the named agents' auth.json (default: the installed ones).
+export function wiringTargets(only?: Array<"omp" | "pi">): string[] {
+  const targets = getAuthTargets();
+  return [targets.own, ...(["omp", "pi"] as const).filter((agent) => only ? only.includes(agent) : existsSync(dirname(targets[agent]))).map((agent) => targets[agent])];
+}
+
+export async function wiredEntries(): Promise<Record<string, unknown>> {
+  let merged: Record<string, unknown> = {};
+  for (const path of wiringFiles()) merged = { ...merged, ...(await readAuthEntries(path)) };
+  return merged;
+}
+
+export async function authEnvEntries(): Promise<Array<{ name: string; raw: string }>> {
+  const merged = await wiredEntries();
   const entries: Array<{ name: string; raw: string }> = [];
   for (const [name, entry] of Object.entries(merged)) {
     if (!ENV_NAME_RE.test(name) || PROVIDER_KEYS.has(name)) continue;
@@ -1147,7 +1170,7 @@ export async function deleteItem(id: string, permanent = false, backend?: Backen
     return;
   }
   await bw(["delete", "item", id, ...(permanent ? ["--permanent"] : [])]);
-  invalidateSecretCache();
+  await bw(["sync", "--quiet"]); invalidateSecretCache();
 }
 
 export async function readSecretFromInput(opts: { prompt: string; stdin: boolean }): Promise<string> {
@@ -1187,7 +1210,7 @@ const TOUCH_ID_SCRIPT = [
   "}",
 ].join("\n");
 
-async function approveWithTouchId(reason: string): Promise<void> {
+export async function approveWithTouchId(reason: string): Promise<void> {
   if (process.platform !== "darwin" || process.env.SSH_CONNECTION || process.env.SSH_TTY) throw new Error("Cancelled");
   await withDialogLock(async () => {
     const result = await runFile("osascript", ["-l", "JavaScript", "-e", TOUCH_ID_SCRIPT, "--", reason], { timeout: DIALOG_TIMEOUT_MS + 10_000, maxBuffer: 1024 * 1024 }).catch(() => null);
@@ -1206,7 +1229,7 @@ export async function readSecretFromDialog(opts: { itemName: string; envName?: s
     ...(opts.envName ? [`Variable: ${opts.envName}`] : []),
     `Vault item: ${opts.itemName}`,
     "",
-    "This is not a login prompt. Never enter your vault master password here.",
+    "This is not a login prompt. Never enter your vault master password or your Mac password here.",
   ].join("\n");
   return nativePasswordDialog(text, "Save");
 }
@@ -1266,6 +1289,8 @@ async function withDialogLock<T>(fn: () => Promise<T>): Promise<T> {
   await mkdir(CONFIG_DIR, { recursive: true, mode: 0o700 });
   let held = "";
   try { held = await readFile(DIALOG_LOCK, "utf8"); } catch {}
+  // Empty: another process has just created it and not yet written its time. It is live, not stale.
+  if (!held.trim()) held = await stat(DIALOG_LOCK).then((s) => `open:${Math.floor(s.mtimeMs)}`, () => "");
   const [kind, at] = held.trim().split(":");
   const age = Date.now() - Number(at);
   const live = (kind === "open" || kind === "cancelled") && age >= 0 && age < (kind === "cancelled" ? DIALOG_COOLDOWN_MS : DIALOG_TIMEOUT_MS + 30_000);
@@ -1329,7 +1354,9 @@ function readMasked(prompt: string): Promise<string> {
 // The local vault: the default backend on a machine keyshroud has not used
 // with bw. Its key lives in the macOS keychain, the Linux Secret Service or
 // Windows DPAPI, so it opens without asking; where none of them works, the key
-// is derived from a passphrase and a session keeps it for 30 minutes.
+// is derived from a passphrase. On a Mac it can instead be wrapped to a key in
+// the Secure Enclave, so it opens only after Touch ID. A passphrase or Touch ID
+// vault stays open for a session (30 minutes) after the person approves.
 
 export type BackendName = "bw" | "local";
 export interface BackendChoice { backend: BackendName; reason: string }
@@ -1361,8 +1388,7 @@ async function detectBackend(): Promise<BackendChoice> {
   const traces = [SESSION_FILE, MASTER_PASSWORD_FILE, MASTER_VERIFIER_FILE, ACCOUNT_FILE, AUDIT_FILE, REDACT_INDEX_FILE].filter((path) => existsSync(path));
   if (traces.length) return choose("bw", `${BRAND.name} 0.7 files (${traces.map((path) => path.slice(CONFIG_DIR.length + 1)).join(", ")})`);
   if (process.env.BW_SESSION?.trim()) return choose("bw", "BW_SESSION is set");
-  const targets = getAuthTargets();
-  for (const path of [targets.omp, targets.pi]) {
+  for (const path of wiringFiles()) {
     for (const entry of Object.values(await readAuthEntries(path))) if (isBwSource(authEntryRaw(entry) ?? "")) return choose("bw", `bw references in ${path}`);
   }
   if (await sharedBwLoggedIn()) return choose("bw", "bw is logged in");
@@ -1433,10 +1459,20 @@ let localPending: { header: VaultHeader; key: Buffer } | null = null;
 let localSessionSecret: string | null = null;
 let lastLocalError: string | null = null;
 
-// A passphrase vault without a session, when nobody may be asked.
+// A passphrase or Touch ID vault without a session, when nobody may be asked.
 export class LocalLockedError extends Error {}
 const LOCAL_LOCKED = `The local vault is locked: run \`${BRAND.bin} unlock\` in a terminal`;
 const LOCAL_NEEDS_TERMINAL = `No local vault yet, and creating one here needs a passphrase: run \`${BRAND.bin} unlock\` in a terminal to create it`;
+const LOCAL_LOCKED_TOUCH_ID = `The local vault is locked: it opens with Touch ID at the Mac when a command needs a secret (or run \`${BRAND.bin} unlock\` there)`;
+const LOCAL_TOUCH_ID_NOT_HERE = `The local vault opens with Touch ID at the Mac, and nobody can be asked from here (SSH, a sandbox, a locked screen or no desktop session): run \`${BRAND.bin} unlock\` at the Mac; its session then serves every process`;
+const LOCAL_NEEDS_TOUCH_ID = `No local vault yet, and creating one with Touch ID needs the person at the Mac: run \`${BRAND.bin} unlock\` there to create it`;
+const NO_ENCLAVE = "A Touch ID vault needs a Mac with a Secure Enclave (Apple silicon or a T2 chip), and this machine has none";
+const NO_TOOLS = "A Touch ID vault needs the Xcode Command Line Tools once: run `xcode-select --install`, then try again; nothing was changed";
+const TOUCH_ID_SOURCE = fileURLToPath(new URL("../src/touchid.swift", import.meta.url)); // resolves from src/, dist/ and the pi extension
+const TOUCH_ID_TIMEOUT_MS = 60_000;
+
+// Key types whose vault opens for a session (after an approval), not silently.
+export function keyHasSessions(type: VaultKeyType | null | undefined): boolean { return type === "passphrase" || type === "secure-enclave"; }
 
 function localFileError(error: unknown): Error {
   if (error instanceof VaultVersionError) return new Error(`The local vault ${shownPath(VAULT_FILE)} was written by a newer ${BRAND.name}; update it (npm i -g ${BRAND.bin}@latest)`);
@@ -1459,9 +1495,9 @@ async function readVaultFile(): Promise<{ file: VaultFile; stamp: string } | nul
 }
 
 // The key of an existing vault: from the keychain or DPAPI without asking; a
-// passphrase vault from its session, else (opts.prompt) by asking.
+// passphrase or Touch ID vault from its session, else (opts.prompt) by asking.
 async function localKey(file: VaultFile, opts: SessionOptions = {}): Promise<Buffer> {
-  if (localOpen?.file.id === file.id && file.key.type !== "passphrase") return localOpen.key;
+  if (localOpen?.file.id === file.id && !keyHasSessions(file.key.type)) return localOpen.key;
   const spec = file.key;
   if (spec.type === "keychain") {
     const hex = await readKeychain(spec.service);
@@ -1474,22 +1510,151 @@ async function localKey(file: VaultFile, opts: SessionOptions = {}): Promise<Buf
     if (!/^[0-9a-f]{64}$/.test(hex)) throw new Error(`Windows could not unprotect the key of the local vault ${shownPath(VAULT_FILE)} (DPAPI): it opens only for the Windows user who created it`);
     return Buffer.from(hex, "hex");
   }
+  // Passphrase and Touch ID: from the session, else (opts.prompt) by asking once.
   if (!opts.unattended) { const key = await readLocalSession(file.id); if (key) return key; }
-  if (!opts.prompt && !opts.unattended) throw new LocalLockedError(LOCAL_LOCKED);
-  const key = await derivePassphraseKey(await askPassphrase(opts), spec);
-  if (!openVault(file, key)) throw new Error("Wrong passphrase; nothing was unlocked");
-  await writeLocalSession(file.id, key, Boolean(opts.unattended));
-  return key;
+  if (!opts.prompt && !opts.unattended) throw new LocalLockedError(spec.type === "secure-enclave" ? LOCAL_LOCKED_TOUCH_ID : LOCAL_LOCKED);
+  if (spec.type === "secure-enclave" && opts.unattended && !(process.stdin.isTTY && process.stderr.isTTY)) throw new Error("An unattended session needs a terminal: run this command in one");
+  const span = opts.unattended ? "with no time limit" : `for ${Math.round(SESSION_TTL_MS / 60000)} minutes`;
+  for (;;) {
+    try {
+      if (spec.type === "secure-enclave") return await enclaveKey(file, spec, `open the ${BRAND.name} vault ${span}`, {
+        ready: async () => opts.unattended ? null : readLocalSession(file.id),
+        keep: (key) => writeLocalSession(file.id, key, Boolean(opts.unattended)),
+      });
+      const key = await derivePassphraseKey(await askPassphrase(opts), spec);
+      if (!openVault(file, key)) throw new Error("Wrong passphrase; nothing was unlocked");
+      await writeLocalSession(file.id, key, Boolean(opts.unattended));
+      return key;
+    } catch (error) {
+      if (opts.unattended || !(error instanceof Error && error.message === DIALOG_BUSY)) throw error;
+      const waited = await waitForLocalSession(file.id);
+      if (waited) return waited;
+    }
+  }
 }
 
-// The local vault, opened, or null when there is none yet. A passphrase vault
-// is open only while its session lasts, checked on every call, so `lock` and
+// Touch ID helper: built on first use from src/touchid.swift (see the header
+// there), cached by source hash and arch. Never built or run by callers that
+// cannot ask (hooks, status, doctor).
+function touchIdTools(): Promise<"ok" | "no-mac" | "no-tools"> {
+  return new Promise((resolve) => execFile("xcode-select", ["-p"], { timeout: 10_000, env: childEnv() }, (error) =>
+    resolve(!error ? "ok" : (error as NodeJS.ErrnoException).code === "ENOENT" ? "no-mac" : "no-tools")));
+}
+async function touchIdHelperPath(): Promise<{ source: Buffer; helper: string }> {
+  const source = await readFile(TOUCH_ID_SOURCE).catch(() => { throw new Error(`The Touch ID helper's source ${TOUCH_ID_SOURCE} is missing; reinstall ${BRAND.bin}`); });
+  const dir = join(CONFIG_DIR, "touchid", `${createHash("sha256").update(source).digest("hex").slice(0, 16)}-${process.arch}`);
+  return { source, helper: join(dir, `${BRAND.bin}-touchid`) };
+}
+// Built once per version of touchid.swift, from the exact bytes hashed. Called only inside
+// withDialogLock (one builder at a time), and only on paths that may ask. Without the
+// Command Line Tools xcrun would pop their installer, so it runs only after xcode-select -p.
+async function touchIdHelper(): Promise<string> {
+  const { source, helper } = await touchIdHelperPath();
+  if (existsSync(helper)) return helper;
+  const tools = await touchIdTools();
+  if (tools !== "ok") throw new Error(tools === "no-mac" ? NO_ENCLAVE : NO_TOOLS);
+  process.stderr.write(`${BRAND.name}: building the Touch ID helper (once per version; up to a minute)\n`);
+  const parent = dirname(dirname(helper));
+  await mkdir(parent, { recursive: true, mode: 0o700 });
+  const tmp = await mkdtemp(join(parent, ".build-"));
+  try {
+    await writeFile(join(tmp, "touchid.swift"), source);
+    await runFile("xcrun", ["swiftc", "-O", "-swift-version", "5", "-o", join(tmp, "helper"), join(tmp, "touchid.swift")], { timeout: 180_000, maxBuffer: 4 * 1024 * 1024, env: childEnv() })
+      .catch((error: Error) => { throw new Error(`Could not build the Touch ID helper (${error.message.split("\n")[0].slice(0, 200)}); nothing was changed`); });
+    await chmod(join(tmp, "helper"), 0o700);
+    await mkdir(dirname(helper), { recursive: true, mode: 0o700 });
+    await rename(join(tmp, "helper"), helper);
+  } finally { await rm(tmp, { recursive: true, force: true }); }
+  return helper;
+}
+// doctor: never builds.
+export async function touchIdHelperState(): Promise<string> {
+  const path = await touchIdHelperPath().then((p) => p.helper, () => "");
+  if (path && existsSync(path)) return "built";
+  const tools = await touchIdTools();
+  return tools === "ok" ? "not built yet (built on first use)" : tools === "no-tools" ? "cannot be built: run xcode-select --install" : "needs a Mac with a Secure Enclave";
+}
+
+// The request goes on stdin, the answer comes on stdout. stdout is never shown or
+// logged: for `agree` it holds the shared secret.
+async function touchId(op: "create" | "agree", request: Record<string, string>): Promise<Record<string, string>> {
+  const helper = await touchIdHelper();
+  const body = JSON.stringify(op === "agree" ? { ...request, timeoutMs: TOUCH_ID_TIMEOUT_MS } : request);
+  const result = await new Promise<{ code: number | string | null; stdout: string; stderr: string }>((resolve) => {
+    const child = execFile(helper, [op], { timeout: TOUCH_ID_TIMEOUT_MS + 15_000, maxBuffer: 1024 * 1024, env: childEnv() }, (error, stdout, stderr) =>
+      resolve({ code: error ? ((error as NodeJS.ErrnoException).code ?? null) : 0, stdout: String(stdout), stderr: String(stderr) }));
+    child.on("error", () => {});
+    child.stdin?.on("error", () => {});
+    child.stdin?.end(body);
+  });
+  if (result.code === 0) {
+    // JSON.parse errors quote their input: never let one carry z.
+    try { return JSON.parse(result.stdout) as Record<string, string>; } catch { throw new Error("The Touch ID helper gave an unreadable answer"); }
+  }
+  if (result.code === 2) throw new Error(NO_ENCLAVE);
+  if (result.code === 3 || result.code === null) throw new Error("Cancelled"); // declined, or killed when its time was up
+  if (result.code === 4) throw new Error(`The Touch ID key of the local vault ${shownPath(VAULT_FILE)} does not work on this Mac (made on another Mac, or this Mac was erased or repaired); nothing can open it here`);
+  if (result.code === 5) throw new LocalLockedError(LOCAL_TOUCH_ID_NOT_HERE);
+  if (typeof result.code === "string") { await rm(helper, { force: true }); throw new Error(`The Touch ID helper could not start (${result.code}); it is built again on the next try`); }
+  throw new Error(`The Touch ID helper failed (${result.stderr.split("\n")[0].slice(0, 120) || `exit ${result.code}`})`);
+}
+
+// Opens a Touch ID vault: the person at the Mac approves the enclave's half of the key agreement. One sheet at a time.
+// `session` runs while that lock is held: `ready` takes a session another process opened just before, `keep`
+// saves this one before the lock goes, so a caller arriving as the sheet closes never asks again.
+async function enclaveKey(file: VaultFile, spec: EnclaveKey, reason: string, session?: { ready: () => Promise<Buffer | null>; keep: (key: Buffer) => Promise<void> }): Promise<Buffer> {
+  if (process.env.SSH_CONNECTION || process.env.SSH_TTY) throw new LocalLockedError(LOCAL_TOUCH_ID_NOT_HERE);
+  return withDialogLock(async () => {
+    const ready = await session?.ready();
+    if (ready) return ready;
+    const { z } = await touchId("agree", { handle: spec.handle, epk: spec.epk, reason });
+    const key = typeof z === "string" ? unwrapFromEnclave(file.id, spec, Buffer.from(z, "base64")) : null;
+    if (!key || !openVault(file, key)) throw localFileError(new VaultFormatError("not opened by its key"));
+    await session?.keep(key);
+    return key;
+  });
+}
+
+// A new Touch ID key for vault `id`. The enclave makes it without asking, the vault key is wrapped to it,
+// and one approval proves it opens before anything is written. `reuse` (rekey SE to SE): no sheet.
+async function newEnclaveKey(id: string, key: Buffer, reuse?: EnclaveKey): Promise<EnclaveKey> {
+  if (reuse) return wrapForEnclave(id, reuse.handle, reuse.pub, key);
+  if (process.env.SSH_CONNECTION || process.env.SSH_TTY) throw new LocalLockedError(LOCAL_TOUCH_ID_NOT_HERE);
+  return withDialogLock(async () => {
+    const made = await touchId("create", {});
+    const spec = wrapForEnclave(id, made.handle, made.pub, key);
+    const { z } = await touchId("agree", { handle: spec.handle, epk: spec.epk, reason: `turn on Touch ID for the ${BRAND.name} vault` });
+    if (!unwrapFromEnclave(id, spec, Buffer.from(z ?? "", "base64"))?.equals(key)) throw new Error("The new Touch ID key did not open the vault; nothing was changed");
+    return spec;
+  });
+}
+
+// Another process is asking already: use the session it opens. null once its sheet or dialog closed without one.
+async function waitForLocalSession(vaultId: string): Promise<Buffer | null> {
+  const deadline = Date.now() + DIALOG_TIMEOUT_MS + 30_000;
+  let closedAt = 0;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const key = await readLocalSession(vaultId);
+    if (key) return key;
+    const held = await readFile(DIALOG_LOCK, "utf8").catch(() => "");
+    if (held.startsWith("cancelled:")) throw new Error("Cancelled");
+    const open = held.startsWith("open:") && Date.now() - Number(held.slice(5)) < DIALOG_TIMEOUT_MS + 30_000;
+    if (open) closedAt = 0;
+    else if (!closedAt) closedAt = Date.now();
+    else if (Date.now() - closedAt > 5_000) return null;
+  }
+  throw new Error(DIALOG_BUSY);
+}
+
+// The local vault, opened, or null when there is none yet. A passphrase or
+// Touch ID vault is open only while its session lasts, checked on every call, so `lock` and
 // the session's end also close it in long-lived processes (MCP, pi).
 async function openLocal(opts: SessionOptions = {}): Promise<LocalVault | null> {
   const read = await readVaultFile();
   if (!read) return null;
   let key: Buffer | null = null;
-  if (read.file.key.type === "passphrase" && !opts.unattended) {
+  if (keyHasSessions(read.file.key.type) && !opts.unattended) {
     key = await readLocalSession(read.file.id);
     if (!key && localOpen?.file.id === read.file.id) localOpen = null;
   }
@@ -1508,22 +1673,29 @@ async function openLocal(opts: SessionOptions = {}): Promise<LocalVault | null> 
 export async function prepareLocalVault(opts: { prompt?: boolean } = {}): Promise<void> {
   if (localPending || await readVaultFile()) return;
   const mode = await vaultKeyMode();
-  const id = newVaultId();
+  if (mode === "passphrase" && !opts.prompt) throw new Error(LOCAL_NEEDS_TERMINAL);
+  if (mode === "secure-enclave" && !opts.prompt) throw new Error(LOCAL_NEEDS_TOUCH_ID);
+  localPending = await newVaultKey(mode, newVaultId());
+}
+
+// A new key of this type for vault `id`, not stored yet (commitVaultKey stores keychain/DPAPI keys).
+async function newVaultKey(mode: VaultKeyType, id: string, reuse?: EnclaveKey): Promise<{ header: VaultHeader; key: Buffer }> {
+  const header = (key: VaultKeySpec): VaultHeader => ({ v: formatVersion(key.type), kind: VAULT_KIND, id, key });
   if (mode === "passphrase") {
-    if (!opts.prompt) throw new Error(LOCAL_NEEDS_TERMINAL);
     const spec = newPassphraseKey();
-    const key = await derivePassphraseKey(await askNewPassphrase(), spec);
-    localPending = { header: { v: 1, kind: VAULT_KIND, id, key: spec }, key };
-    return;
+    return { header: header(spec), key: await derivePassphraseKey(await askNewPassphrase(), spec) };
   }
+  const key = randomBytes(32);
+  if (mode === "secure-enclave") return { header: header(await newEnclaveKey(id, key, reuse)), key };
   // The DPAPI blob is made when the file is written.
-  localPending = { header: { v: 1, kind: VAULT_KIND, id, key: mode === "keychain" ? { type: "keychain", service: keychainService(id) } : { type: "dpapi", blob: "" } }, key: randomBytes(32) };
+  return { header: header(mode === "keychain" ? { type: "keychain", service: keychainService(id) } : { type: "dpapi", blob: "" }), key };
 }
 
 async function vaultKeyMode(): Promise<VaultKeyType> {
   const forced = setting("VAULT_KEY");
   if (forced === "keychain" && process.platform === "win32") throw new Error(`${P}_VAULT_KEY=keychain: Windows has no keychain here; use dpapi or passphrase`);
-  if (forced === "keychain" || forced === "dpapi" || forced === "passphrase") return forced;
+  if (forced === "keychain" || forced === "dpapi" || forced === "passphrase" || forced === "secure-enclave") return forced;
+  if (forced) throw new Error(`${P}_VAULT_KEY=${forced}: use keychain, dpapi, passphrase or secure-enclave`);
   if (process.platform === "win32") return "dpapi";
   if (process.platform === "darwin") return "keychain";
   return await secretServiceReady() ? "keychain" : "passphrase";
@@ -1588,7 +1760,7 @@ async function updateLocal(change: (data: VaultData) => void, opts: SessionOptio
     }
     if (fresh) localPending = null;
     if (outcome) {
-      if (outcome.created && fresh?.header.key.type === "passphrase") await writeLocalSession(fresh.header.id, fresh.key, false);
+      if (outcome.created && fresh && keyHasSessions(fresh.header.key.type)) await writeLocalSession(fresh.header.id, fresh.key, false);
       return outcome;
     }
     // Another process created the vault first: its key is the one to use.
@@ -1666,11 +1838,15 @@ async function writeVaultFile(text: string, held: () => Promise<boolean>): Promi
 }
 
 function creationNotice(header: VaultHeader): string {
-  const where = header.key.type === "keychain"
+  return `${BRAND.bin}: created the local vault ${shownPath(VAULT_FILE)}; ${keyDescription(header)}.`;
+}
+
+function keyDescription(header: VaultHeader): string {
+  return header.key.type === "keychain"
     ? `its key is in the ${process.platform === "darwin" ? "macOS keychain" : "Secret Service keyring"} (${header.key.service}), so programs running as you can open it without asking`
     : header.key.type === "dpapi" ? "its key is protected by Windows DPAPI for your account, so programs running as you can open it without asking"
+    : header.key.type === "secure-enclave" ? `it opens with Touch ID (or your Mac's password) on this Mac only; sessions end after ${Math.round(SESSION_TTL_MS / 60000)} minutes; nothing recovers it on another Mac (run \`${BRAND.bin} rekey --to passphrase\` before moving)`
     : `it opens with your passphrase; sessions end after ${Math.round(SESSION_TTL_MS / 60000)} minutes`;
-  return `${BRAND.bin}: created the local vault ${shownPath(VAULT_FILE)}; ${where}.`;
 }
 
 // The key goes to the keychain tool on stdin, never in argv; its output (which
@@ -1793,7 +1969,7 @@ function armLocalLockTimer(id: string, expiresAt: number): void {
   child.unref();
 }
 
-// true when a passphrase session was ended. With `id`, only that session: one
+// true when a passphrase or Touch ID session was ended. With `id`, only that session: one
 // another process wrote meanwhile is left alone.
 async function lockLocal(id?: string): Promise<boolean> {
   const idOf = { [VAULT_SESSION_FILE]: (text: string) => (JSON.parse(text) as { id?: unknown }).id, [VAULT_TOKEN_FILE]: (text: string) => text.trim().split(" ")[0] };
@@ -1802,7 +1978,7 @@ async function lockLocal(id?: string): Promise<boolean> {
     if (id !== undefined && await readFile(path, "utf8").then(idOf[path]).catch(() => null) !== id) continue;
     try { await unlink(path); ended = true; } catch {}
   }
-  if (localOpen?.file.key.type === "passphrase") localOpen = null;
+  if (keyHasSessions(localOpen?.file.key.type)) localOpen = null;
   localSessionSecret = null;
   return ended;
 }
@@ -1817,7 +1993,7 @@ export async function localStatus(): Promise<LocalStatus> {
   if (!read) return { ...base, status: "none" };
   const key = read.file.key.type;
   let expiresAt: number | null | undefined;
-  if (key === "passphrase") { try { expiresAt = (JSON.parse(await readFile(VAULT_SESSION_FILE, "utf8")) as { expires?: number | null }).expires; } catch {} }
+  if (keyHasSessions(key)) { try { expiresAt = (JSON.parse(await readFile(VAULT_SESSION_FILE, "utf8")) as { expires?: number | null }).expires; } catch {} }
   try {
     const opened = await openLocal();
     return { ...base, key, status: "unlocked", items: opened?.data.items.length ?? 0, expiresAt };
@@ -1827,13 +2003,14 @@ export async function localStatus(): Promise<LocalStatus> {
   }
 }
 
-// `unlock` with the local vault as the default: a passphrase vault asks (and is
-// created here when there is none yet); a keychain or DPAPI vault has nothing to unlock.
+// `unlock` with the local vault as the default: a passphrase or Touch ID vault asks
+// (and is created here when there is none yet); a keychain or DPAPI vault has nothing to unlock.
 export async function unlockLocal(opts: { unattended?: boolean } = {}): Promise<{ key: VaultKeyType; created: string | null; expiresAt: number | null }> {
   const read = await readVaultFile();
   if (!read) {
     const mode = await vaultKeyMode();
-    if (mode !== "passphrase") return { key: mode, created: null, expiresAt: null };
+    if (!keyHasSessions(mode)) return { key: mode, created: null, expiresAt: null };
+    if (opts.unattended && !(process.stdin.isTTY && process.stderr.isTTY)) throw new Error("An unattended session needs a terminal: run this command in one");
     await prepareLocalVault({ prompt: true });
     const { created } = await updateLocal(() => {}, { create: true });
     if (opts.unattended) await writeLocalSession(localOpen!.file.id, localOpen!.key, true);
@@ -1894,4 +2071,125 @@ async function rotateLocalItem(opts: { itemName: string; secret: string }): Prom
     id = item.id;
   });
   return { id };
+}
+
+// `rekey`: the current key, proven now (never from a session), since rekey can turn Touch ID off.
+async function currentKey(file: VaultFile, target: VaultKeyType): Promise<Buffer> {
+  const spec = file.key;
+  if (spec.type === "secure-enclave") return enclaveKey(file, spec, target === "secure-enclave" ? `give the ${BRAND.name} vault a new key`
+    : target === "passphrase" ? `move the ${BRAND.name} vault from Touch ID to a passphrase` : `turn off Touch ID for the ${BRAND.name} vault`);
+  if (spec.type === "passphrase") {
+    const key = await derivePassphraseKey(await readMasked("Passphrase of the local vault: "), spec);
+    if (!openVault(file, key)) throw new Error("Wrong passphrase; nothing was changed");
+    return key;
+  }
+  return localKey(file); // keychain / DPAPI: readable without asking anyway
+}
+
+// A new vault key and a new vault id, so old sessions, the old keychain entry
+// and old copies of the file stop opening it. Terminal only.
+export async function rekeyLocal(to?: VaultKeyType): Promise<{ from: VaultKeyType; to: VaultKeyType; items: number; notice: string }> {
+  if (!(process.stdin.isTTY && process.stderr.isTTY)) throw new Error(`${BRAND.bin} rekey asks for the vault's current key: run it in a terminal`);
+  const read = await readVaultFile();
+  if (!read) throw new Error(`There is no local vault yet (${shownPath(VAULT_FILE)})`);
+  const from = read.file.key.type, target = to ?? from;
+  if (target === "keychain" && process.platform === "win32") throw new Error("Windows has no keychain here; use dpapi or passphrase");
+  if (target === "dpapi" && process.platform !== "win32") throw new Error("dpapi keeps keys on Windows only; use keychain, secure-enclave or passphrase");
+  process.stderr.write(`${BRAND.name}: giving the local vault ${shownPath(VAULT_FILE)} a new key (${target}); first it needs its current key (${from}).\n`);
+  const oldKey = await currentKey(read.file, target);
+  const fresh = await commitVaultKey(await newVaultKey(target, newVaultId(), read.file.key.type === "secure-enclave" && target === "secure-enclave" ? read.file.key : undefined));
+  let items = 0;
+  try {
+    await withVaultLock(async (held) => {
+      const current = await readVaultFile();
+      if (current?.file.id !== read.file.id) throw new Error("The local vault changed while this command ran; nothing was changed");
+      let data: VaultData | null;
+      try { data = openVault(current.file, oldKey); } catch (error) { throw localFileError(error); }
+      if (!data) throw localFileError(new VaultFormatError("not opened by its key"));
+      await writeVaultFile(serializeVault(sealVault(fresh.header, data, fresh.key)), held);
+      items = data.items.length;
+    });
+  } catch (error) {
+    if (fresh.header.key.type === "keychain") await forgetVaultKey(fresh.header.key.service);
+    throw error;
+  }
+  localOpen = null;
+  await lockLocal();
+  if (keyHasSessions(target)) await writeLocalSession(fresh.header.id, fresh.key, false);
+  let notice = `${BRAND.bin}: the local vault ${shownPath(VAULT_FILE)} has a new key; ${keyDescription(fresh.header)}.`;
+  if (read.file.key.type === "keychain") {
+    await forgetVaultKey(read.file.key.service);
+    if (await keychainHas(read.file.key.service)) notice += ` The old key is still in the keychain (${read.file.key.service}): delete that entry.`;
+  }
+  await audit("rekey", [], "cli");
+  return { from, to: target, items, notice };
+}
+
+// `list` and `rm`: names, ids and the auth.json entries wired to them; never a value.
+export interface ItemRow { backend: BackendName; id: string; name: string; ref: string; duplicate: boolean; wired: string[] }
+
+async function allItems(backend: BackendName): Promise<Array<{ id: string; name: string }>> {
+  if (backend === "local") return ((await openLocal())?.data.items ?? []).map(({ id, name }) => ({ id, name }));
+  const parsed = await bwJson(["list", "items"]);
+  return (Array.isArray(parsed) ? parsed : []).map((item) => ({ id: String((item as { id?: unknown }).id ?? ""), name: String((item as { name?: unknown }).name ?? "") })).filter((item) => item.id);
+}
+
+async function authReferences(): Promise<Array<{ path: string; name: string; ref: SecretRef }>> {
+  const out: Array<{ path: string; name: string; ref: SecretRef }> = [];
+  for (const path of wiringFiles()) for (const [name, entry] of Object.entries(await readAuthEntries(path))) {
+    try { const ref = parseRef(authEntryRaw(entry) ?? ""); if (ref) out.push({ path, name, ref }); } catch {}
+  }
+  return out;
+}
+
+// By id, or by name when the name is unique (as lookups resolve). Any field of the item counts.
+function refersTo(ref: SecretRef, row: Pick<ItemRow, "backend" | "id" | "name" | "duplicate">): boolean {
+  if ((ref.scheme === "local" ? "local" : "bw") !== row.backend) return false;
+  return ref.item === row.id || (!row.duplicate && normalizeItemName(ref.item) === normalizeItemName(row.name));
+}
+
+export async function listItems(backend: BackendName): Promise<ItemRow[]> {
+  const items = await allItems(backend);
+  const count = new Map<string, number>();
+  for (const { name } of items) count.set(normalizeItemName(name), (count.get(normalizeItemName(name)) ?? 0) + 1);
+  const refs = await authReferences();
+  return items.map(({ id, name }) => {
+    const duplicate = (count.get(normalizeItemName(name)) ?? 0) > 1;
+    const row = { backend, id, name, duplicate, ref: refFor(duplicate ? id : name, backend), wired: [] as string[] };
+    row.wired = [...new Set(refs.filter((r) => refersTo(r.ref, row)).map((r) => r.name))];
+    return row;
+  }).sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+}
+
+export async function findItemToRemove(nameOrId: string, backend: BackendName): Promise<ItemRow> {
+  const rows = await listItems(backend);
+  const byId = rows.filter((r) => r.id === nameOrId);
+  if (byId.length === 1) return byId[0];
+  const byName = rows.filter((r) => normalizeItemName(r.name) === normalizeItemName(nameOrId));
+  if (byName.length === 1) return byName[0];
+  if (byName.length > 1) throw new Error(`Ambiguous vault item name: ${nameOrId} (remove one by id: ${byName.map((r) => r.id).join(", ")})`);
+  throw new Error(`Vault item not found: ${nameOrId}`);
+}
+
+// Deletes the item, then unwires every auth.json entry that refers to it. Matches are recomputed under each file's lock.
+export async function removeItem(row: ItemRow): Promise<{ unwired: string[]; targets: string[]; failed: Array<{ path: string; error: string }> }> {
+  await deleteItem(row.id, false, row.backend);
+  const unwired = new Set<string>(), targets: string[] = [], failed: Array<{ path: string; error: string }> = [];
+  for (const path of wiringFiles()) {
+    if (!existsSync(path)) continue;
+    try {
+      const changed = await updateAuthFile(path, (current) => {
+        const next = { ...current };
+        let hit = false;
+        for (const [name, entry] of Object.entries(current)) {
+          let ref: SecretRef | null = null;
+          try { ref = parseRef(authEntryRaw(entry) ?? ""); } catch {}
+          if (ref && refersTo(ref, row)) { delete next[name]; unwired.add(name); hit = true; }
+        }
+        return hit ? next : null;
+      });
+      if (changed) targets.push(path);
+    } catch (error) { failed.push({ path, error: error instanceof Error ? error.message : String(error) }); }
+  }
+  return { unwired: [...unwired], targets, failed };
 }

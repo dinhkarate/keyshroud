@@ -9,9 +9,16 @@
 //          | { "type": "passphrase", "kdf": "scrypt", "N": 131072, "r": 8, "p": 1, "salt": "<base64>" },
 //     "nonce": "<base64, 12 bytes>", "data": "<base64 ciphertext || 16-byte tag>" }
 //
+// A Touch ID vault is "v": 2, its key wrapped to a P-256 key in this Mac's Secure Enclave:
+//   "key": { "type": "secure-enclave", "handle": "<base64, 32..4096 bytes: enclave key blob>",
+//            "pub": "<base64, 65 bytes, 0x04||X||Y>", "epk": "<base64, 65 bytes, 0x04||X||Y>",
+//            "nonce": "<base64, 12 bytes>", "wrapped": "<base64, 48 bytes>" }
+// wrapped = AES-256-GCM(HKDF-SHA256(ECDH(enclave key, epk), info = binding), vault key, aad = binding)
+// binding = UTF-8 JSON ["keyshroud-vault", 2, "secure-enclave", id, handle, pub, epk]
+//
 // The header is authenticated (it is the AAD), so editing any of it fails the
 // check. Anything unexpected is refused rather than guessed.
-import { createCipheriv, createDecipheriv, randomBytes, scrypt, type ScryptOptions } from "node:crypto";
+import { createCipheriv, createDecipheriv, createECDH, hkdfSync, randomBytes, scrypt, type ScryptOptions } from "node:crypto";
 import { promisify } from "node:util";
 import { BRAND } from "./brand.ts";
 
@@ -20,10 +27,11 @@ export const VAULT_KIND = `${BRAND.bin}-vault`;
 export type KeychainKey = { type: "keychain"; service: string };
 export type DpapiKey = { type: "dpapi"; blob: string };
 export type PassphraseKey = { type: "passphrase"; kdf: "scrypt"; N: number; r: number; p: number; salt: string };
-export type VaultKeySpec = KeychainKey | DpapiKey | PassphraseKey;
+export type EnclaveKey = { type: "secure-enclave"; handle: string; pub: string; epk: string; nonce: string; wrapped: string };
+export type VaultKeySpec = KeychainKey | DpapiKey | PassphraseKey | EnclaveKey;
 export type VaultKeyType = VaultKeySpec["type"];
 
-export interface VaultHeader { v: 1; kind: string; id: string; key: VaultKeySpec }
+export interface VaultHeader { v: 1 | 2; kind: string; id: string; key: VaultKeySpec }
 export interface VaultFile extends VaultHeader { nonce: string; data: string }
 
 export interface LocalItem {
@@ -56,6 +64,9 @@ export class VaultVersionError extends Error {}
 
 const bad = (reason: string) => new VaultFormatError(reason);
 
+// The one format version each key type is written with.
+export function formatVersion(type: VaultKeyType): 1 | 2 { return type === "secure-enclave" ? 2 : 1; }
+
 export function newVaultId(): string { return randomBytes(8).toString("hex"); }
 export function keychainService(id: string): string { return `${BRAND.bin}-vault-${id}`; }
 
@@ -84,7 +95,14 @@ export function canonicalKey(key: VaultKeySpec): VaultKeySpec {
     case "keychain": return { type: key.type, service: key.service };
     case "dpapi": return { type: key.type, blob: key.blob };
     case "passphrase": return { type: key.type, kdf: key.kdf, N: key.N, r: key.r, p: key.p, salt: key.salt };
+    case "secure-enclave": return { type: key.type, handle: key.handle, pub: key.pub, epk: key.epk, nonce: key.nonce, wrapped: key.wrapped };
   }
+}
+
+function p256Point(value: unknown, what: string): Buffer {
+  const point = base64(value, what, { exact: 65 });
+  if (point[0] !== 4) throw bad(`${what} is not an uncompressed P-256 point`);
+  return point;
 }
 
 function parseKeySpec(raw: unknown, id: string): VaultKeySpec {
@@ -103,6 +121,14 @@ function parseKeySpec(raw: unknown, id: string): VaultKeySpec {
       if (raw.kdf !== "scrypt" || raw.N !== PASSPHRASE_KDF.N || raw.r !== PASSPHRASE_KDF.r || raw.p !== PASSPHRASE_KDF.p) throw bad("unsupported key derivation parameters");
       base64(raw.salt, "salt", { exact: 16 });
       return { type: "passphrase", kdf: "scrypt", N: PASSPHRASE_KDF.N, r: PASSPHRASE_KDF.r, p: PASSPHRASE_KDF.p, salt: raw.salt as string };
+    case "secure-enclave":
+      exactKeys(raw, ["type", "handle", "pub", "epk", "nonce", "wrapped"], "key");
+      base64(raw.handle, "key handle", { min: 32, max: 4096 });
+      p256Point(raw.pub, "enclave key");
+      p256Point(raw.epk, "ephemeral key");
+      base64(raw.nonce, "key nonce", { exact: 12 });
+      base64(raw.wrapped, "wrapped key", { exact: 48 });
+      return { type: "secure-enclave", handle: raw.handle as string, pub: raw.pub as string, epk: raw.epk as string, nonce: raw.nonce as string, wrapped: raw.wrapped as string };
     default:
       throw bad("unknown key type");
   }
@@ -112,14 +138,15 @@ export function parseVaultFile(text: string): VaultFile {
   let raw: unknown;
   try { raw = JSON.parse(text); } catch { throw bad("not JSON"); }
   if (!isObject(raw)) throw bad("not a JSON object");
-  if (typeof raw.v === "number" && Number.isInteger(raw.v) && raw.v > 1) throw new VaultVersionError(`format version ${raw.v}`);
+  if (typeof raw.v === "number" && Number.isInteger(raw.v) && raw.v > 2) throw new VaultVersionError(`format version ${raw.v}`);
   exactKeys(raw, ["v", "kind", "id", "key", "nonce", "data"], "file");
-  if (raw.v !== 1 || raw.kind !== VAULT_KIND) throw bad("not a vault file");
+  if ((raw.v !== 1 && raw.v !== 2) || raw.kind !== VAULT_KIND) throw bad("not a vault file");
   if (typeof raw.id !== "string" || !/^[0-9a-f]{16}$/.test(raw.id)) throw bad("bad vault id");
   const key = parseKeySpec(raw.key, raw.id);
+  if (raw.v !== formatVersion(key.type)) throw bad("format version does not match the key");
   base64(raw.nonce, "nonce", { exact: 12 });
   base64(raw.data, "data", { min: 16 });
-  return { v: 1, kind: VAULT_KIND, id: raw.id, key, nonce: raw.nonce as string, data: raw.data as string };
+  return { v: formatVersion(key.type), kind: VAULT_KIND, id: raw.id, key, nonce: raw.nonce as string, data: raw.data as string };
 }
 
 export function serializeVault(file: VaultFile): string {
@@ -153,9 +180,9 @@ function unseal(key: Buffer, nonce: string, data: string, aad: Buffer): Buffer |
   } catch { return null; }
 }
 
-// A fresh nonce on every write.
+// A fresh nonce on every write. The version comes from the key, never from the caller.
 export function sealVault(header: VaultHeader, data: VaultData, key: Buffer): VaultFile {
-  const head: VaultHeader = { v: 1, kind: header.kind, id: header.id, key: canonicalKey(header.key) };
+  const head: VaultHeader = { v: formatVersion(header.key.type), kind: header.kind, id: header.id, key: canonicalKey(header.key) };
   return { ...head, ...seal(key, Buffer.from(JSON.stringify(data), "utf8"), vaultAad(head)) };
 }
 
@@ -163,6 +190,30 @@ export function sealVault(header: VaultHeader, data: VaultData, key: Buffer): Va
 export function openVault(file: VaultFile, key: Buffer): VaultData | null {
   const plain = unseal(key, file.nonce, file.data, vaultAad(file));
   return plain ? parsePayload(plain.toString("utf8")) : null;
+}
+
+// The vault key wrapped to an enclave public key. Making it needs only the public key, so it never asks.
+function enclaveBinding(id: string, handle: string, pub: string, epk: string): Buffer {
+  return Buffer.from(JSON.stringify([VAULT_KIND, 2, "secure-enclave", id, handle, pub, epk]), "utf8");
+}
+function enclaveKek(z: Buffer, binding: Buffer): Buffer {
+  return Buffer.from(hkdfSync("sha256", z, Buffer.alloc(0), binding, 32));
+}
+export function wrapForEnclave(id: string, handle: string, pub: string, key: Buffer): EnclaveKey {
+  base64(handle, "key handle", { min: 32, max: 4096 });
+  const point = p256Point(pub, "enclave key");
+  const ecdh = createECDH("prime256v1");
+  const epk = ecdh.generateKeys().toString("base64");
+  const binding = enclaveBinding(id, handle, pub, epk);
+  const { nonce, data } = seal(enclaveKek(ecdh.computeSecret(point), binding), key, binding);
+  return { type: "secure-enclave", handle, pub, epk, nonce, wrapped: data };
+}
+// The vault key, given the enclave's shared secret with `epk`; null when it does not open.
+export function unwrapFromEnclave(id: string, spec: EnclaveKey, z: Buffer): Buffer | null {
+  if (z.length !== 32) return null;
+  const binding = enclaveBinding(id, spec.handle, spec.pub, spec.epk);
+  const key = unseal(enclaveKek(z, binding), spec.nonce, spec.wrapped, binding);
+  return key?.length === 32 ? key : null;
 }
 
 function parsePayload(text: string): VaultData {

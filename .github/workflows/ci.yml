@@ -18,6 +18,11 @@ jobs:
         with: { node-version: "${{ matrix.node }}", cache: npm }
       - run: npm ci
       - run: npm run check
+      - name: Touch ID helper builds
+        if: runner.os == 'macOS'
+        run: |
+          xcrun swiftc -O -swift-version 5 -o "$RUNNER_TEMP/touchid" src/touchid.swift
+          code=0; "$RUNNER_TEMP/touchid" </dev/null || code=$?; test "$code" -eq 1
       - run: npm pack --dry-run
   no-ai-coauthor:
     runs-on: ubuntu-latest

@@ -1,0 +1,33 @@
+Claude Code session, recorded 4 November 2026.
+The prompt never mentions keyshroud. The plugin tells Claude which secrets exist.
+
+What Claude was told when the session started
+---------------------------------------------
+keyshroud: vault secrets are available by name only: ACME_API_KEY, GH_TOKEN, DATABASE_URL. Run every command that uses one through `keyshroud run -- <command>` (or the secrets_run MCP tool): its output is masked as <redacted:NAME> even when the command fails. Never print a secret. Never ask the user to paste a secret into chat. To store a new one, run `keyshroud add --env NAME --item "Item"` (or call secrets_request): it opens a dialog on the user's desktop for the value.
+
+> Check that my Acme API key still works: run scripts/smoke.sh
+
+* Bash(cat scripts/smoke.sh)
+
+  #!/bin/sh
+  # Smoke test: does the Acme API still accept ACME_API_KEY?
+  curl -sv "$ACME_API_URL/v1/ping" -H "Authorization: Bearer $ACME_API_KEY" 2>&1 |
+    grep -E '^(> Authorization|< HTTP|\{")' | tr -d '\r'
+
+* Bash(keyshroud run -- sh scripts/smoke.sh)
+
+  > Authorization: Bearer <redacted:ACME_API_KEY>
+  < HTTP/1.1 200 OK
+  {"ok":true,"account":"acme-demo"}
+
+Your Acme API key still works. The smoke test got `HTTP/1.1 200 OK` from `/v1/ping` with `{"ok":true,"account":"acme-demo"}`.
+
+I ran the script through `keyshroud run`, so the key was injected from the vault and shows up only as `<redacted:ACME_API_KEY>` in the output.
+
+Then, back in the shell:
+
+$ tail -n 1 ~/acme-api.log
+200 Bearer acme_DEMO_not_a_real_key_4f9c2e7a1b
+
+$ cat ~/.claude/projects/*/*.jsonl | grep -c acme_DEMO
+0

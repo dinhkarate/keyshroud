@@ -23,7 +23,7 @@
   "url": "https://keyshroud.dev/",
   "applicationCategory": "DeveloperApplication",
   "operatingSystem": "macOS, Linux, Windows",
-  "softwareVersion": "0.8.0",
+  "softwareVersion": "0.9.0",
   "license": "https://opensource.org/licenses/MIT",
   "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
   "downloadUrl": "https://www.npmjs.com/package/keyshroud",
@@ -143,11 +143,36 @@ h2 { font-size: 28px; letter-spacing: -0.02em; margin: 0 0 8px; }
 @media (min-width: 760px) { .threat { grid-template-columns: 1fr 1fr; } }
 .threat ul { margin: 0; padding-left: 20px; color: var(--muted); }
 .threat li { margin: 6px 0; }
-.demo video { display: block; width: 100%; height: auto; aspect-ratio: 1120 / 540; background: var(--term-bg); border-radius: 12px; border: 1px solid #23262e; box-shadow: 0 20px 50px -20px rgba(0,0,0,.45); }
-.demo p { color: var(--muted); font-size: 14px; margin: 12px 0 0; }
+.demo-tabs { display: none; gap: 4px; width: max-content; max-width: 100%; overflow-x: auto; scrollbar-width: none; margin: 0 0 16px; padding: 4px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
+.tabbed .demo-tabs { display: flex; }
+.demo-tabs button { font-family: inherit; font-size: 14px; font-weight: 600; line-height: 1.2; padding: 9px 14px; border: 0; border-radius: 7px; background: none; color: var(--muted); cursor: pointer; white-space: nowrap; }
+.demo-tabs button:hover { color: var(--text); }
+.demo-tabs button[aria-selected="true"] { background: var(--accent); color: var(--accent-ink); }
+.demo :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.demo:not(.tabbed) .panel + .panel { margin-top: 48px; }
+.panel-title { margin: 0 0 12px; font-size: 18px; }
+.tabbed .panel-title { display: none; }
+.tabbed .panel { scroll-margin-top: 72px; }
+.stage { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); align-items: start; }
+@media (min-width: 900px) { .stage { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); } }
+.demo video { display: block; width: 100%; height: auto; background: var(--term-bg); border-radius: 12px; border: 1px solid #23262e; box-shadow: 0 20px 50px -20px rgba(0,0,0,.45); }
+.stage video { aspect-ratio: 820 / 900; max-width: 600px; margin: 0 auto; }
+.wide video { aspect-ratio: 1120 / 540; }
+.proof { display: grid; gap: 12px; min-width: 0; }
+.proof .card { padding: 16px; }
+.proof h3 { margin: 0 0 8px; font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+.proof pre, .demo details pre { margin: 0; padding: 12px; border-radius: 8px; background: var(--term-bg); color: var(--term-text); font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.proof p { margin: 8px 0 0; font-size: 13.5px; color: var(--muted); }
+.demo details { margin-top: 12px; }
+.demo summary { cursor: pointer; color: var(--accent); font-size: 14px; font-weight: 600; }
+.demo details pre { margin-top: 8px; max-height: 420px; overflow: auto; }
 footer { padding: 32px 0 48px; border-top: 1px solid var(--line); color: var(--muted); font-size: 14px; display: flex; flex-wrap: wrap; gap: 8px 24px; justify-content: space-between; }
 footer a { color: var(--muted); }
 @media (max-width: 480px) { nav a.hide-sm { display: none; } }
+@media (max-width: 480px) {
+  .demo-tabs button { padding: 8px 10px; font-size: 13.5px; }
+  .term pre, .prompt pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+}
 </style>
 </head>
 <body>
@@ -160,10 +185,11 @@ footer a { color: var(--muted); }
       </picture>
     </a>
     <nav>
+      <a href="#demo">Demo</a>
       <a href="#quickstart">Quickstart</a>
       <a class="hide-sm" href="#agents">Agents</a>
       <a class="hide-sm" href="#compare">Compare</a>
-      <a href="https://github.com/dinhkarate/keyshroud#readme">Docs</a>
+      <a class="hide-sm" href="https://github.com/dinhkarate/keyshroud#readme">Docs</a>
       <a href="https://github.com/dinhkarate/keyshroud">GitHub</a>
     </nav>
   </header>
@@ -174,6 +200,7 @@ footer a { color: var(--muted); }
       <p class="lede">keyshroud keeps API keys in an encrypted vault on your machine (or your own Vaultwarden) and injects them into the commands your AI coding agent runs. Any secret value that shows up in tool output is replaced with <code>&lt;redacted:NAME&gt;</code> before the model reads it.</p>
       <div class="cta">
         <a class="btn primary" href="#quickstart">Get started</a>
+        <a class="btn" href="#demo">Watch the demo</a>
         <a class="btn" href="https://github.com/dinhkarate/keyshroud">Star on GitHub</a>
       </div>
       <p class="install">Free, MIT-licensed, no account &middot; <code>npm i -g keyshroud</code></p>
@@ -191,6 +218,150 @@ footer a { color: var(--muted); }
     </div>
   </div>
 </div>
+
+<section class="demo" id="demo">
+  <div class="wrap">
+    <h2>Watch Claude use a key it never sees</h2>
+    <p class="sub">A real Claude Code session, recorded in one take. The prompt never mentions keyshroud: the plugin tells Claude which secret names exist, and Claude runs the check through keyshroud on its own. The API gets the key. Claude gets its name.</p>
+    <div class="demo-tabs" role="tablist" aria-label="Demo recordings">
+      <button type="button" role="tab" id="tab-code" aria-controls="demo-code" aria-selected="true">Claude Code</button>
+      <button type="button" role="tab" id="tab-mcp" aria-controls="demo-mcp" aria-selected="false" tabindex="-1">Over MCP</button>
+      <button type="button" role="tab" id="tab-cli" aria-controls="demo-cli" aria-selected="false" tabindex="-1">Terminal</button>
+    </div>
+    <div class="panels">
+      <div class="panel" id="demo-code">
+        <h3 class="panel-title">Claude Code</h3>
+        <div class="stage">
+          <video controls muted loop playsinline preload="none" width="820" height="900" poster="demo-claude.webp" aria-describedby="note-code" aria-label="Recording of a real Claude Code session. Asked to check an Acme API key with scripts/smoke.sh, Claude runs the script through keyshroud run. Its output shows the Authorization header as &lt;redacted:ACME_API_KEY&gt; and HTTP 200. Afterwards the API's log shows the full fake key, and a search of Claude Code's saved transcript finds it 0 times.">
+            <source src="demo-claude.webm" type='video/webm; codecs="av01.0.05M.08"'>
+            <source src="demo-claude.mp4" type="video/mp4">
+          </video>
+          <div class="proof">
+            <div class="card">
+              <h3>What Claude was told</h3>
+              <pre>keyshroud: vault secrets are available by name only: ACME_API_KEY, GH_TOKEN, DATABASE_URL. Run every command that uses one through `keyshroud run -- &lt;command&gt;` …</pre>
+              <p>From the plugin&#8217;s SessionStart hook when the session starts. Names only.</p>
+            </div>
+            <div class="card">
+              <h3>What Claude saw</h3>
+              <pre>&gt; Authorization: Bearer <span class="r">&lt;redacted:ACME_API_KEY&gt;</span>
+&lt; HTTP/1.1 <span class="p">200 OK</span>
+{"ok":true,"account":"acme-demo"}</pre>
+              <p>The script runs <code>curl -v</code>, which prints the header it sends. keyshroud masked the key before Claude Code got the output: it appears 0 times in Claude Code&#8217;s saved transcript.</p>
+            </div>
+            <div class="card">
+              <h3>What the API received</h3>
+              <pre><span class="p">200</span> Bearer acme_DEMO_not_a_real_key_4f9c2e7a1b</pre>
+              <p>Last line of the API&#8217;s log from the same run. The key arrived, so the call worked.</p>
+            </div>
+          </div>
+        </div>
+        <p class="note" id="note-code">Recorded in November 2026 in one take with <a href="https://github.com/charmbracelet/vhs">vhs</a>, at normal speed, no cuts: Claude Code 2.1.309 with the keyshroud 0.8.0 plugin (<code>/plugin install keyshroud@keyshroud</code>). The setup runs off screen and is published: <a href="https://github.com/dinhkarate/keyshroud/blob/main/assets/demo/agent-shell.sh">agent-shell.sh</a>, <a href="https://github.com/dinhkarate/keyshroud/blob/main/assets/demo/claude.tape">claude.tape</a>. The key is fake, and the API is a local mock that accepts only that key. keyshroud keeps keys out of what Claude reads by accident; it is not a sandbox against an agent that sets out to steal one (<a href="#threat">threat model</a>).</p>
+        <details data-src="demo-claude.txt"><summary>Read the session as text</summary><pre><a href="demo-claude.txt">Open the text version</a></pre></details>
+      </div>
+      <div class="panel" id="demo-mcp">
+        <h3 class="panel-title">Over MCP</h3>
+        <div class="stage">
+          <video controls muted loop playsinline preload="none" width="820" height="900" data-poster="demo-mcp.webp" aria-describedby="note-mcp" aria-label="Recording of Claude Code with its built-in tools turned off and keyshroud's MCP server as its only tools. Claude calls secrets_run with scripts/smoke.sh. The result shows exit 0, HTTP 200 and &lt;redacted:ACME_API_KEY&gt; in place of the key.">
+            <source src="demo-mcp.webm" type='video/webm; codecs="av01.0.05M.08"'>
+            <source src="demo-mcp.mp4" type="video/mp4">
+          </video>
+          <div class="proof">
+            <div class="card">
+              <h3>The MCP entry</h3>
+              <pre>{ "mcpServers": { "keyshroud": { "command": "keyshroud", "args": ["mcp"] } } }</pre>
+              <p>Claude Desktop takes the same entry in <code>claude_desktop_config.json</code>. None of the server&#8217;s tools return a secret value: <code>secrets_run</code>, <code>secrets_list</code>, <code>secrets_request</code>, <code>vault_status</code>.</p>
+            </div>
+            <div class="card">
+              <h3>What Claude saw</h3>
+              <pre>exit: 0
+--- stdout ---
+&gt; Authorization: Bearer <span class="r">&lt;redacted:ACME_API_KEY&gt;</span>
+&lt; HTTP/1.1 <span class="p">200 OK</span>
+{"ok":true,"account":"acme-demo"}
+
+--- stderr ---</pre>
+              <p>The <code>secrets_run</code> result. The server put the key into the command&#8217;s environment and masked it in the output.</p>
+            </div>
+          </div>
+        </div>
+        <p class="note" id="note-mcp">Recorded in November 2026 in Claude Code 2.1.309 with its built-in tools turned off and keyshroud&#8217;s MCP server as its only tools: the same server, tools and results Claude Desktop gets from this entry. Claude Desktop itself is not shown. Same fake key and local mock as the Claude Code take: <a href="https://github.com/dinhkarate/keyshroud/blob/main/assets/demo/claude-mcp.tape">claude-mcp.tape</a>.</p>
+        <details data-src="demo-mcp.txt"><summary>Read the session as text</summary><pre><a href="demo-mcp.txt">Open the text version</a></pre></details>
+      </div>
+      <div class="panel wide" id="demo-cli">
+        <h3 class="panel-title">Terminal</h3>
+        <video controls muted loop playsinline preload="none" width="1120" height="540" data-poster="demo-cli.webp" aria-label="Terminal recording: keyshroud add creates the local vault and stores a GitHub token through a masked prompt; keyshroud run prints &lt;redacted:GH_TOKEN&gt; in place of the token; keyshroud scan finds the token in debug.log; auth.json holds only a local:// reference">
+          <source src="demo.mp4" type="video/mp4">
+        </video>
+        <p class="note">No agent here: on a new machine, keyshroud stores a token through a masked prompt, masks it in a command&#8217;s output and finds a copy that leaked into a log. Recorded with <a href="https://github.com/charmbracelet/vhs">vhs</a> from <a href="https://github.com/dinhkarate/keyshroud/blob/main/assets/demo/demo.tape">demo.tape</a>. The token is fake.</p>
+      </div>
+    </div>
+  </div>
+</section>
+<script>
+(() => {
+  const demo = document.getElementById('demo');
+  const tabs = [...demo.querySelectorAll('[role="tab"]')];
+  const panels = tabs.map((tab) => document.getElementById(tab.getAttribute('aria-controls')));
+  const videos = panels.map((panel) => panel.querySelector('video'));
+  const calm = matchMedia('(prefers-reduced-motion: reduce)').matches || navigator.connection?.saveData === true;
+  const held = new Set(); // videos the visitor paused
+  let current = 0;
+  let inView = false;
+  const start = (v) => { if (!calm && inView && !held.has(v)) v.play().catch(() => {}); };
+  const stop = (v) => { if (!v.paused) { v.dataset.auto = '1'; v.pause(); } };
+  function select(i, focus) {
+    current = i;
+    tabs.forEach((tab, j) => {
+      const on = j === i;
+      tab.setAttribute('aria-selected', String(on));
+      tab.tabIndex = on ? 0 : -1;
+      panels[j].hidden = !on;
+      const v = videos[j];
+      if (on && v.dataset.poster) { v.poster = v.dataset.poster; delete v.dataset.poster; }
+      if (on) start(v); else stop(v);
+    });
+    if (focus) tabs[i].focus();
+  }
+  tabs.forEach((tab, i) => {
+    panels[i].setAttribute('role', 'tabpanel');
+    panels[i].setAttribute('aria-labelledby', tab.id);
+    tab.addEventListener('click', () => select(i));
+    tab.addEventListener('keydown', (e) => {
+      const to = { ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0, End: tabs.length - 1 }[e.key];
+      if (to === undefined) return;
+      e.preventDefault();
+      select((to + tabs.length) % tabs.length, true);
+    });
+  });
+  const seen = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (entry.target !== videos[current]) continue;
+      inView = entry.isIntersecting;
+      if (inView) start(entry.target); else stop(entry.target);
+    }
+  }, { threshold: 0.4 });
+  videos.forEach((v) => {
+    if (calm) v.loop = false;
+    v.addEventListener('pause', () => { if (v.dataset.auto) delete v.dataset.auto; else held.add(v); });
+    v.addEventListener('play', () => held.delete(v));
+    seen.observe(v);
+  });
+  const fromHash = () => {
+    const i = panels.findIndex((panel) => `#${panel.id}` === location.hash);
+    if (i >= 0) { select(i); demo.scrollIntoView(); }
+  };
+  addEventListener('hashchange', fromHash);
+  demo.classList.add('tabbed');
+  select(0);
+  fromHash();
+  demo.querySelectorAll('details[data-src]').forEach((details) => details.addEventListener('toggle', async () => {
+    if (!details.open || details.dataset.loaded) return;
+    details.dataset.loaded = '1';
+    try { const res = await fetch(details.dataset.src); if (res.ok) details.querySelector('pre').textContent = await res.text(); } catch {}
+  }));
+})();
+</script>
 
 <section id="quickstart">
   <div class="wrap">
@@ -233,17 +404,6 @@ document.getElementById('copy-prompt').addEventListener('click', async (e) => {
 });
 </script>
 
-<section class="demo" id="demo">
-  <div class="wrap">
-    <h2>See it on a new machine</h2>
-    <p class="sub">Store a token, use it masked, catch a copy that leaked into a log. About 30 seconds, nothing else installed.</p>
-    <video autoplay muted loop playsinline preload="metadata" aria-label="Terminal recording: keyshroud add creates the local vault and stores a GitHub token through a masked prompt; keyshroud run prints &lt;redacted:GH_TOKEN&gt; in place of the token; keyshroud scan finds the token in debug.log; auth.json holds only a local:// reference">
-      <source src="demo.webm" type="video/webm">
-      <source src="demo.mp4" type="video/mp4">
-    </video>
-    <p>Recorded with <a href="https://github.com/charmbracelet/vhs">vhs</a> from <a href="https://github.com/dinhkarate/keyshroud/blob/main/assets/demo/demo.tape">demo.tape</a>. The token is fake.</p>
-  </div>
-</section>
 <section>
   <div class="wrap">
     <h2>Built for agents, not just shells</h2>
@@ -262,7 +422,7 @@ document.getElementById('copy-prompt').addEventListener('click', async (e) => {
 <section id="agents">
   <div class="wrap">
     <h2>Works with your agent</h2>
-    <p class="sub">One vault, every coding agent you use. Setup for each is in the docs.</p>
+    <p class="sub">One vault, every coding agent you use. Setup for each is in the docs. Watch it in <a href="#demo-code">Claude Code</a> and over <a href="#demo-mcp">MCP</a>.</p>
     <div class="agents">
       <a class="agent" href="https://github.com/dinhkarate/keyshroud#claude-code"><span class="via">Plugin</span><b>Claude Code</b><span>SessionStart and PostToolUse hooks mask tool results; a skill teaches Claude the CLI.</span></a>
       <a class="agent" href="https://github.com/dinhkarate/keyshroud#pi--omp"><span class="via">Extension</span><b>pi / omp</b><span>Hydrates env before provider auth and masks every tool result, failed ones too.</span></a>
@@ -319,7 +479,7 @@ document.getElementById('copy-prompt').addEventListener('click', async (e) => {
   </div>
 </section>
 
-<section>
+<section id="threat">
   <div class="wrap">
     <h2>An honest threat model</h2>
     <p class="sub">Redaction is defense in depth, not a sandbox.</p>
@@ -380,7 +540,7 @@ document.getElementById('copy-prompt').addEventListener('click', async (e) => {
 
 <div class="wrap">
   <footer>
-    <span>keyshroud &middot; MIT &middot; a local vault, or Vaultwarden and Bitwarden. Not affiliated with Bitwarden, Inc.</span>
+    <span>keyshroud &middot; MIT &middot; a local vault, or Vaultwarden and Bitwarden. Not affiliated with Anthropic or Bitwarden, Inc.</span>
     <span><a href="https://github.com/dinhkarate/keyshroud">GitHub</a> &middot; <a href="https://www.npmjs.com/package/keyshroud">npm</a> &middot; <a href="https://github.com/dinhkarate/keyshroud/blob/main/SECURITY.md">Security</a></span>
   </footer>
 </div>

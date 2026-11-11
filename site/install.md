@@ -79,6 +79,12 @@ without systemd, the vault is protected by a passphrase instead, and `keyshroud 
 code 3 and asks for `keyshroud unlock`. The **user** runs that in their own terminal: it
 asks for a new passphrase twice and creates the vault. Never type or relay the passphrase.
 
+On a Mac, the user can choose Touch ID instead of the keychain: they run
+`KEYSHROUD_VAULT_KEY=secure-enclave keyshroud unlock` (or `keyshroud rekey --to secure-enclave` for an
+existing vault) at the Mac and approve one Touch ID sheet. It needs the Xcode Command Line Tools once.
+After that, a command that needs a secret shows a Touch ID sheet when no session is open; if an error
+says the vault "opens with Touch ID at the Mac", ask the user to approve it or run `keyshroud unlock`.
+
 **Several machines: Vaultwarden or Bitwarden.** Only if the user wants the same secrets on
 several machines. These commands handle the master password, so the **user** runs them in
 their own terminal window, not through you:
@@ -103,8 +109,8 @@ https://github.com/dinhkarate/keyshroud/tree/main/examples/vaultwarden#readme. A
 from 2025.6 on works; with `bw` 2026.9 or later and Vaultwarden before 1.37.4, `bw login` prints
 `KeyIdBackfillError` but saves the login.
 
-Later, when a session has ended (Vaultwarden, or a passphrase vault), a command that needs a
-secret opens a dialog on the user's desktop and waits; over SSH it says to run `keyshroud unlock`.
+Later, when a session has ended (Vaultwarden, or a passphrase or Touch ID vault), a command that needs a
+secret opens a dialog or Touch ID sheet on the user's desktop and waits; over SSH it says to run `keyshroud unlock`.
 
 Wait until the user says they are done.
 
