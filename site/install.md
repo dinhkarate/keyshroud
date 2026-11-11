@@ -36,12 +36,23 @@ their OS:
 |---|---|
 | macOS | `brew install node`, or the installer from <https://nodejs.org> |
 | Windows | `winget install OpenJS.NodeJS.LTS`, then open a new terminal |
-| Debian, Ubuntu | `sudo apt-get install -y nodejs npm` (Ubuntu 24.04 gives 18.19, Debian 13 gives 20: both work) |
-| Fedora, RHEL, Rocky | `sudo dnf install -y nodejs npm` |
+| Linux (glibc: Debian, Ubuntu, Fedora, RHEL, Arch, …) | The official build in `~/.local`, below: no sudo, about 30 MB, and `npm install -g` needs no sudo either |
 | Alpine | `sudo apk add nodejs npm` |
-| Arch | `sudo pacman -S --needed nodejs npm` |
 
-Without sudo, use the official build from <https://nodejs.org/en/download>.
+```bash
+arch=$(uname -m | sed 's/x86_64/x64/; s/aarch64/arm64/')
+v=$(curl -fsSL https://nodejs.org/dist/latest-v24.x/SHASUMS256.txt | grep -o "node-v[0-9.]*-linux-$arch.tar.xz" | head -1)
+mkdir -p ~/.local && curl -fsSL "https://nodejs.org/dist/latest-v24.x/$v" |
+  tar -xJ -C ~/.local --strip-components=1 --wildcards "*/bin/*" "*/lib/*" "*/include/*" "*/share/*"
+export PATH="$HOME/.local/bin:$PATH"   # new login shells add it themselves on most distros
+node --version
+```
+
+The distro's packages also work (`sudo apt-get install -y nodejs npm`, `sudo dnf install -y nodejs npm`),
+but Ubuntu's `npm` package pulls in hundreds of packages and can take more than five minutes: give
+that command a long timeout, or a shell tool may kill it halfway and leave dpkg to repair with
+`sudo dpkg --configure -a`.
+
 If you cannot install it, tell the user what is missing and the command to run;
 never stop without saying why.
 
@@ -74,12 +85,27 @@ Pick the line for the agent you are running in:
 | Agent | Do this |
 |---|---|
 | Claude Code | Ask the user to type `/plugin marketplace add dinhkarate/keyshroud`, then `/plugin install keyshroud@keyshroud`, then restart Claude Code. You cannot run slash commands yourself. |
-| Codex | `npx skills add dinhkarate/keyshroud -g -a codex -y` |
-| OpenCode | `npx skills add dinhkarate/keyshroud -g -a opencode -y` |
+| Codex, OpenCode | Copy the skill that comes with the CLI (below) |
 | Gemini CLI | `npx skills add dinhkarate/keyshroud -g -a gemini-cli -y` |
 | Cursor (agent) | `npx skills add dinhkarate/keyshroud -g -a cursor -y` |
 | pi / omp | `pi install npm:keyshroud` (or `omp install npm:keyshroud`) |
 | Claude Desktop, chat-only clients | Add the MCP JSON below to the client's settings (`~/Library/Application Support/Claude/claude_desktop_config.json` for Claude Desktop on macOS) |
+
+The skill that comes with the CLI, for Codex and OpenCode (both read `~/.agents/skills`):
+
+```bash
+mkdir -p ~/.agents/skills && cp -R "$(npm root -g)/keyshroud/skills/keyshroud" ~/.agents/skills/
+```
+
+On Windows (PowerShell):
+
+```powershell
+New-Item -ItemType Directory -Force "$HOME\.agents\skills" | Out-Null
+Copy-Item -Recurse -Force "$(npm root -g)\keyshroud\skills\keyshroud" "$HOME\.agents\skills\"
+```
+
+`npx skills` (the Gemini CLI and Cursor lines) needs Node.js 22.20 or newer. On an older Node,
+copy the same folder into `~/.gemini/skills/` or `~/.cursor/skills/` instead.
 
 If you can run shell commands, use the CLI (`keyshroud run`, `keyshroud add`): it needs no
 tool schemas in your context. The MCP server is only for clients that cannot run commands:

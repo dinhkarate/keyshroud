@@ -365,6 +365,13 @@ npm install -g keyshroud
 npx skills add dinhkarate/keyshroud
 ```
 
+`npx skills` needs Node.js 22.20+. On an older Node, copy the skill that comes with the CLI;
+Codex and OpenCode read `~/.agents/skills`:
+
+```bash
+mkdir -p ~/.agents/skills && cp -R "$(npm root -g)/keyshroud/skills/keyshroud" ~/.agents/skills/
+```
+
 ## MCP clients without a shell
 
 Claude Desktop, chat-only clients, or an agent you do not allow to run commands. Any client that
