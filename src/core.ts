@@ -1289,14 +1289,16 @@ function windowsDialogScript(button: "Save" | "Unlock"): string {
 
 async function withDialogLock<T>(fn: () => Promise<T>): Promise<T> {
   await mkdir(CONFIG_DIR, { recursive: true, mode: 0o700 });
-  let held = "";
-  try { held = await readFile(DIALOG_LOCK, "utf8"); } catch {}
+  const raw = await readFile(DIALOG_LOCK, "utf8").catch(() => null);
+  let held = raw ?? "";
   // Empty: another process has just created it and not yet written its time. It is live, not stale.
-  if (!held.trim()) held = await stat(DIALOG_LOCK).then((s) => `open:${Math.floor(s.mtimeMs)}`, () => "");
+  if (raw !== null && !held.trim()) held = await stat(DIALOG_LOCK).then((s) => `open:${Math.floor(s.mtimeMs)}`, () => "");
   const [kind, at] = held.trim().split(":");
   const age = Date.now() - Number(at);
   const live = (kind === "open" || kind === "cancelled") && age >= 0 && age < (kind === "cancelled" ? DIALOG_COOLDOWN_MS : DIALOG_TIMEOUT_MS + 30_000);
-  if (!live) await rm(DIALOG_LOCK, { force: true });
+  // Remove only the stale lock read above. One that was missing then, or has changed since, is another
+  // process's that it has just taken; removing it would open a second dialog.
+  if (raw !== null && !live && (await readFile(DIALOG_LOCK, "utf8").catch(() => null)) === raw) await rm(DIALOG_LOCK, { force: true });
   try { await writeFile(DIALOG_LOCK, `open:${Date.now()}\n`, { flag: "wx", mode: 0o600 }); }
   catch { throw new Error(kind === "cancelled" ? "The last dialog was cancelled; wait 30 seconds before asking again" : DIALOG_BUSY); }
   try {

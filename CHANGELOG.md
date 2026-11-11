@@ -5,6 +5,13 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.9.4] - 2026-11-11
+
+### Fixed
+- Several commands asking for the vault at once could open two dialogs or Touch ID sheets: one
+  that found no dialog lock yet then removed the lock another had just taken. Only a stale lock that
+  is still unchanged is removed now.
+
 ## [0.9.3] - 2026-11-11
 
 ### Changed
