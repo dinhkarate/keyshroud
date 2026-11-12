@@ -5,6 +5,27 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.10.4] - 2026-11-13
+
+Fixes from the second round of the independent review (of 0.10.3).
+
+### Security
+- After `lock`, a process that still held a passphrase or Touch ID vault in memory gave it back for a
+  `vault.json` edited to name a key that needs no session and given back its size and mtime. Whether
+  a session is needed is now decided by the vault the process opened, and the cached vault is used
+  only for the exact bytes it was opened from (a digest, not the file's inode, size and mtime).
+- A `BW_SESSION` that came with the environment (an MCP server started by a shell or by keyshroud
+  that had one) was trusted for an hour, past `lock` and past the session's end. A token that is
+  keyshroud's own session now ends with that session; any other is checked with bw on every use;
+  the MCP server started after an update no longer gets a copy of keyshroud's session; and a failed
+  unlock drops the items held in memory.
+- A command that stalled for over 30 seconds could still replace `env.json`, `auth.json` or the hook
+  index with what it had read before: the lock was checked before its temporary file was written,
+  and not at all for the index. It is now checked once the new text is on disk, for all three.
+- Two links to one `auth.json` (pi's and omp's, say) each had their own lock, so writers through both
+  could drop each other's entries or temporary files. They now share a lock on the file they point to,
+  and wiring a name that is already wired to the same reference is not an error.
+
 ## [0.10.3] - 2026-11-13
 
 Fixes from an independent review of 0.10.2 (`docs/security-review-2026-11-13-astra.md`).

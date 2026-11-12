@@ -2,8 +2,8 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { chmod, mkdir, readdir, readFile, stat, unlink, utimes, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { chmod, lstat, mkdir, readdir, readFile, stat, symlink, unlink, utimes, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { randomBytes } from "node:crypto";
 import { sealSession } from "../src/vault.ts";
@@ -373,27 +373,107 @@ test("lock in another process reaches a live MCP server on bw too", async () => 
   } finally { server.close(); }
 });
 
-test("a writer of env.json paused past 30 s never replaces what its successor wrote", async () => {
+test("a bw session from the environment ends with keyshroud's own session, or when bw says so", async () => {
+  const box = await sandbox([item("id-1", "Item A", "value-bbbb-2222")]);
+  await writeAuth(box, { A_TOKEN: "bw://Item A" });
+  const run = (server: ReturnType<typeof mcpServer>) => server.call("secrets_run", { command: "echo \"[${A_TOKEN:-unset}]\"" });
+  // keyshroud's own session, inherited (as by a process keyshroud started): its end is the token's.
+  assert.equal((await runCli(box, ["get", "A_TOKEN"], undefined, { KEYSHROUD_SESSION_TTL_MS: "5000" })).stdout, "value-bbbb-2222");
+  await unlink(join(box.dir, "keychain", "vaultwarden-master-password"));
+  const [token, expires] = (await readFile(join(box.configDir, "session"), "utf8")).split("\n");
+  const own = mcpServer(box, { BW_SESSION: token });
+  try {
+    assert.match(await run(own), /\[<redacted:A_TOKEN>\]/);
+    await new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(expires.slice("expires=".length)) + 300 - Date.now())));
+    assert.match(await run(own), /unresolved: A_TOKEN[^]*\[unset\]/);
+  } finally { own.close(); }
+  // Someone else's session (no session file): bw is asked on every use, so its lock ends it here too.
+  await writeFile(box.vaultFile, JSON.stringify({ ...(await box.vault()), status: "unlocked" }));
+  const theirs = mcpServer(box, { BW_SESSION: token });
+  try {
+    assert.match(await run(theirs), /\[<redacted:A_TOKEN>\]/);
+    assert.equal((await runCli(box, ["lock"])).stdout, "locked\n");
+    assert.match(await run(theirs), /unresolved: A_TOKEN[^]*\[unset\]/);
+  } finally { theirs.close(); }
+  // A process keyshroud starts gets the caller's token, never a copy of keyshroud's own session.
+  await writeFile(join(box.dir, "keychain", "vaultwarden-master-password"), "master\n");
+  const env = await runScript(box, `
+    const core = await import(${CORE});
+    process.env.BW_SESSION = "from-the-caller";
+    const before = core.ownProcessEnv().BW_SESSION;
+    await core.ensureBwSession();
+    console.log(before, process.env.BW_SESSION === "from-the-caller", core.ownProcessEnv().BW_SESSION);
+  `);
+  assert.equal(env, "from-the-caller false undefined\n");
+});
+
+for (const stage of ["writeFile", "rename"]) test(`a writer of env.json paused past 30 s before its ${stage} never replaces what its successor wrote`, async () => {
   const box = await blank();
   assert.equal((await add(box, "A_TOKEN", "Item A", "first-value-123")).code, 0);
   const envJson = join(box.configDir, "env.json");
   const out = await runScript(box, `${PATCH_FS}
     let stalled = false;
-    patch("rename", async (real, from, to) => {
-      if (!stalled && String(from).includes("env.json.tmp.")) {
+    patch(${JSON.stringify(stage)}, async (real, file, ...rest) => {
+      if (!stalled && String(file).includes("env.json.tmp.")) {
         stalled = true;
         const old = new Date(Date.now() - 40000);
-        await fsp.utimes(to + ".lock", old, old);
+        for (const lock of ${JSON.stringify([`${envJson}.lock`, `${envJson}.keyshroud.lock`])}) await fsp.utimes(lock, old, old);
         require("node:child_process").execFileSync(${JSON.stringify(NODE)}, [${JSON.stringify(CLI)}, "wire", "--env", "B_TOKEN", "--item", "Item A"], { stdio: "ignore" });
       }
-      return real(from, to);
+      return real(file, ...rest);
     });
     const core = await import(${CORE});
     await core.writeAuthEntry(${JSON.stringify(envJson)}, "C_TOKEN", core.referenceFor("Item A", "local")).then(() => console.log("written"), (error) => console.log(error.message));
   `);
   assert.match(out, /lost the lock of .*env\.json .*nothing was written/);
   assert.deepEqual(Object.keys(JSON.parse(await readFile(envJson, "utf8"))).sort(), ["A_TOKEN", "B_TOKEN"]);
-  assert.ok(!existsSync(`${envJson}.lock`) && !(await readdir(box.configDir)).some((name) => name.includes(".tmp.")));
+  assert.deepEqual((await readdir(box.configDir)).filter((name) => /\.lock$|\.tmp\./.test(name)), []);
+});
+
+test("a writer of the hook index paused past 30 s never replaces what its successor wrote", async () => {
+  const box = await blank();
+  const index = join(box.configDir, "redact-index.json");
+  const successor = `const core = await import(${CORE}); await core.writeRedactIndex({ NEXT: "next-value-0123456789" });`;
+  const out = await runScript(box, `${PATCH_FS}
+    let stalled = true;
+    patch("writeFile", async (real, file, ...rest) => {
+      if (!stalled && String(file).includes("redact-index.json.tmp.")) {
+        stalled = true;
+        const old = new Date(Date.now() - 40000);
+        for (const lock of ${JSON.stringify([`${index}.lock`, `${index}.keyshroud.lock`])}) await fsp.utimes(lock, old, old);
+        require("node:child_process").execFileSync(process.execPath, ["--input-type=module", "-e", ${JSON.stringify(successor)}], { stdio: "ignore" });
+      }
+      return real(file, ...rest);
+    });
+    const core = await import(${CORE});
+    await core.writeRedactIndex({ FIRST: "first-value-0123456789" });
+    stalled = false;
+    await core.writeRedactIndex({ STALE: "stale-value-0123456789" }).then(() => console.log("written"), (error) => console.log(error.message));
+  `);
+  assert.match(out, /lost the lock of .*redact-index\.json .*nothing was written/);
+  const post = await runCli(box, ["hook", "claude", "post-tool-use"], JSON.stringify({ tool_response: { stdout: "first-value-0123456789 next-value-0123456789 stale-value-0123456789" } }));
+  assert.equal(JSON.parse(post.stdout).hookSpecificOutput.updatedToolOutput.stdout, "<redacted:FIRST> <redacted:NEXT> stale-value-0123456789");
+  assert.deepEqual((await readdir(box.configDir)).filter((name) => /\.lock$|\.tmp\./.test(name)), []);
+});
+
+test("two links to one auth file share a lock: writers through either keep each other's entries", async () => {
+  const box = await blank();
+  const real = join(box.dir, "real-auth.json");
+  await writeFile(real, "{}");
+  const links = [join(box.dir, "a", "auth.json"), join(box.dir, "b", "auth.json")];
+  for (const link of links) { await mkdir(dirname(link)); await symlink(real, link); }
+  const out = await runScript(box, `
+    const core = await import(${CORE});
+    const links = ${JSON.stringify(links)};
+    const ref = core.referenceFor("Item A", "local");
+    const written = await Promise.all(Array.from({ length: 8 }, (_, i) => core.writeAuthEntry(links[i % 2], "T" + i, ref)));
+    const twice = await Promise.all(links.map((link) => core.writeAuthEntry(link, "SAME", ref)));
+    console.log(JSON.stringify([...written, ...twice].map((result) => result.ok)));
+  `);
+  assert.deepEqual(JSON.parse(out || "null"), Array(10).fill(true));
+  assert.deepEqual(Object.keys(JSON.parse(await readFile(real, "utf8"))).sort(), ["SAME", ...Array.from({ length: 8 }, (_, i) => `T${i}`)]);
+  for (const link of links) assert.ok((await lstat(link)).isSymbolicLink());
+  for (const dir of [box.dir, ...links.map((link) => dirname(link))]) assert.deepEqual((await readdir(dir)).filter((name) => /\.lock$|\.tmp\./.test(name)), []);
 });
 
 test("a passphrase protects the vault where there is no keychain; lock and the session's end close it, in a live MCP server too", { skip: process.platform === "win32" }, async () => {
@@ -437,6 +517,24 @@ test("a passphrase protects the vault where there is no keychain; lock and the s
     assert.match(after, /unresolved: A_TOKEN \(The local vault is locked/);
     assert.doesNotMatch(after, /value-aaaa-1111/);
     assert.match(await server.call("vault_status"), /^status=locked backend=local/);
+    // Nor does a vault file edited to name a key that needs no session and given back its size
+    // and mtime: what the server holds was opened with a session, and is those bytes only.
+    const vault = vaultPath(box);
+    assert.equal((await runCli(box, ["get", "A_TOKEN"], undefined, { ...env, DISPLAY: ":0", FAKE_DIALOG_VALUE: PASS })).stdout, "value-aaaa-1111");
+    const at = new Date(Math.floor(Date.now() / 1000) * 1000 - 5000);
+    await utimes(vault, at, at);
+    assert.match(await server.call("secrets_run", { command: "echo \"[$A_TOKEN]\"" }), /\[<redacted:A_TOKEN>\]/);
+    assert.equal((await runCli(box, ["lock"], undefined, env)).stdout, "locked\n");
+    const sealed = await readFile(vault, "utf8");
+    const header = JSON.parse(sealed);
+    const edited = JSON.stringify({ ...header, key: { type: "keychain", service: `keyshroud-vault-${header.id}` } });
+    assert.ok(edited.length <= sealed.length);
+    await writeFile(vault, edited.padEnd(sealed.length), { flag: "r+" });
+    await utimes(vault, at, at);
+    const swapped = await server.call("secrets_run", { command: "echo \"[$A_TOKEN]\"" });
+    assert.match(swapped, /unresolved: A_TOKEN/);
+    assert.doesNotMatch(swapped, /value-aaaa-1111/);
+    await writeFile(vault, sealed);
   } finally { server.close(); }
 
   const wrong = await runCli(box, ["get", "A_TOKEN"], undefined, { ...env, DISPLAY: ":0", FAKE_DIALOG_VALUE: "not the passphrase" });

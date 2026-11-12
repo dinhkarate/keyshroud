@@ -606,9 +606,11 @@ Guarantees we test for:
   password itself, and opens one at a time (30 s pause after a cancel);
 - the session file, local vault, redact index, rendered templates and auth files are `0600`;
 - the local vault is replaced atomically (temporary file, fsync, rename) under a lock, changes to any
-  part of it fail its integrity check, and a vault that fails it is never overwritten;
+  part of it fail its integrity check (within the known limits below), and a vault that fails it is
+  never overwritten;
 - a local vault's passphrase is set only in a terminal, never stored, and refused as a secret;
-- env.json and auth.json writes are locked and atomic and never overwrite without `--force`;
+- env.json, auth.json and hook index writes are locked and atomic, a writer that lost its lock writes
+  nothing, and a wired name is never overwritten without `--force`;
 - commands started by `run` and `secrets_run` never receive `BW_SESSION`,
   `BW_PASSWORD`, `BW_CLIENTID` or `BW_CLIENTSECRET`, so `--only` really limits
   what a command can read (inside pi/omp the agent process keeps the session for

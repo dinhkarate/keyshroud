@@ -229,7 +229,7 @@ async function diskVersion(): Promise<string | null> {
 interface Delegate { version: string; child: ChildProcessByStdio<Writable, Readable, null>; ready: Promise<boolean>; waiting: Set<unknown> }
 
 function startDelegate(version: string, initParams: Json | undefined): Delegate {
-  const child = spawn(process.execPath, [CLI_FILE, "mcp"], { stdio: ["pipe", "pipe", "inherit"], env: process.env });
+  const child = spawn(process.execPath, [CLI_FILE, "mcp"], { stdio: ["pipe", "pipe", "inherit"], env: core.ownProcessEnv() });
   const waiting = new Set<unknown>();
   let settle: (ok: boolean) => void = () => {};
   const ready = new Promise<boolean>((resolve) => { settle = resolve; });

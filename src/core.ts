@@ -258,7 +258,8 @@ let vaultPending: Promise<VaultIndex> | null = null;
 let vaultMisses: Map<string, number> | null = null;
 let sessionPending: Promise<string> | null = null;
 let sessionVerifiedAt = 0;
-// The token in BW_SESSION came from keyshroud's session file (not from the caller's environment).
+// The token in BW_SESSION is the one in keyshroud's session file, so that file ends it. One that
+// only came with the caller's environment has no such file: bw is asked on every use.
 let sessionFromFile = false;
 let sessionExpiresAt: number | null = null;
 
@@ -502,29 +503,45 @@ export function ensureBwSession(opts: SessionOptions = {}): Promise<string> {
     sessionExpiresAt = null;
   }
   const existing = process.env.BW_SESSION?.trim();
-  if (!opts.unattended && existing && Date.now() - sessionVerifiedAt < SECRET_CACHE_TTL_MS) {
-    if (!sessionFromFile) return Promise.resolve(existing);
+  if (!opts.unattended && existing && sessionFromFile && Date.now() - sessionVerifiedAt < SECRET_CACHE_TTL_MS) {
     // `lock` in another process, or a newer unlock, ended the session this process holds: forget what it cached.
     return readSession().then((stored) => {
       if (stored?.token === existing) return existing;
-      delete process.env.BW_SESSION;
-      sessionExpiresAt = null;
-      sessionFromFile = false;
-      invalidateSecretCache();
+      forgetBwSession();
       return ensureBwSession(opts);
     });
   }
+  // No session, no cached items: a failed unlock leaves nothing behind to read.
   sessionPending = ensureSessionInner(existing, opts)
-    .then((token) => { sessionVerifiedAt = Date.now(); return token; })
+    .then((token) => { sessionVerifiedAt = Date.now(); return token; }, (error) => { invalidateSecretCache(); throw error; })
     .finally(() => { sessionPending = null; });
   return sessionPending;
 }
 
-async function writePrivateFile(path: string, content: string): Promise<void> {
+function forgetBwSession(): void {
+  delete process.env.BW_SESSION;
+  sessionExpiresAt = null;
+  sessionFromFile = false;
+  invalidateSecretCache();
+}
+
+// The environment for another keyshroud process (the MCP server started after an update). A session
+// keyshroud opened is left out: that process reads the session file, so `lock` and the session's
+// end reach it as they reach this one.
+export function ownProcessEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  if (sessionFromFile) delete env.BW_SESSION;
+  return env;
+}
+
+// `held` is the writer's lock (see updateFile): asked once the new text is on disk, as for the vault.
+async function writePrivateFile(path: string, content: string, held?: () => Promise<boolean>): Promise<void> {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   const tmp = `${path}.tmp.${randomBytes(6).toString("hex")}`;
   await writeFile(tmp, content, { encoding: "utf8", mode: 0o600, flag: "wx" });
   await chmod(tmp, 0o600);
+  // Lock lost: the error a rename gives once the next holder has removed the temp file.
+  if (held && !(await held())) { await rm(tmp, { force: true }); throw Object.assign(new Error(`${path}: lock lost`), { code: "ENOENT" }); }
   await rename(tmp, path);
   await chmod(path, 0o600);
 }
@@ -623,7 +640,12 @@ async function waitForSession(): Promise<string | null> {
 
 async function ensureSessionInner(existing: string | undefined, opts: SessionOptions): Promise<string> {
   if (!opts.unattended) {
-    if (existing && (await rawStatus(existing)).status === "unlocked") return existing;
+    // A token that is not the one in the session file: keyshroud's own was ended there (`lock`, a
+    // newer unlock); one from the caller's environment counts for as long as bw opens with it.
+    if (existing && existing !== (await readSession())?.token) {
+      if (!sessionFromFile && (await rawStatus(existing)).status === "unlocked") return existing;
+      forgetBwSession();
+    }
     const stored = await useStoredSession();
     if (stored) return stored;
   }
@@ -847,10 +869,7 @@ export async function lock(): Promise<{ bw: boolean; local: boolean }> {
 async function lockBw(): Promise<void> {
   try { await unlink(SESSION_FILE); } catch {}
   try { await bw(["lock"]); } catch {}
-  delete process.env.BW_SESSION;
-  sessionExpiresAt = null;
-  sessionFromFile = false;
-  invalidateSecretCache();
+  forgetBwSession();
 }
 
 // Append-only record of which names were used, by whom. Never values.
@@ -952,31 +971,43 @@ async function readAuthForUpdate(path: string): Promise<Record<string, unknown>>
   return parsed as Record<string, unknown>;
 }
 
-async function updateAuthFile(path: string, update: (current: Record<string, unknown>) => Record<string, unknown> | null): Promise<boolean> {
+// One writer at a time for `path`: `fn` gets the file to read (a symlink's target, so the link is
+// written through, not replaced) and a `write` that replaces it. Two locks are held. The one
+// beside `path` is pi's and omp's, to keep them out; they remove it with rmdir, so it cannot hold
+// an owner's token. The one for the target (withFileLock) is keyshroud's own: two links to one
+// file share it, and a writer paused past its 30 s is fenced as for the vault, `write` asking for
+// both locks once its temp file is on disk.
+async function updateFile<T>(path: string, fn: (target: string, write: (content: string) => Promise<void>) => Promise<T>): Promise<T> {
   await mkdir(dirname(path), { recursive: true });
-  const lock = await acquireLock(`${path}.lock`);
+  const outer = await acquireLock(`${path}.lock`);
   try {
-    // Write through a symlinked auth.json instead of replacing the link.
-    const target = await realpath(path).catch(() => path);
-    // A temp file found here was left by a holder that lost this lock: removing it makes that
-    // holder's late rename fail rather than replace what was written since (as for the vault).
-    const temp = `${basename(target)}.tmp.`;
-    for (const name of await readdir(dirname(target)).catch(() => [])) if (name.startsWith(temp)) await rm(join(dirname(target), name), { force: true }).catch(() => {});
+    const target = await realpath(path).catch(async () => join(await realpath(dirname(path)), basename(path)));
+    return await withFileLock(target, `${target}.${BRAND.bin}.lock`, (inner) => {
+      const held = async () => (await inner()) && (await outer.held());
+      return fn(target, (content) => writePrivateFile(target, content, held).catch((error: NodeJS.ErrnoException) => {
+        throw error.code === "ENOENT" ? new Error(`This process lost the lock of ${path} (it was paused for over 30 seconds); nothing was written`) : error;
+      }));
+    });
+  } finally { await outer.release(); }
+}
+
+async function updateAuthFile(path: string, update: (current: Record<string, unknown>) => Record<string, unknown> | null): Promise<boolean> {
+  return updateFile(path, async (target, write) => {
     const next = update(await readAuthForUpdate(target));
     if (!next) return false;
-    const lost = new Error(`This process lost the lock of ${path} (it was paused for over 30 seconds); nothing was written`);
-    if (!(await lock.held())) throw lost;
-    await writePrivateFile(target, `${JSON.stringify(next, null, 2)}\n`).catch((error: NodeJS.ErrnoException) => { throw error.code === "ENOENT" ? lost : error; });
+    await write(`${JSON.stringify(next, null, 2)}\n`);
     return true;
-  } finally { await lock.release(); }
+  });
 }
 
 export async function writeAuthEntry(path: string, name: string, key: string, opts: { overwrite?: boolean } = {}): Promise<{ ok: boolean; message: string }> {
+  // Two of the files can be links to one: the entry the first write made is the second one's too.
+  let same = false;
   const ok = await updateAuthFile(path, (current) => {
-    if (Object.hasOwn(current, name) && opts.overwrite !== true) return null;
+    if (Object.hasOwn(current, name) && opts.overwrite !== true) { same = authEntryRaw(current[name]) === key; return null; }
     return { ...current, [name]: { type: "api_key", key } };
   });
-  return ok ? { ok: true, message: "Entry saved." } : { ok: false, message: `${name} already exists in ${path}` };
+  return ok || same ? { ok: true, message: "Entry saved." } : { ok: false, message: `${name} already exists in ${path}` };
 }
 
 export async function deleteAuthEntry(path: string, name: string): Promise<boolean> {
@@ -1101,11 +1132,10 @@ const SESSION_INDEX_NAMES = new Set(["BW_SESSION", "LOCAL_VAULT_KEY", "LOCAL_VAU
 export async function writeRedactIndex(values: Record<string, string>): Promise<RedactIndex> {
   await mkdir(CONFIG_DIR, { recursive: true, mode: 0o700 });
   // Read, merge and write as one step, so two commands at once each keep the other's entries.
-  const lock = await acquireLock(`${REDACT_INDEX_FILE}.lock`);
-  try { return await mergeRedactIndex(values); } finally { await lock.release(); }
+  return updateFile(REDACT_INDEX_FILE, (_target, write) => mergeRedactIndex(values, write));
 }
 
-async function mergeRedactIndex(values: Record<string, string>): Promise<RedactIndex> {
+async function mergeRedactIndex(values: Record<string, string>, write: (content: string) => Promise<void>): Promise<RedactIndex> {
   const previous = await readRedactIndex();
   const index = buildRedactIndex(values, previous ?? undefined);
   const kept = new Map<string, number>();
@@ -1116,7 +1146,7 @@ async function mergeRedactIndex(values: Record<string, string>): Promise<RedactI
   });
   // Nothing new (the usual case for `get` and `api-key`): the file is left alone.
   if (previous && previous.entries.length === index.entries.length && index.entries.every((entry) => previous.entries.some((old) => old.mac === entry.mac))) return previous;
-  await writePrivateFile(REDACT_INDEX_FILE, `${JSON.stringify(index)}\n`);
+  await write(`${JSON.stringify(index)}\n`);
   return index;
 }
 
@@ -1529,24 +1559,21 @@ function localFileError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
 
-// One open file, so the stamp (inode, size, mtime) belongs to the text read.
+// The stamp is a digest of the text: a file given back its inode, size and mtime is still another file.
+function vaultStamp(text: string): string { return createHash("sha256").update(text).digest("hex"); }
 async function readVaultFile(): Promise<{ file: VaultFile; stamp: string } | null> {
-  let handle;
-  try { handle = await open(VAULT_FILE, "r"); } catch (error) {
+  let text: string;
+  try { text = await readFile(VAULT_FILE, "utf8"); } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;
   }
-  try {
-    const info = await handle.stat();
-    const text = await handle.readFile("utf8");
-    try { return { file: parseVaultFile(text), stamp: `${info.ino}:${info.size}:${info.mtimeMs}` }; } catch (error) { throw localFileError(error); }
-  } finally { await handle.close(); }
+  try { return { file: parseVaultFile(text), stamp: vaultStamp(text) }; } catch (error) { throw localFileError(error); }
 }
 
 // The key of an existing vault: from the keychain or DPAPI without asking; a
 // passphrase or Touch ID vault from its session, else (opts.prompt) by asking.
 async function localKey(file: VaultFile, opts: SessionOptions = {}): Promise<Buffer> {
-  if (localOpen?.file.id === file.id && !keyHasSessions(file.key.type)) return localOpen.key;
+  if (localOpen?.file.id === file.id && !keyHasSessions(file.key.type) && !keyHasSessions(localOpen.file.key.type)) return localOpen.key;
   const spec = file.key;
   if (spec.type === "keychain") {
     const hex = await readKeychain(spec.service);
@@ -1703,12 +1730,16 @@ async function openLocal(opts: SessionOptions = {}): Promise<LocalVault | null> 
   const read = await readVaultFile();
   if (!read) return null;
   let key: Buffer | null = null;
-  if (keyHasSessions(read.file.key.type) && !opts.unattended) {
-    key = await readLocalSession(read.file.id);
-    // Session files are anyone's to write: only a session that holds this vault's key keeps the cached vault open.
-    if (localOpen?.file.id === read.file.id && !(key && key.equals(localOpen.key))) localOpen = null;
+  if (!opts.unattended) {
+    // Whether a session is needed is said by the vault this process opened: the header just read
+    // has not been checked against any key yet. Session files are anyone's to write, so only a
+    // session that holds that vault's key keeps it open.
+    const cached = localOpen;
+    if (cached && keyHasSessions(cached.file.key.type) && !(await readLocalSession(cached.file.id))?.equals(cached.key)) localOpen = null;
+    // The cached vault is returned for the very bytes it was opened from, and for nothing else.
+    if (localOpen?.stamp === read.stamp) return localOpen;
+    if (keyHasSessions(read.file.key.type)) key = await readLocalSession(read.file.id);
   }
-  if (localOpen && localOpen.stamp === read.stamp && localOpen.file.id === read.file.id && !opts.unattended) return localOpen;
   let data: VaultData | null = null;
   try {
     // A session whose key does not open the vault was not made with it: it is no session.
@@ -1798,9 +1829,9 @@ async function updateLocal(change: (data: VaultData) => void, opts: SessionOptio
         }
         change(data);
         const file = sealVault(header, data, key);
-        await writeVaultFile(serializeVault(file), held);
-        const info = await stat(VAULT_FILE);
-        localOpen = { file, key, data, stamp: `${info.ino}:${info.size}:${info.mtimeMs}` };
+        const text = serializeVault(file);
+        await writeVaultFile(text, held);
+        localOpen = { file, key, data, stamp: vaultStamp(text) };
         return { created: current ? null : creationNotice(header) };
       });
     } catch (error) {
@@ -1838,13 +1869,12 @@ async function forgetVaultKey(service: string): Promise<void> {
   await runFile(command, args, { timeout: 10000, maxBuffer: 1024 * 1024 }).catch(() => {});
 }
 
-// The vault's lock: a directory holding its owner's token. It is held for
-// milliseconds and broken after 30 s; a holder that lost it (a paused process)
-// neither writes nor removes its successor's lock. Temp files found on taking
-// it were left by such a holder: removing them makes its late rename fail
-// rather than overwrite the vault (see writeVaultFile). Exported for tests.
-export async function withVaultLock<T>(fn: (held: () => Promise<boolean>) => Promise<T>): Promise<T> {
-  const dir = `${VAULT_FILE}.lock`;
+// A file's lock: a directory holding its owner's token, so one holder at most finds its own
+// there. It is held for milliseconds and broken after 30 s; a holder that lost it (a paused
+// process) neither writes nor removes its successor's lock. Temp files found on taking it were
+// left by such a holder: removing them makes its late rename fail rather than replace the file
+// (see writeVaultFile and writePrivateFile).
+async function withFileLock<T>(file: string, dir: string, fn: (held: () => Promise<boolean>) => Promise<T>): Promise<T> {
   const owner = join(dir, "owner");
   const token = randomBytes(8).toString("hex");
   const start = Date.now();
@@ -1858,10 +1888,13 @@ export async function withVaultLock<T>(fn: (held: () => Promise<boolean>) => Pro
     }
   }
   const held = async () => (await readFile(owner, "utf8").catch(() => "")) === token;
-  const temp = `${basename(VAULT_FILE)}.tmp.`;
-  for (const name of await readdir(CONFIG_DIR).catch(() => [])) if (name.startsWith(temp)) await rm(join(CONFIG_DIR, name), { force: true }).catch(() => {});
+  const temp = `${basename(file)}.tmp.`;
+  for (const name of await readdir(dirname(file)).catch(() => [])) if (name.startsWith(temp)) await rm(join(dirname(file), name), { force: true }).catch(() => {});
   try { return await fn(held); } finally { if (await held()) await rm(dir, { recursive: true, force: true }); }
 }
+
+// The vault's lock. Exported for tests.
+export function withVaultLock<T>(fn: (held: () => Promise<boolean>) => Promise<T>): Promise<T> { return withFileLock(VAULT_FILE, `${VAULT_FILE}.lock`, fn); }
 
 // The lock must still be held once the new text is on disk. A successor that
 // broke it after that removed the temp file, so the rename either lands before
