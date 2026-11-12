@@ -50,6 +50,29 @@ test("redactor replaces longest secrets first and ignores short values", () => {
   assert.equal(redactor.size, 2);
 });
 
+test("a padded value is masked without its padding, and a key file line by line", () => {
+  const pem = ["-----BEGIN OPENSSH PRIVATE KEY-----", "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQ", "AAAEDfakefakefakefakefakefake+/0123456789==", "-----END OPENSSH PRIVATE KEY-----"].join("\n");
+  const json = JSON.stringify({ type: "service_account", auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs", private_key_id: "0123456789abcdef0123456789abcdef01234567", private_key: `-----BEGIN PRIVATE KEY-----\nMIIEfakefakefakefakefakefake0123\n-----END PRIVATE KEY-----\n` }, null, 2);
+  const values = { PADDED: "tok-FAKE-0123456789\n", SSH_KEY: pem, SA_KEY: json, WORDS: "correct horse battery staple" };
+  const text = [
+    "token=tok-FAKE-0123456789 done",
+    "     2\tb3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQ",
+    "+AAAEDfakefakefakefakefakefake+/0123456789==",
+    'key: "MIIEfakefakefakefakefakefake0123\\n" id 0123456789abcdef0123456789abcdef01234567',
+    "auth_provider_x509_cert_url https://www.googleapis.com/oauth2/v1/certs service_account -----BEGIN PRIVATE KEY----- horse battery",
+  ].join("\n");
+  const expected = [
+    "token=<redacted:PADDED> done",
+    "     2\t<redacted:SSH_KEY>",
+    "+<redacted:SSH_KEY>",
+    'key: "<redacted:SA_KEY>\\n" id <redacted:SA_KEY>',
+    "auth_provider_x509_cert_url https://www.googleapis.com/oauth2/v1/certs service_account -----BEGIN PRIVATE KEY----- horse battery",
+  ].join("\n");
+  assert.equal(createRedactor(values).redact(text), expected);
+  assert.equal(redactWithIndex(text, buildRedactIndex(values)), expected);
+  assert.equal(createRedactor(values).redact(`a ${pem} b ${json} c`), "a <redacted:SSH_KEY> b <redacted:SA_KEY> c");
+});
+
 async function streamThrough(values: Record<string, string>, chunks: string[]): Promise<string> {
   const stream = createRedactStream(createRedactor(values));
   let out = "";
@@ -159,7 +182,7 @@ test("looksSecret: known formats beat PUBLIC names, and common credential names 
 });
 
 test("loader variables and unsafe item names are refused", () => {
-  for (const name of ["PATH", "NODE_OPTIONS", "LD_PRELOAD", "DYLD_INSERT_LIBRARIES", "BASH_ENV", "GIT_SSH_COMMAND", "npm_config_script_shell"]) assert.ok(isLoaderEnvName(name), name);
+  for (const name of ["PATH", "NODE_OPTIONS", "LD_PRELOAD", "DYLD_INSERT_LIBRARIES", "BASH_ENV", "GIT_SSH_COMMAND", "npm_config_script_shell", "ComSpec", "PSModulePath", "DOTNET_STARTUP_HOOKS", "LUA_INIT_5_4", "RUSTC_WRAPPER"]) assert.ok(isLoaderEnvName(name), name);
   for (const name of ["GH_TOKEN", "GITHUB_TOKEN", "GIT_TOKEN", "DATABASE_URL"]) assert.ok(!isLoaderEnvName(name), name);
   assert.equal(itemNameProblem("GitHub CLI token"), null);
   assert.equal(itemNameProblem("kikigaki/RESEND_API_KEY"), null);

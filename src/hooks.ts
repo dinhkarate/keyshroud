@@ -22,7 +22,7 @@ async function sessionStart(): Promise<string> {
     await core.writeRedactIndex(core.indexValues(env.secrets));
     const names = Object.keys(env.values);
     context = names.length
-      ? `${BRAND.name}: vault secrets are available by name only: ${names.join(", ")}. Run every command that uses one through \`${BRAND.bin} run -- <command>\` (or the secrets_run MCP tool): its output is masked as <redacted:NAME> even when the command fails. Never print a secret. Never ask the user to paste a secret into chat. To store a new one, run \`${BRAND.bin} add --env NAME --item "Item"\` (or call secrets_request): it opens a dialog on the user's desktop for the value.`
+      ? `${BRAND.name}: vault secrets are available by name only: ${names.join(", ")}. Run every command that uses one through \`${BRAND.bin} run --only NAME -- <command>\` (or the secrets_run MCP tool with \`only\`), naming just the secrets that command needs: its output is masked as <redacted:NAME> even when the command fails. Never print a secret. Never ask the user to paste a secret into chat. To store a new one, run \`${BRAND.bin} add --env NAME --item "Item"\` (or call secrets_request): it opens a dialog on the user's desktop for the value.`
       : env.missing.length
       ? `${BRAND.name}: wired secrets could not be resolved from the vault: ${env.missing.join(", ")}. Ask the user to run \`${BRAND.bin} doctor\` (with an agent account, \`${BRAND.bin} migrate\` copies missing items into it).`
       : `${BRAND.name}: no secrets are wired yet. To store one, run \`${BRAND.bin} add --env NAME --item "Item"\` (or call secrets_request): it opens a dialog on the user's desktop for the value.`;

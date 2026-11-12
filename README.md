@@ -274,9 +274,9 @@ keyshroud migrate --yes                          # copy them; references keep wo
 5. **Redact.** In-process (`run`, MCP, pi/omp) output passes through a redactor
    that knows every wired value, the session token or vault key, and every value in
    the vault. Out-of-process Claude Code hooks use a keyed-HMAC
-   fingerprint index (`redact-index.json`, `0600`) of wired values and the
-   session token or key only, so they never hold plaintext or fingerprint your
-   personal passwords.
+   fingerprint index (`redact-index.json`, `0600`) of wired values, values you
+   printed with `get`, `inject` or `api-key`, and the session token or key only,
+   so they never hold plaintext or fingerprint the rest of your vault.
 
 ## Claude Code
 
@@ -616,7 +616,8 @@ Guarantees we test for:
 - env files may contain only references and literals: a `!command` value is
   rejected, and so are variables that change what programs load or run (`PATH`,
   `NODE_OPTIONS`, `LD_*`, `DYLD_*`, `BASH_ENV`, `GIT_SSH_COMMAND`, …), which are
-  also never wired or injected;
+  also never wired or injected (the list covers the common ones, not every tool's:
+  an env file still configures the program it is used with);
 - an unparseable `env.json` or `auth.json` is never overwritten.
 
 Known limits: a `.env.refs` can reference **any** item in your vault, not only the
@@ -625,8 +626,11 @@ with it. `import` decides what is secret by heuristics and keeps everything else
 as a literal; check its plan before committing `.env.refs`. The Claude Code
 `PostToolUse` hook does not see failed commands (`PostToolUseFailure` cannot
 rewrite output) or anything a client sends as telemetry, and it only knows wired
-values, so `keyshroud get bw://…` or `run --no-mask` print in the clear; run
-secret-using commands through `keyshroud run` or `secrets_run`. An agent with shell access as your user can open a
+values and values keyshroud itself printed (`get`, `inject`, `api-key`), so a failed
+`keyshroud get bw://…` or `run --no-mask` still shows in the clear; run
+secret-using commands through `keyshroud run` or `secrets_run`, with `--only` (or
+`only`) naming the secrets the command needs, since every wired secret is injected
+otherwise. An agent with shell access as your user can open a
 keychain-mode local vault at any time, and use a passphrase vault's session files until the session
 ends. It can also read `~/.config/keyshroud/session` and use `bw` directly until that session ends —
 after `setup` that reaches only the agent account; a stored master password (keychain entry or
@@ -635,7 +639,10 @@ instead by default; otherwise run agents in a sandbox or container if that matte
 agent could also draw a window that looks like the unlock dialog; when in doubt, cancel it and run
 `keyshroud unlock` in a terminal. Without `setup`, keyshroud shares bw's default login, so the
 30-minute lock also ends a `bw` session you opened yourself. Redaction is exact-match, so a *partial* or transformed value
-(`${TOKEN:0:10}`, base64, a line wrapped by a tool) is not masked; values
+(`${TOKEN:0:10}`, base64, a line wrapped by a tool) is not masked. Two reshaped forms are: a value is
+also masked without its leading and trailing spaces or line breaks, and a value of several lines or a
+JSON document (a PEM key, a service account file) is also masked run by run (20 or more letters, digits
+and `+/=_-`), so a key shown with line numbers or as a diff stays masked; values
 shorter than 6 characters are not redacted (to avoid noise), so don't wire short
 PINs.
 

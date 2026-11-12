@@ -5,6 +5,27 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+### Security
+- A secret stored with a trailing line break or spaces was masked only when printed with them: a shell
+  that expands `$NAME` drops them, and the value then showed in the clear. It is now masked without its
+  padding too.
+- A secret of several lines or a JSON document (an SSH or PEM key, a service account file) was masked
+  only as one exact block, so a tool that shows it with line numbers, as a diff, or re-formatted let it
+  through. Each run of 20 or more letters, digits and `+/=_-` in such a value (in JSON: in its string
+  values) is now masked as well, in `run`, the MCP server, pi/omp and the Claude Code hook.
+- `get`, `inject` and `api-key` add what they print to the hook index first, so a Claude Code hook also
+  masks a value no name is wired to.
+- Env files and wiring can no longer set `SHELL`, `ComSpec`, `PATHEXT`, `PSModulePath`, `SystemRoot`,
+  `windir`, `DOTNET_STARTUP_HOOKS`, `LUA_INIT*`, `PHPRC`, `PHP_INI_SCAN_DIR`, `PYTHONUSERBASE`,
+  `R_PROFILE*`, `R_ENVIRON*`, `GOFLAGS`, `RUSTC_WRAPPER`, `RUSTC_WORKSPACE_WRAPPER` or
+  `ELECTRON_RUN_AS_NODE`, which make a program load or run something else.
+
+### Changed
+- The hook index kept every session token it had ever seen (one per unlock); it now keeps the newest
+  four, and is rewritten only when something in it changes.
+- The Claude Code session context tells the agent to pass `--only NAME` to `keyshroud run`, so a
+  command gets the secrets it needs instead of every wired one.
+
 ## [0.10.1] - 2026-11-12
 
 ### Fixed

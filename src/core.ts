@@ -1068,9 +1068,21 @@ export function indexValues(wired: Record<string, string> = {}): Record<string, 
 }
 
 // Merges into the existing index so values added by one command (for example
-// an env file passed to `run`) stay covered for later hook invocations.
+// an env file passed to `run`) stay covered for later hook invocations. Every
+// unlock brings a new session token, so only the newest few of those are kept
+// (entries are newest first).
+const SESSION_INDEX_NAMES = new Set(["BW_SESSION", "LOCAL_VAULT_KEY", "LOCAL_VAULT_SESSION"]);
 export async function writeRedactIndex(values: Record<string, string>): Promise<RedactIndex> {
-  const index = buildRedactIndex(values, (await readRedactIndex()) ?? undefined);
+  const previous = await readRedactIndex();
+  const index = buildRedactIndex(values, previous ?? undefined);
+  const kept = new Map<string, number>();
+  index.entries = index.entries.filter(({ name }) => {
+    if (!SESSION_INDEX_NAMES.has(name)) return true;
+    kept.set(name, (kept.get(name) ?? 0) + 1);
+    return kept.get(name)! <= 4;
+  });
+  // Nothing new (the usual case for `get` and `api-key`): the file is left alone.
+  if (previous && previous.entries.length === index.entries.length && index.entries.every((entry) => previous.entries.some((old) => old.mac === entry.mac))) return previous;
   await writePrivateFile(REDACT_INDEX_FILE, `${JSON.stringify(index)}\n`);
   return index;
 }

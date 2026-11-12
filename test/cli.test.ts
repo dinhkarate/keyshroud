@@ -105,6 +105,22 @@ test("values from env files used by run stay covered by the hook index", async (
   assert.equal(JSON.parse(post.stdout).hookSpecificOutput.updatedToolOutput.stdout, "org=<redacted:ORG>");
 });
 
+test("a value printed by get joins the hook index; old session tokens leave it", async () => {
+  const box = await wired();
+  assert.equal((await runCli(box, ["get", "bw://GitHub CLI token/fields/org"])).stdout, "acme-org");
+  assert.equal((await runCli(box, ["get", "PLAIN"])).stdout, "not-a-secret-literal");
+  const post = await runCli(box, ["hook", "claude", "post-tool-use"], JSON.stringify({ tool_response: { stdout: "org=acme-org not-a-secret-literal" } }));
+  assert.equal(JSON.parse(post.stdout).hookSpecificOutput.updatedToolOutput.stdout, "org=<redacted:GitHub CLI token> not-a-secret-literal");
+  const indexFile = join(box.configDir, "redact-index.json");
+  const index = JSON.parse(await readFile(indexFile, "utf8")) as { entries: Array<{ name: string }> };
+  const old = Array.from({ length: 9 }, (_, i) => ({ ...index.entries[0], name: "BW_SESSION", mac: String(i).repeat(32) }));
+  await writeFile(indexFile, JSON.stringify({ ...index, entries: [...index.entries, ...old] }));
+  await runCli(box, ["hook", "claude", "session-start"], "{}");
+  const after = JSON.parse(await readFile(indexFile, "utf8")) as { entries: Array<{ name: string; mac: string }> };
+  assert.equal(after.entries.filter((entry) => entry.name === "BW_SESSION").length, 4);
+  assert.ok(after.entries.some((entry) => entry.name === "GitHub CLI token"));
+});
+
 test("children never receive the vault session or unlock credentials", async () => {
   const box = await wired();
   const result = await runCli(box, ["run", "--no-mask", "--", "/bin/sh", "-c", "echo s=${BW_SESSION:-none} p=${BW_PASSWORD:-none}"], "", { BW_SESSION: "fake-session", BW_PASSWORD: "master" });

@@ -20,6 +20,25 @@ export interface Redactor {
 
 export function placeholder(name: string): string { return `<redacted:${name}>`; }
 
+function stringLeaves(node: unknown, out: string[] = []): string[] {
+  if (typeof node === "string") out.push(node);
+  else if (node && typeof node === "object") for (const child of Object.values(node)) stringLeaves(child, out);
+  return out;
+}
+
+// What is masked for one secret: the value, and what is left of it once a tool reshapes it. Padding
+// goes when a shell expands the variable, so the value is masked without it too. A value of several
+// parts (a PEM key, a JSON key file) is broken up by line numbers, diff marks and JSON escapes, so each
+// run of 20 or more letters, digits and +/=_- in it is masked as well (in JSON: in its string values).
+export function redactForms(value: string): string[] {
+  const trimmed = value.trim();
+  const forms = new Set([value, trimmed]);
+  let parts: string[] | null = null;
+  if (/^[[{]/.test(trimmed)) { try { parts = stringLeaves(JSON.parse(trimmed)); } catch {} }
+  if (parts || /\s/.test(trimmed)) for (const part of parts ?? [trimmed]) for (const run of part.match(/[A-Za-z0-9+/=_-]{20,}/g) ?? []) forms.add(run);
+  return [...forms].filter((form) => form.length >= MIN_REDACT_LENGTH);
+}
+
 interface Hit { start: number; end: number; name: string }
 
 // Overlapping matches merge into one placeholder, so no fragment of any secret
@@ -42,7 +61,7 @@ function applyHits(text: string, hits: Hit[]): string {
 export function createRedactor(values: Record<string, string>): Redactor {
   const byValue = new Map<string, string>();
   for (const [name, value] of Object.entries(values)) {
-    if (value.length >= MIN_REDACT_LENGTH && !byValue.has(value)) byValue.set(value, name);
+    for (const form of redactForms(value)) if (!byValue.has(form)) byValue.set(form, name);
   }
   // Longest first so a secret containing another secret is replaced whole.
   const secrets = [...byValue.entries()].sort((a, b) => b[0].length - a[0].length);
@@ -137,12 +156,11 @@ export function buildRedactIndex(values: Record<string, string>, previous?: Reda
   const key = previous ? Buffer.from(previous.key, "base64") : randomBytes(32);
   const entries: RedactIndex["entries"] = [];
   const seen = new Set<string>();
-  for (const [name, value] of Object.entries(values)) {
-    if (value.length < MIN_REDACT_LENGTH) continue;
-    const digest = mac(key, value);
+  for (const [name, value] of Object.entries(values)) for (const form of redactForms(value)) {
+    const digest = mac(key, form);
     if (seen.has(digest)) continue;
     seen.add(digest);
-    entries.push({ name, length: value.length, roll: rollHash(value, 0, value.length), mac: digest });
+    entries.push({ name, length: form.length, roll: rollHash(form, 0, form.length), mac: digest });
   }
   for (const entry of previous?.entries ?? []) if (!seen.has(entry.mac)) { seen.add(entry.mac); entries.push(entry); }
   return { v: 1, key: key.toString("base64"), entries };

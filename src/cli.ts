@@ -114,6 +114,11 @@ async function authRaw(name: string): Promise<string | undefined> {
 async function authValue(name: string): Promise<string | null> {
   return core.resolveShellValue(await authRaw(name));
 }
+// A value printed on purpose (get, api-key, inject) joins the hook index first, so a Claude Code
+// hook masks it in the tool result even when no name is wired to it.
+async function coverPrinted(values: Record<string, string>): Promise<void> {
+  try { await core.writeRedactIndex(values); } catch {}
+}
 async function parseItem(arg: string): Promise<{ backend: core.BackendName; name: string }> {
   try { return await core.parseItemArg(arg); } catch (error) { fail(error instanceof Error ? error.message : String(error), 2); }
 }
@@ -198,6 +203,7 @@ async function inject(args: string[]): Promise<void> {
     values.set(raw, value);
   }));
   await core.audit("inject", refs, output ?? "stdout");
+  await coverPrinted(Object.fromEntries([...values].map(([raw, value]) => [parseRef(raw)!.item, value])));
   const rendered = template.replace(pattern, (_match, raw: string) => values.get(raw) ?? "");
   if (!output) { process.stdout.write(rendered); return; }
   // lstat, and a private temp file renamed over the target, so a planted
@@ -694,6 +700,7 @@ async function main(): Promise<void> {
       const value = ref ? await core.resolveRef(ref) : await authValue(args[0]);
       if (value === null) fail(`Secret unresolved: ${args[0]}${core.unresolvedReason(vaultError)}`, 4);
       await core.audit("get", [args[0]], "cli");
+      if (ref || core.isSecretSource(raw ?? "")) await coverPrinted({ [ref ? ref.item : args[0]]: value });
       process.stdout.write(value); return;
     }
     if (command === "run" || command === "exec") { await runCommand(args); return; }
@@ -716,7 +723,10 @@ async function main(): Promise<void> {
       requireKnownFlags(args, ["--item"]);
       const item = valueAfter(args, "--item"); if (!item) fail(usage, 2);
       const { backend, name } = await parseItem(item);
-      await core.openBackend(backend, { prompt: true }); process.stdout.write(await core.getSecret(name, backend)); return;
+      await core.openBackend(backend, { prompt: true });
+      const value = await core.getSecret(name, backend);
+      await coverPrinted({ [name]: value });
+      process.stdout.write(value); return;
     }
     if (command === "add") {
       requireKnownFlags(args, ["--env", "--item", "--notes", "--target"], ["--stdin", "--dialog"]);
