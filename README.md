@@ -631,8 +631,9 @@ the file), which then opens on your next approval with its contents instead of y
 what the vault held. The lock on pi's and omp's `auth.json` is their own (a directory, taken over
 after 30 s): keyshroud's writers are fenced against each other and pi cannot take over a lock
 keyshroud holds, but a lock that pi holds or left behind is only as safe as that scheme is between
-two pi processes (and on a filesystem without symbolic links, a keyshroud writer stalled for over
-30 seconds is stopped by a check rather than by construction). A `.env.refs` can reference **any** item in your vault, not only the
+two pi processes (and for an `auth.json` that is a link to a file on another filesystem, a keyshroud
+writer stalled for over 30 seconds is stopped by a check and by keyshroud's next writer, not by
+pi's). A `.env.refs` can reference **any** item in your vault, not only the
 ones you wired, so read a cloned repo's `.env.refs` before running `--env-file`
 with it. `import` decides what is secret by heuristics and keeps everything else
 as a literal; check its plan before committing `.env.refs`. The Claude Code

@@ -414,7 +414,7 @@ for (const stage of ["writeFile", "rename"]) test(`a writer of env.json paused p
   const out = await runScript(box, `${PATCH_FS}
     let stalled = false;
     patch(${JSON.stringify(stage)}, async (real, file, ...rest) => {
-      if (!stalled && String(file).includes("env.json.tmp.")) {
+      if (!stalled && /env\.json\.(tmp|lock.pending)\./.test(String(file))) {
         stalled = true;
         const old = new Date(Date.now() - 40000);
         for (const lock of ${JSON.stringify([`${envJson}.lock`, `${envJson}.keyshroud.lock`])}) await fsp.utimes(lock, old, old);
@@ -476,6 +476,44 @@ test("two links to one auth file share a lock: writers through either keep each 
   for (const dir of [box.dir, ...links.map((link) => dirname(link))]) assert.deepEqual((await readdir(dir)).filter((name) => /\.lock$|\.tmp\./.test(name)), []);
 });
 
+test("a writer paused before its rename is voided by the next writer through another link; a link across filesystems still writes", async () => {
+  const box = await blank();
+  const real = join(box.dir, "real-auth.json");
+  await writeFile(real, "{}");
+  const links = [join(box.dir, "a", "auth.json"), join(box.dir, "b", "auth.json")];
+  for (const link of links) { await mkdir(dirname(link)); await symlink(real, link); }
+  const next = `const core = await import(${CORE}); await core.writeAuthEntry(${JSON.stringify(links[1])}, "B_TOKEN", core.referenceFor("Item A", "local"));`;
+  const out = await runScript(box, `${PATCH_FS}
+    let stalled = false;
+    patch("rename", async (real, from, to) => {
+      if (!stalled && String(from).includes("auth.json.lock")) {
+        stalled = true;
+        const old = new Date(Date.now() - 40000);
+        await fsp.utimes(${JSON.stringify(`${real}.keyshroud.lock`)}, old, old);
+        require("node:child_process").execFileSync(process.execPath, ["--input-type=module", "-e", ${JSON.stringify(next)}], { stdio: "ignore" });
+      }
+      return real(from, to);
+    });
+    const core = await import(${CORE});
+    await core.writeAuthEntry(${JSON.stringify(links[0])}, "A_TOKEN", core.referenceFor("Item A", "local")).then(() => console.log("written"), (error) => console.log(error.message));
+  `);
+  assert.match(out, /lost the lock of .*auth\.json .*nothing was written/);
+  assert.deepEqual(Object.keys(JSON.parse(await readFile(real, "utf8"))), ["B_TOKEN"]);
+  // The rename from inside the lock is refused across filesystems: the text goes by a temp file beside the target.
+  const crossed = await runScript(box, `${PATCH_FS}
+    patch("rename", async (real, from, to) => {
+      if (String(from).includes("auth.json.lock")) throw Object.assign(new Error("cross-device link not permitted"), { code: "EXDEV" });
+      return real(from, to);
+    });
+    const core = await import(${CORE});
+    console.log((await core.writeAuthEntry(${JSON.stringify(links[0])}, "C_TOKEN", core.referenceFor("Item A", "local"))).ok);
+  `);
+  assert.equal(crossed, "true\n");
+  assert.deepEqual(Object.keys(JSON.parse(await readFile(real, "utf8"))), ["B_TOKEN", "C_TOKEN"]);
+  for (const link of links) assert.ok((await lstat(link)).isSymbolicLink());
+  for (const dir of [box.dir, ...links.map((link) => dirname(link))]) assert.deepEqual((await readdir(dir)).filter((name) => /\.lock$|\.tmp\./.test(name)), []);
+});
+
 // pi's own writer (proper-lockfile) as the successor: it removes a stale lock with rmdir.
 test("pi's auth writer cannot break the lock of a paused keyshroud writer; a lock left by a killed one is cleared", async () => {
   const box = await blank();
@@ -492,7 +530,7 @@ test("pi's auth writer cannot break the lock of a paused keyshroud writer; a loc
   const out = await runScript(box, `${PATCH_FS}
     let stalled = false;
     patch("rename", async (real, from, to) => {
-      if (!stalled && String(from).includes("auth.json.tmp.")) {
+      if (!stalled && String(from).includes("auth.json.lock")) {
         stalled = true;
         const old = new Date(Date.now() - 40000);
         for (const lock of ${JSON.stringify([`${auth}.lock`, `${auth}.keyshroud.lock`])}) await fsp.utimes(lock, old, old);
@@ -535,7 +573,7 @@ test("once the lock beside auth.json is gone, a writer paused before its rename 
   const out = await runScript(box, `${PATCH_FS}
     let stalled = false;
     patch("rename", async (real, from, to) => {
-      if (!stalled && String(from).includes("auth.json.tmp.")) {
+      if (!stalled && String(from).includes("auth.json.lock")) {
         stalled = true;
         fs.rmSync(${JSON.stringify(`${auth}.lock`)}, { recursive: true });
         process.stdout.write(require("node:child_process").execFileSync(process.execPath, ["--input-type=module", "-e", ${JSON.stringify(pi)}]));

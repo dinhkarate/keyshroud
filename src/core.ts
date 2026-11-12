@@ -3,7 +3,7 @@
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomBytes, randomUUID, scrypt, timingSafeEqual, type ScryptOptions } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { appendFile, chmod, mkdir, mkdtemp, open, readdir, readFile, realpath, rename, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
+import { appendFile, chmod, mkdir, mkdtemp, open, readdir, readFile, realpath, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, delimiter, join, dirname } from "node:path";
 import process from "node:process";
@@ -534,20 +534,15 @@ export function ownProcessEnv(): NodeJS.ProcessEnv {
   return env;
 }
 
-// `fence` is the writer's lock (see updateFile): `held` is asked once the new text is on disk, as
-// for the vault, and the rename then goes by `via`, a way to the file's directory that is there
-// only for as long as the lock is.
-async function writePrivateFile(path: string, content: string, fence?: { held: () => Promise<boolean>; via: string }): Promise<void> {
+// `held` is the writer's lock: asked once the new text is on disk, as for the vault.
+async function writePrivateFile(path: string, content: string, held?: () => Promise<boolean>): Promise<void> {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   const tmp = `${path}.tmp.${randomBytes(6).toString("hex")}`;
   await writeFile(tmp, content, { encoding: "utf8", mode: 0o600, flag: "wx" });
   await chmod(tmp, 0o600);
-  if (!fence) await rename(tmp, path);
-  else {
-    // Lock lost: the error the rename gives once the lock, and the way with it, is gone.
-    if (!(await fence.held())) { await rm(tmp, { force: true }); throw Object.assign(new Error(`${path}: lock lost`), { code: "ENOENT" }); }
-    await rename(join(fence.via, basename(tmp)), path).catch(async (error) => { await rm(tmp, { force: true }).catch(() => {}); throw error; });
-  }
+  // Lock lost: the error a rename gives once the next holder has removed the temp file.
+  if (held && !(await held())) { await rm(tmp, { force: true }); throw Object.assign(new Error(`${path}: lock lost`), { code: "ENOENT" }); }
+  await rename(tmp, path);
   await chmod(path, 0o600);
 }
 
@@ -965,12 +960,19 @@ async function acquireLock(dir: string): Promise<{ held: () => Promise<boolean>;
 
 // The lock of one file. Temp files found on taking it were left by a holder that lost it:
 // removing them makes its late rename fail rather than replace the file (see writeVaultFile and
-// writePrivateFile).
+// writePrivateFile). A `.ref` among them names where such a holder's new text waits instead
+// (updateFile): that goes too.
 async function withFileLock<T>(file: string, dir: string, fn: (held: () => Promise<boolean>) => Promise<T>): Promise<T> {
   const lock = await acquireLock(dir);
   try {
     const temp = `${basename(file)}.tmp.`;
-    for (const name of await readdir(dirname(file)).catch(() => [])) if (name.startsWith(temp)) await rm(join(dirname(file), name), { force: true }).catch(() => {});
+    for (const name of await readdir(dirname(file)).catch(() => [])) {
+      if (!name.startsWith(temp)) continue;
+      const left = join(dirname(file), name);
+      const staged = name.endsWith(".ref") ? await readFile(left, "utf8").catch(() => "") : "";
+      if (/^pending\.[0-9a-f]+$/.test(basename(staged)) && dirname(staged).endsWith(".lock")) await rm(staged, { force: true }).catch(() => {});
+      await rm(left, { force: true }).catch(() => {});
+    }
     return await fn(lock.held);
   } finally { await lock.release(); }
 }
@@ -1001,29 +1003,42 @@ async function readAuthForUpdate(path: string): Promise<Record<string, unknown>>
 // written through, not replaced) and a `write` that replaces it. Two locks are held: the one
 // beside `path`, which pi and omp know, and the one of the target, which two links to one file
 // share. A writer paused past their 30 s replaces nothing, whoever comes next and however its
-// locks went. `write` asks for both once its temp file is on disk, and then:
-// - keyshroud's next writer takes the target's lock, which removes that temp file;
-// - pi's takes only the lock beside `path`, and can once that directory is gone, for whatever
-//   reason. So the rename goes through a link kept inside it: no directory, no way to the temp
-//   file, and the rename fails. (Where the filesystem has no links, the check is all there is.)
+// locks went, because of where its new text waits for the rename: inside the lock beside `path`.
+// - pi's next writer takes only that lock, and can once the directory is gone, for whatever
+//   reason; a directory goes only once it is empty, so the text went first.
+// - keyshroud's next writer takes the target's lock, and finds beside the target a note of where
+//   the text waits (it may have come by another link): it removes both before it reads.
+// A link to a file on another filesystem cannot be renamed into from here: its text waits beside
+// the target, as a temp file the next keyshroud writer removes (see README, Known limits).
 async function updateFile<T>(path: string, fn: (target: string, write: (content: string) => Promise<void>) => Promise<T>): Promise<T> {
   await mkdir(dirname(path), { recursive: true });
   const outer = await acquireLock(`${path}.lock`);
-  const link = join(`${path}.lock`, `via.${randomBytes(6).toString("hex")}`);
   try {
     const target = await realpath(path).catch(async () => join(await realpath(dirname(path)), basename(path)));
-    const via = await symlink(dirname(target), link, "junction").then(() => link, () => dirname(target));
     return await withFileLock(target, `${target}.${BRAND.bin}.lock`, (inner) => {
       const held = async () => (await inner()) && (await outer.held());
-      return fn(target, (content) => writePrivateFile(target, content, { held, via }).catch((error: NodeJS.ErrnoException) => {
-        throw error.code === "ENOENT" ? new Error(`This process lost the lock of ${path} (it was paused for over 30 seconds); nothing was written`) : error;
-      }));
+      const lost = new Error(`This process lost the lock of ${path} (it was paused for over 30 seconds); nothing was written`);
+      return fn(target, async (content) => {
+        const id = randomBytes(6).toString("hex");
+        const staged = join(`${path}.lock`, `pending.${id}`);
+        const note = `${target}.tmp.${id}.ref`;
+        // Nothing is put into a directory that has become someone else's lock.
+        if (!(await held())) throw lost;
+        try {
+          await writeFile(note, staged, { mode: 0o600, flag: "wx" });
+          await writeFile(staged, content, { encoding: "utf8", mode: 0o600, flag: "wx" });
+          if (!(await held())) throw lost;
+          await rename(staged, target);
+        } catch (error) {
+          await rm(staged, { force: true }).catch(() => {});
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code !== "EXDEV") throw code === "ENOENT" ? lost : error;
+          await writePrivateFile(target, content, held).catch((failed: NodeJS.ErrnoException) => { throw failed.code === "ENOENT" ? lost : failed; });
+        } finally { await rm(note, { force: true }).catch(() => {}); }
+        await chmod(target, 0o600);
+      });
     });
-  } finally {
-    // The link goes even from a directory that is no longer this writer's, so it stays removable.
-    await rm(link, { force: true }).catch(() => {});
-    await outer.release();
-  }
+  } finally { await outer.release(); }
 }
 
 async function updateAuthFile(path: string, update: (current: Record<string, unknown>) => Record<string, unknown> | null): Promise<boolean> {
