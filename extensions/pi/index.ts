@@ -3,10 +3,12 @@ import type { TSchema } from "typebox";
 import { BRAND } from "../../src/brand.ts";
 import * as core from "../../src/core.ts";
 import { createRedactor, type Redactor } from "../../src/redact.ts";
-import { ENV_NAME_RE } from "../../src/refs.ts";
+import { ENV_NAME_RE, isLoaderEnvName } from "../../src/refs.ts";
 import { confirmInBorderedPopup, inputInBorderedPopup, selectInBorderedPopup } from "./ui/bordered-popups.ts";
 
 export type UiContext = Pick<ExtensionContext, "ui">;
+// UPPER_SNAKE_CASE, and not a variable that changes what programs load or run (PATH, NODE_OPTIONS, …).
+function envNameOk(name: string): boolean { return ENV_NAME_RE.test(name) && !isLoaderEnvName(name); }
 let currentEnv: Record<string, string> = {};
 let redactor: Redactor = createRedactor({});
 // Masked values outlive a lock that removes them from the environment.
@@ -109,7 +111,7 @@ async function writeBoth(name: string, itemName: string, overwrite = false): Pro
 }
 
 async function addFlow(ctx: UiContext, envName: string, itemName: string, purpose: string): Promise<string> {
-  if (!ENV_NAME_RE.test(envName)) return "Invalid env_name; use UPPER_SNAKE_CASE.";
+  if (!envNameOk(envName)) return "Invalid env_name; use UPPER_SNAKE_CASE.";
   try {
     await core.ensureSession();
     const secret = await inputInBorderedPopup(ctx, { title: `Paste secret for ${envName}`, prompt: "Value is not shown", mask: true });
@@ -147,7 +149,7 @@ function parseSecretPlan(raw: string): SecretPlan {
   try { parsed = JSON.parse(match[0]); } catch { throw new Error("Planner returned invalid secret plan"); }
   const plan = parsed as Partial<SecretPlan>;
   if (typeof plan.itemName !== "string" || !plan.itemName.trim()) throw new Error("Secret plan has no itemName");
-  if (typeof plan.envName !== "string" || !ENV_NAME_RE.test(plan.envName)) throw new Error("Secret plan has invalid envName");
+  if (typeof plan.envName !== "string" || !envNameOk(plan.envName)) throw new Error("Secret plan has invalid envName");
   if (typeof plan.purpose !== "string" || !plan.purpose.trim()) throw new Error("Secret plan has no purpose");
   return { itemName: plan.itemName.trim(), envName: plan.envName, purpose: plan.purpose.trim() };
 }
@@ -197,7 +199,7 @@ async function secretFlow(ctx: UiContext, rawDescription: string): Promise<void>
     const itemName = await inputInBorderedPopup(ctx, { title: "Vault item name", prompt: "Edit or press Enter", defaultValue: proposed.itemName });
     if (!itemName) return;
     const envName = await inputInBorderedPopup(ctx, { title: "Environment variable", prompt: "UPPER_SNAKE_CASE; edit or press Enter", defaultValue: proposed.envName });
-    if (!envName || !ENV_NAME_RE.test(envName)) { ctx.ui.notify("Invalid env var name; use UPPER_SNAKE_CASE.", "error"); return; }
+    if (!envName || !envNameOk(envName)) { ctx.ui.notify("Invalid env var name; use UPPER_SNAKE_CASE.", "error"); return; }
     const plan: SecretPlan = { itemName, envName, purpose: proposed.purpose };
     const confirmed = await confirmInBorderedPopup(ctx, {
       title: "Configure vault secret?",
@@ -261,7 +263,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     const envName = await inputInBorderedPopup(ctx, { title: "Environment variable", prompt: "Use UPPER_SNAKE_CASE" }); if (!envName) return;
     const purpose = await inputInBorderedPopup(ctx, { title: "Purpose", prompt: "Short note stored with the item" }); if (purpose === undefined) return;
     const secret = await inputInBorderedPopup(ctx, { title: `Paste secret for ${envName}`, prompt: "Value is not shown", mask: true }); if (!secret) return;
-    if (!ENV_NAME_RE.test(envName)) { ctx.ui.notify("Invalid env var name; use UPPER_SNAKE_CASE.", "error"); return; }
+    if (!envNameOk(envName)) { ctx.ui.notify("Invalid env var name; use UPPER_SNAKE_CASE.", "error"); return; }
     const backend = await core.defaultBackend();
     if (!await confirmInBorderedPopup(ctx, { title: "Create and wire secret?", message: `"${envName}": "${core.referenceFor(itemName, backend)}"` })) return;
     try { await core.ensureSession(); const { created } = await core.createSecretItem({ itemName, secret, envName, notes: purpose }); await writeBoth(envName, itemName); await refreshEnv(); const verified = (await core.resolveShellValue(core.referenceFor(itemName, backend))) !== null; ctx.ui.notify(`${created ? `${created}\n` : ""}Created item=${itemName} env=${envName} verified=${verified ? "yes" : "no"}`, verified ? "info" : "warning"); } catch (error) { ctx.ui.notify(mappedError(error), "error"); }
@@ -269,7 +271,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   pi.registerCommand("vault_wire", { description: "Wire an existing vault item to both agent auth stores.", handler: async (_args, ctx) => {
     try {
       await core.ensureSession(); const item = await chooseItem(ctx, `Choose ${(await core.defaultBackend()) === "local" ? "a local vault" : "Vaultwarden"} item`); if (!item) return;
-      const envName = await inputInBorderedPopup(ctx, { title: "Environment variable", prompt: "Use UPPER_SNAKE_CASE" }); if (!envName || !ENV_NAME_RE.test(envName)) { ctx.ui.notify("Invalid env var name; use UPPER_SNAKE_CASE", "error"); return; }
+      const envName = await inputInBorderedPopup(ctx, { title: "Environment variable", prompt: "Use UPPER_SNAKE_CASE" }); if (!envName || !envNameOk(envName)) { ctx.ui.notify("Invalid env var name; use UPPER_SNAKE_CASE", "error"); return; }
       const existing = (await core.wiredEntries())[envName] !== undefined;
       let overwrite = false; if (existing) { const choice = await selectInBorderedPopup(ctx, { title: `${envName} already exists`, items: [{ value: "replace", label: "Replace" }, { value: "keep", label: "Keep" }] }); if (choice !== "replace") return; overwrite = true; }
       if (!await confirmInBorderedPopup(ctx, { title: "Save reference?", message: `"${envName}": "${core.referenceFor(item.name, await core.defaultBackend())}"` })) return;

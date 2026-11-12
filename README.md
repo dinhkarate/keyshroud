@@ -620,7 +620,11 @@ Guarantees we test for:
   an env file still configures the program it is used with);
 - an unparseable `env.json` or `auth.json` is never overwritten.
 
-Known limits: a `.env.refs` can reference **any** item in your vault, not only the
+Known limits: the local vault's integrity check proves a file was sealed with its key, not that it is
+the latest one or who sealed it. A program that can write `vault.json` can put an older copy back, and
+can replace a Touch ID vault with a new one made for the same Secure Enclave key (the public half is in
+the file), which then opens on your next approval with its contents instead of yours; neither reveals
+what the vault held. A `.env.refs` can reference **any** item in your vault, not only the
 ones you wired, so read a cloned repo's `.env.refs` before running `--env-file`
 with it. `import` decides what is secret by heuristics and keeps everything else
 as a literal; check its plan before committing `.env.refs`. The Claude Code

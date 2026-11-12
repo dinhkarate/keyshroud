@@ -7,9 +7,11 @@ import { compileRedactIndex } from "./redact.ts";
 
 function redactDeep(value: unknown, redact: (text: string) => string): unknown {
   if (typeof value === "string") return redact(value);
+  // A secret of digits may come back as a JSON number.
+  if (typeof value === "number") { const text = String(value); const masked = redact(text); return masked === text ? value : masked; }
   if (Array.isArray(value)) return value.map((entry) => redactDeep(entry, redact));
   if (value && typeof value === "object") {
-    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, redactDeep(entry, redact)]));
+    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [redact(key), redactDeep(entry, redact)]));
   }
   return value;
 }

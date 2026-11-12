@@ -203,7 +203,7 @@ async function inject(args: string[]): Promise<void> {
     values.set(raw, value);
   }));
   await core.audit("inject", refs, output ?? "stdout");
-  await coverPrinted(Object.fromEntries([...values].map(([raw, value]) => [parseRef(raw)!.item, value])));
+  await coverPrinted(Object.fromEntries(values));
   const rendered = template.replace(pattern, (_match, raw: string) => values.get(raw) ?? "");
   if (!output) { process.stdout.write(rendered); return; }
   // lstat, and a private temp file renamed over the target, so a planted

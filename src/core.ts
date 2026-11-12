@@ -258,6 +258,8 @@ let vaultPending: Promise<VaultIndex> | null = null;
 let vaultMisses: Map<string, number> | null = null;
 let sessionPending: Promise<string> | null = null;
 let sessionVerifiedAt = 0;
+// The token in BW_SESSION came from keyshroud's session file (not from the caller's environment).
+let sessionFromFile = false;
 let sessionExpiresAt: number | null = null;
 
 function normalizeItemName(name: string): string { return name.trim().toLowerCase(); }
@@ -500,7 +502,18 @@ export function ensureBwSession(opts: SessionOptions = {}): Promise<string> {
     sessionExpiresAt = null;
   }
   const existing = process.env.BW_SESSION?.trim();
-  if (!opts.unattended && existing && Date.now() - sessionVerifiedAt < SECRET_CACHE_TTL_MS) return Promise.resolve(existing);
+  if (!opts.unattended && existing && Date.now() - sessionVerifiedAt < SECRET_CACHE_TTL_MS) {
+    if (!sessionFromFile) return Promise.resolve(existing);
+    // `lock` in another process, or a newer unlock, ended the session this process holds: forget what it cached.
+    return readSession().then((stored) => {
+      if (stored?.token === existing) return existing;
+      delete process.env.BW_SESSION;
+      sessionExpiresAt = null;
+      sessionFromFile = false;
+      invalidateSecretCache();
+      return ensureBwSession(opts);
+    });
+  }
   sessionPending = ensureSessionInner(existing, opts)
     .then((token) => { sessionVerifiedAt = Date.now(); return token; })
     .finally(() => { sessionPending = null; });
@@ -531,6 +544,7 @@ export async function readSession(): Promise<{ token: string; expiresAt: number 
 async function writeSession(token: string, unattended: boolean, expiresAt: number | null = unattended ? null : Date.now() + SESSION_TTL_MS): Promise<void> {
   await writePrivateFile(SESSION_FILE, `${token}\nexpires=${expiresAt ?? "never"}\n`);
   process.env.BW_SESSION = token;
+  sessionFromFile = true;
   sessionExpiresAt = expiresAt;
   if (expiresAt !== null) armLockTimer(token, expiresAt);
 }
@@ -582,6 +596,7 @@ async function useStoredSession(): Promise<string | null> {
   if (stored.expiresAt !== null && Date.now() >= stored.expiresAt) { await lockBw(); return null; }
   if ((await rawStatus(stored.token)).status !== "unlocked") return null;
   process.env.BW_SESSION = stored.token;
+  sessionFromFile = true;
   sessionExpiresAt = stored.expiresAt;
   return stored.token;
 }
@@ -834,6 +849,7 @@ async function lockBw(): Promise<void> {
   try { await bw(["lock"]); } catch {}
   delete process.env.BW_SESSION;
   sessionExpiresAt = null;
+  sessionFromFile = false;
   invalidateSecretCache();
 }
 
@@ -902,12 +918,16 @@ export function authEntryRaw(entry: unknown): string | undefined {
 
 // Directory lock compatible with pi/omp (proper-lockfile: `<file>.lock/`,
 // stale after 30 s without an mtime refresh, matching pi's auth storage).
-async function acquireLock(path: string): Promise<() => Promise<void>> {
+// The lock is the directory as made here: one a successor made after breaking
+// it is not this holder's, to rely on or to remove.
+async function acquireLock(path: string): Promise<{ held: () => Promise<boolean>; release: () => Promise<void> }> {
   const start = Date.now();
   for (;;) {
     try {
       await mkdir(path);
-      return async () => { await rm(path, { recursive: true, force: true }); };
+      const mine = await stat(path);
+      const held = () => stat(path).then((now) => now.ino === mine.ino && now.mtimeMs === mine.mtimeMs, () => false);
+      return { held, release: async () => { if (await held()) await rm(path, { recursive: true, force: true }); } };
     } catch (error) {
       if ((error as { code?: string }).code !== "EEXIST") throw error;
       const lockedAt = await stat(path).then((info) => info.mtimeMs, () => 0);
@@ -934,15 +954,21 @@ async function readAuthForUpdate(path: string): Promise<Record<string, unknown>>
 
 async function updateAuthFile(path: string, update: (current: Record<string, unknown>) => Record<string, unknown> | null): Promise<boolean> {
   await mkdir(dirname(path), { recursive: true });
-  const release = await acquireLock(`${path}.lock`);
+  const lock = await acquireLock(`${path}.lock`);
   try {
     // Write through a symlinked auth.json instead of replacing the link.
     const target = await realpath(path).catch(() => path);
+    // A temp file found here was left by a holder that lost this lock: removing it makes that
+    // holder's late rename fail rather than replace what was written since (as for the vault).
+    const temp = `${basename(target)}.tmp.`;
+    for (const name of await readdir(dirname(target)).catch(() => [])) if (name.startsWith(temp)) await rm(join(dirname(target), name), { force: true }).catch(() => {});
     const next = update(await readAuthForUpdate(target));
     if (!next) return false;
-    await writePrivateFile(target, `${JSON.stringify(next, null, 2)}\n`);
+    const lost = new Error(`This process lost the lock of ${path} (it was paused for over 30 seconds); nothing was written`);
+    if (!(await lock.held())) throw lost;
+    await writePrivateFile(target, `${JSON.stringify(next, null, 2)}\n`).catch((error: NodeJS.ErrnoException) => { throw error.code === "ENOENT" ? lost : error; });
     return true;
-  } finally { await release(); }
+  } finally { await lock.release(); }
 }
 
 export async function writeAuthEntry(path: string, name: string, key: string, opts: { overwrite?: boolean } = {}): Promise<{ ok: boolean; message: string }> {
@@ -1023,7 +1049,7 @@ export async function authEnvEntries(): Promise<Array<{ name: string; raw: strin
   const merged = await wiredEntries();
   const entries: Array<{ name: string; raw: string }> = [];
   for (const [name, entry] of Object.entries(merged)) {
-    if (!ENV_NAME_RE.test(name) || PROVIDER_KEYS.has(name)) continue;
+    if (!ENV_NAME_RE.test(name) || PROVIDER_KEYS.has(name) || isLoaderEnvName(name)) continue;
     const raw = authEntryRaw(entry);
     if (raw !== undefined) entries.push({ name, raw });
   }
@@ -1073,6 +1099,13 @@ export function indexValues(wired: Record<string, string> = {}): Record<string, 
 // (entries are newest first).
 const SESSION_INDEX_NAMES = new Set(["BW_SESSION", "LOCAL_VAULT_KEY", "LOCAL_VAULT_SESSION"]);
 export async function writeRedactIndex(values: Record<string, string>): Promise<RedactIndex> {
+  await mkdir(CONFIG_DIR, { recursive: true, mode: 0o700 });
+  // Read, merge and write as one step, so two commands at once each keep the other's entries.
+  const lock = await acquireLock(`${REDACT_INDEX_FILE}.lock`);
+  try { return await mergeRedactIndex(values); } finally { await lock.release(); }
+}
+
+async function mergeRedactIndex(values: Record<string, string>): Promise<RedactIndex> {
   const previous = await readRedactIndex();
   const index = buildRedactIndex(values, previous ?? undefined);
   const kept = new Map<string, number>();
@@ -1672,12 +1705,16 @@ async function openLocal(opts: SessionOptions = {}): Promise<LocalVault | null> 
   let key: Buffer | null = null;
   if (keyHasSessions(read.file.key.type) && !opts.unattended) {
     key = await readLocalSession(read.file.id);
-    if (!key && localOpen?.file.id === read.file.id) localOpen = null;
+    // Session files are anyone's to write: only a session that holds this vault's key keeps the cached vault open.
+    if (localOpen?.file.id === read.file.id && !(key && key.equals(localOpen.key))) localOpen = null;
   }
   if (localOpen && localOpen.stamp === read.stamp && localOpen.file.id === read.file.id && !opts.unattended) return localOpen;
-  key ??= await localKey(read.file, opts);
-  let data: VaultData | null;
-  try { data = openVault(read.file, key); } catch (error) { throw localFileError(error); }
+  let data: VaultData | null = null;
+  try {
+    // A session whose key does not open the vault was not made with it: it is no session.
+    if (key && !(data = openVault(read.file, key))) { await lockLocal(); key = null; }
+    if (!key) data = openVault(read.file, key = await localKey(read.file, opts));
+  } catch (error) { throw localFileError(error); }
   if (!data) throw localFileError(new VaultFormatError("not opened by its key"));
   localOpen = { file: read.file, key, data, stamp: read.stamp };
   return localOpen;

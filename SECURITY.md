@@ -40,7 +40,10 @@ the approval it asks for. Out of scope: a process already running as the user th
 ID sheet, rewrites keyshroud, its cached helper or tools on PATH to capture the next approval, or reads
 `vault.session` + `vault.token` during a session (Touch ID proves presence, not intent).
 
-Out of scope (documented limitations, see the README's *Security model*): an
+Out of scope (documented limitations, see the README's *Security model*): a
+program running as the user that puts an older `vault.json` back, or replaces a
+Touch ID vault with a new one made for the same Secure Enclave key (the check
+proves a file was sealed with its key, not that it is the latest or whose it is); an
 agent deliberately exfiltrating a value it was given (for example over the
 network, or after encoding it); secrets shorter than 6 characters; values the
 user prints with `get` or `env --shell` on purpose.

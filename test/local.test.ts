@@ -5,6 +5,8 @@ import { existsSync } from "node:fs";
 import { chmod, mkdir, readdir, readFile, stat, unlink, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
+import { randomBytes } from "node:crypto";
+import { sealSession } from "../src/vault.ts";
 import { CLI, NODE, item, runCli, runCliTtySteps, sandbox, writeAuth, type Sandbox } from "./helpers.ts";
 
 const TOKEN = "ghp_LOCAL0123456789abcdefXYZ";
@@ -357,6 +359,43 @@ test("machines that used bw keep it as the default; a new machine writes its cho
   assert.match((await runCli(box, ["status"], undefined, { KEYSHROUD_BACKEND: "local" })).stdout, /^backend=local/m);
 });
 
+test("lock in another process reaches a live MCP server on bw too", async () => {
+  const box = await sandbox([item("id-1", "Item A", "value-bbbb-2222")]);
+  await writeAuth(box, { A_TOKEN: "bw://Item A" });
+  const server = mcpServer(box);
+  try {
+    assert.match(await server.call("secrets_run", { command: "echo \"[$A_TOKEN]\"" }), /\[<redacted:A_TOKEN>\]/);
+    await unlink(join(box.dir, "keychain", "vaultwarden-master-password"));
+    assert.equal((await runCli(box, ["lock"])).stdout, "locked\n");
+    const after = await server.call("secrets_run", { command: "echo \"[${A_TOKEN:-unset}]\"" });
+    assert.match(after, /unresolved: A_TOKEN/);
+    assert.match(after, /\[unset\]/);
+  } finally { server.close(); }
+});
+
+test("a writer of env.json paused past 30 s never replaces what its successor wrote", async () => {
+  const box = await blank();
+  assert.equal((await add(box, "A_TOKEN", "Item A", "first-value-123")).code, 0);
+  const envJson = join(box.configDir, "env.json");
+  const out = await runScript(box, `${PATCH_FS}
+    let stalled = false;
+    patch("rename", async (real, from, to) => {
+      if (!stalled && String(from).includes("env.json.tmp.")) {
+        stalled = true;
+        const old = new Date(Date.now() - 40000);
+        await fsp.utimes(to + ".lock", old, old);
+        require("node:child_process").execFileSync(${JSON.stringify(NODE)}, [${JSON.stringify(CLI)}, "wire", "--env", "B_TOKEN", "--item", "Item A"], { stdio: "ignore" });
+      }
+      return real(from, to);
+    });
+    const core = await import(${CORE});
+    await core.writeAuthEntry(${JSON.stringify(envJson)}, "C_TOKEN", core.referenceFor("Item A", "local")).then(() => console.log("written"), (error) => console.log(error.message));
+  `);
+  assert.match(out, /lost the lock of .*env\.json .*nothing was written/);
+  assert.deepEqual(Object.keys(JSON.parse(await readFile(envJson, "utf8"))).sort(), ["A_TOKEN", "B_TOKEN"]);
+  assert.ok(!existsSync(`${envJson}.lock`) && !(await readdir(box.configDir)).some((name) => name.includes(".tmp.")));
+});
+
 test("a passphrase protects the vault where there is no keychain; lock and the session's end close it, in a live MCP server too", { skip: process.platform === "win32" }, async () => {
   const box = await blank();
   const env = { KEYSHROUD_VAULT_KEY: "passphrase" };
@@ -387,7 +426,14 @@ test("a passphrase protects the vault where there is no keychain; lock and the s
   try {
     assert.match(await server.call("secrets_run", { command: "echo \"[$A_TOKEN]\"" }), /\[<redacted:A_TOKEN>\]/);
     assert.equal((await runCli(box, ["lock"], undefined, env)).stdout, "locked\n");
+    // Session files made without the vault's key (anyone can write them) open nothing, not even
+    // the vault this server still holds in memory, and are removed.
+    const secret = randomBytes(32);
+    const forged = sealSession(JSON.parse(await readFile(vaultPath(box), "utf8")).id, null, secret, randomBytes(32));
+    await writeFile(join(box.configDir, "vault.session"), `${JSON.stringify(forged)}\n`);
+    await writeFile(join(box.configDir, "vault.token"), `${forged.id} ${secret.toString("hex")}\n`);
     const after = await server.call("secrets_run", { command: "echo \"[$A_TOKEN]\"" });
+    assert.ok(!existsSync(join(box.configDir, "vault.session")));
     assert.match(after, /unresolved: A_TOKEN \(The local vault is locked/);
     assert.doesNotMatch(after, /value-aaaa-1111/);
     assert.match(await server.call("vault_status"), /^status=locked backend=local/);

@@ -5,6 +5,30 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.10.3] - 2026-11-13
+
+Fixes from an independent review of 0.10.2 (`docs/security-review-2026-11-13-astra.md`).
+
+### Security
+- After `lock` (or a session's end), a process that still held a passphrase or Touch ID vault in
+  memory, such as an MCP server or pi, reopened it for session files that anyone could write: it
+  checked that the files were consistent, not that they held the vault's key. A cached vault now stays
+  open only under a session that holds its key, and a session that does not open the vault is removed.
+- `lock` in another process did not reach a running MCP server on Vaultwarden, which went on using
+  its own copy of the session and of the items for up to an hour. It now checks the session file
+  before each use.
+- The pi extension let a secret be wired to `NODE_OPTIONS`, `PATH` and the other variables that change
+  what programs load, and injected them. Those names are now refused there and never injected.
+- `inject` with two fields of one item added only the last to the hook index; two commands adding to
+  the index at once could drop each other's entries. Both keep every value now.
+- The Claude Code hook also masks a secret that a tool returns as a JSON number or as a property name.
+- A command that stalled for over 30 seconds while writing `env.json` or `auth.json` could replace
+  what another command had written since. It now stops with "lost the lock", as vault writes do.
+
+### Changed
+- README and SECURITY.md say what the vault's integrity check does not cover: an older copy put back,
+  and a Touch ID vault replaced by a new one made for the same Secure Enclave key.
+
 ## [0.10.2] - 2026-11-12
 
 ### Security

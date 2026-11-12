@@ -14,7 +14,7 @@ const NPM = "npm_FAKEabcdefghijklmnop";
 async function wired() {
   const box = await sandbox([
     item("id-1", "GitHub CLI token", GH, { fields: [{ name: "org", value: "acme-org" }] }),
-    item("id-2", "npm publish", NPM),
+    item("id-2", "npm publish", NPM, { fields: [{ name: "scope", value: "scope-fake-0123" }] }),
     item("id-3", "Dup", "dup-value-1"),
     item("id-4", "dup", "dup-value-2"),
   ]);
@@ -111,6 +111,10 @@ test("a value printed by get joins the hook index; old session tokens leave it",
   assert.equal((await runCli(box, ["get", "PLAIN"])).stdout, "not-a-secret-literal");
   const post = await runCli(box, ["hook", "claude", "post-tool-use"], JSON.stringify({ tool_response: { stdout: "org=acme-org not-a-secret-literal" } }));
   assert.equal(JSON.parse(post.stdout).hookSpecificOutput.updatedToolOutput.stdout, "org=<redacted:GitHub CLI token> not-a-secret-literal");
+  // Two fields of one item in a template are both covered.
+  await runCli(box, ["inject"], "{{ bw://npm publish }} {{ bw://npm publish/fields/scope }}");
+  const both = await runCli(box, ["hook", "claude", "post-tool-use"], JSON.stringify({ tool_response: { stdout: `${NPM} scope-fake-0123` } }));
+  assert.equal(JSON.parse(both.stdout).hookSpecificOutput.updatedToolOutput.stdout, "<redacted:bw://npm publish> <redacted:bw://npm publish/fields/scope>");
   const indexFile = join(box.configDir, "redact-index.json");
   const index = JSON.parse(await readFile(indexFile, "utf8")) as { entries: Array<{ name: string }> };
   const old = Array.from({ length: 9 }, (_, i) => ({ ...index.entries[0], name: "BW_SESSION", mac: String(i).repeat(32) }));
@@ -119,6 +123,16 @@ test("a value printed by get joins the hook index; old session tokens leave it",
   const after = JSON.parse(await readFile(indexFile, "utf8")) as { entries: Array<{ name: string; mac: string }> };
   assert.equal(after.entries.filter((entry) => entry.name === "BW_SESSION").length, 4);
   assert.ok(after.entries.some((entry) => entry.name === "GitHub CLI token"));
+});
+
+test("commands that add to the hook index at the same time keep each other's entries", async () => {
+  const values = Array.from({ length: 6 }, (_, i) => `race-value-${i}-0123456789`);
+  const box = await sandbox(values.map((value, i) => item(`id-${i}`, `Race ${i}`, value)), { locked: false });
+  await runCli(box, ["status"]);
+  const got = await Promise.all(values.map((_, i) => runCli(box, ["get", `bw://Race ${i}`])));
+  assert.deepEqual(got.map((result) => result.stdout), values);
+  const post = await runCli(box, ["hook", "claude", "post-tool-use"], JSON.stringify({ tool_response: { stdout: values.join(" ") } }));
+  assert.equal(JSON.parse(post.stdout).hookSpecificOutput.updatedToolOutput.stdout, values.map((_, i) => `<redacted:Race ${i}>`).join(" "));
 });
 
 test("children never receive the vault session or unlock credentials", async () => {
@@ -280,6 +294,7 @@ test("env files and wiring cannot set variables that change what programs load",
   await writeAuth(box, { GH_TOKEN: { type: "api_key", key: "!bw get password 'GitHub CLI token'" }, BASH_ENV: { type: "api_key", key: "!bw get password 'npm publish'" } });
   const run = await runCli(box, ["run", "--", "sh", "-c", "echo bash_env=${BASH_ENV:-unset}"]);
   assert.match(run.stdout, /bash_env=unset/);
+  assert.doesNotMatch((await runCli(box, ["env"])).stdout, /BASH_ENV/);
 });
 
 const DOTENV = [
@@ -430,6 +445,14 @@ test("Claude Code hooks: session-start writes the index, post-tool-use redacts",
   assert.equal(clean.stdout, "");
   const broken = await runCli(box, ["hook", "claude", "post-tool-use"], "not json");
   assert.equal(broken.code, 0);
+});
+
+test("the hook masks a secret of digits returned as a JSON number or a property name", async () => {
+  const box = await sandbox([item("id-1", "Digits", "123456789012")]);
+  await writeAuth(box, { PIN: "bw://Digits" });
+  await runCli(box, ["hook", "claude", "session-start"], "{}");
+  const shaped = await runCli(box, ["hook", "claude", "post-tool-use"], JSON.stringify({ tool_response: { count: 123456789012, other: 7, "123456789012": "present" } }));
+  assert.deepEqual(JSON.parse(shaped.stdout).hookSpecificOutput.updatedToolOutput, { count: "<redacted:PIN>", other: 7, "<redacted:PIN>": "present" });
 });
 
 test("MCP secrets_request stores the value from a native dialog", async () => {
