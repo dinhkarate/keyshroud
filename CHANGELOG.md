@@ -5,6 +5,8 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.10.2] - 2026-11-12
+
 ### Security
 - A secret stored with a trailing line break or spaces was masked only when printed with them: a shell
   that expands `$NAME` drops them, and the value then showed in the clear. It is now masked without its
