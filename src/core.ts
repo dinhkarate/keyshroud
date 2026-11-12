@@ -5,7 +5,7 @@ import { createHash, randomBytes, randomUUID, scrypt, timingSafeEqual, type Scry
 import { existsSync, readFileSync } from "node:fs";
 import { appendFile, chmod, mkdir, mkdtemp, open, readdir, readFile, realpath, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, delimiter, join, dirname } from "node:path";
+import { basename, delimiter, join, dirname, isAbsolute, resolve as absolutePath } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -961,7 +961,8 @@ async function acquireLock(dir: string): Promise<{ held: () => Promise<boolean>;
 // The lock of one file. Temp files found on taking it were left by a holder that lost it:
 // removing them makes its late rename fail rather than replace the file (see writeVaultFile and
 // writePrivateFile). A `.ref` among them names where such a holder's new text waits instead
-// (updateFile): that goes too.
+// (updateFile): that goes too, and a note that cannot be followed stops the writer, since it is
+// the only record of a write that may still land.
 async function withFileLock<T>(file: string, dir: string, fn: (held: () => Promise<boolean>) => Promise<T>): Promise<T> {
   const lock = await acquireLock(dir);
   try {
@@ -969,8 +970,12 @@ async function withFileLock<T>(file: string, dir: string, fn: (held: () => Promi
     for (const name of await readdir(dirname(file)).catch(() => [])) {
       if (!name.startsWith(temp)) continue;
       const left = join(dirname(file), name);
-      const staged = name.endsWith(".ref") ? await readFile(left, "utf8").catch(() => "") : "";
-      if (/^pending\.[0-9a-f]+$/.test(basename(staged)) && dirname(staged).endsWith(".lock")) await rm(staged, { force: true }).catch(() => {});
+      // Gone already: its writer finished meanwhile.
+      const staged = name.endsWith(".ref") ? await readFile(left, "utf8").catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return null; throw error; }) : null;
+      if (staged !== null) {
+        if (!(isAbsolute(staged) && /^pending\.[0-9a-f]+$/.test(basename(staged)) && dirname(staged).endsWith(".lock"))) throw new Error(`${left} does not name a pending write; remove it once no ${BRAND.bin} command is running`);
+        await rm(staged, { force: true });
+      }
       await rm(left, { force: true }).catch(() => {});
     }
     return await fn(lock.held);
@@ -1010,7 +1015,9 @@ async function readAuthForUpdate(path: string): Promise<Record<string, unknown>>
 //   the text waits (it may have come by another link): it removes both before it reads.
 // A link to a file on another filesystem cannot be renamed into from here: its text waits beside
 // the target, as a temp file the next keyshroud writer removes (see README, Known limits).
-async function updateFile<T>(path: string, fn: (target: string, write: (content: string) => Promise<void>) => Promise<T>): Promise<T> {
+async function updateFile<T>(given: string, fn: (target: string, write: (content: string) => Promise<void>) => Promise<T>): Promise<T> {
+  // Absolute, since the note of where a write waits is read by commands started elsewhere.
+  const path = absolutePath(given);
   await mkdir(dirname(path), { recursive: true });
   const outer = await acquireLock(`${path}.lock`);
   try {
@@ -1025,7 +1032,8 @@ async function updateFile<T>(path: string, fn: (target: string, write: (content:
         // Nothing is put into a directory that has become someone else's lock.
         if (!(await held())) throw lost;
         try {
-          await writeFile(note, staged, { mode: 0o600, flag: "wx" });
+          // Whole or not there: a note is never found half written.
+          await writePrivateFile(note, staged);
           await writeFile(staged, content, { encoding: "utf8", mode: 0o600, flag: "wx" });
           if (!(await held())) throw lost;
           await rename(staged, target);

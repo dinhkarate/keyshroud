@@ -414,7 +414,7 @@ for (const stage of ["writeFile", "rename"]) test(`a writer of env.json paused p
   const out = await runScript(box, `${PATCH_FS}
     let stalled = false;
     patch(${JSON.stringify(stage)}, async (real, file, ...rest) => {
-      if (!stalled && /env\.json\.(tmp|lock.pending)\./.test(String(file))) {
+      if (!stalled && String(file).includes(${JSON.stringify(stage === "rename" ? "env.json.lock" : "env.json.tmp.")})) {
         stalled = true;
         const old = new Date(Date.now() - 40000);
         for (const lock of ${JSON.stringify([`${envJson}.lock`, `${envJson}.keyshroud.lock`])}) await fsp.utimes(lock, old, old);
@@ -490,14 +490,22 @@ test("a writer paused before its rename is voided by the next writer through ano
         stalled = true;
         const old = new Date(Date.now() - 40000);
         await fsp.utimes(${JSON.stringify(`${real}.keyshroud.lock`)}, old, old);
-        require("node:child_process").execFileSync(process.execPath, ["--input-type=module", "-e", ${JSON.stringify(next)}], { stdio: "ignore" });
+        require("node:child_process").execFileSync(process.execPath, ["--input-type=module", "-e", ${JSON.stringify(next)}], { stdio: "ignore", cwd: "/" });
       }
       return real(from, to);
     });
     const core = await import(${CORE});
-    await core.writeAuthEntry(${JSON.stringify(links[0])}, "A_TOKEN", core.referenceFor("Item A", "local")).then(() => console.log("written"), (error) => console.log(error.message));
+    // A relative path, and a next writer started in another directory: it still finds what waits.
+    process.chdir(${JSON.stringify(box.dir)});
+    await core.writeAuthEntry("a/auth.json", "A_TOKEN", core.referenceFor("Item A", "local")).then(() => console.log("written"), (error) => console.log(error.message));
   `);
   assert.match(out, /lost the lock of .*auth\.json .*nothing was written/);
+  assert.deepEqual(Object.keys(JSON.parse(await readFile(real, "utf8"))), ["B_TOKEN"]);
+  // A note that names no pending write is the only record of one: nothing is written past it.
+  await writeFile(`${real}.tmp.0123456789ab.ref`, "pending.0123456789ab");
+  const noted = await runScript(box, `const core = await import(${CORE}); await core.writeAuthEntry(${JSON.stringify(links[1])}, "D_TOKEN", "x").then(() => console.log("written"), (error) => console.log(error.message));`);
+  assert.match(noted, /real-auth\.json\.tmp\.0123456789ab\.ref does not name a pending write/);
+  await unlink(`${real}.tmp.0123456789ab.ref`);
   assert.deepEqual(Object.keys(JSON.parse(await readFile(real, "utf8"))), ["B_TOKEN"]);
   // The rename from inside the lock is refused across filesystems: the text goes by a temp file beside the target.
   const crossed = await runScript(box, `${PATCH_FS}
