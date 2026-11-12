@@ -19,7 +19,7 @@ const TOOLS = [
   {
     name: "secrets_list",
     description: "List the names of secrets wired for this machine. Never returns values.",
-    inputSchema: { type: "object", properties: { env_file: { type: "string", description: "Optional dotenv file of local:// or bw:// references to include" } } },
+    inputSchema: { type: "object", properties: { env_file: { type: "string", description: `Optional dotenv file of ${BRAND.refScheme}:// or bw:// references to include` } } },
   },
   {
     name: "secrets_run",
@@ -31,7 +31,7 @@ const TOOLS = [
         command: { type: "string", description: "Shell command run with /bin/sh -c" },
         cwd: { type: "string", description: "Working directory" },
         only: { type: "array", items: { type: "string" }, description: "Inject only these names" },
-        env_file: { type: "string", description: "Dotenv file of local:// or bw:// references to add" },
+        env_file: { type: "string", description: `Dotenv file of ${BRAND.refScheme}:// or bw:// references to add` },
         timeout_ms: { type: "number", description: "Kill the command after this many milliseconds (default 120000)" },
       },
     },

@@ -5,6 +5,15 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-12
+
+### Changed
+- Local vault items are now referenced as `keyshroud://Item` (`keyshroud://Item/notes`,
+  `{{ keyshroud://Item }}` in templates). Everything keyshroud writes uses it: wiring, `.env.refs` from
+  `import`, `list`, `rm` and messages. `local://Item`, the first spelling, is still read everywhere, so
+  existing wiring and committed `.env.refs` files keep working unchanged. The backend is still called
+  `local` (`--to local`, `KEYSHROUD_BACKEND=local`).
+
 ## [0.9.5] - 2026-11-11
 
 ### Fixed

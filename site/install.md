@@ -17,7 +17,7 @@ the **user** must run it. Report each result in one line.
 - Never run `keyshroud get`, `bw get`, `bw unlock`, or `bw list` yourself. They
   print values or unlock a vault outside keyshroud's masking.
 - Never print, echo, or log a secret value. Use names (`GH_TOKEN`) and
-  references (`local://GitHub token`) only.
+  references (`keyshroud://GitHub token`) only.
 
 ## 1. Check prerequisites
 
@@ -150,7 +150,7 @@ bw config server https://vault.example.com
 
 bw login
 
-# New items go to Vaultwarden from now on (local:// items keep working)
+# New items go to Vaultwarden from now on (keyshroud:// items keep working)
 mkdir -p ~/.config/keyshroud && echo bw > ~/.config/keyshroud/backend
 
 # Unlock for 30 minutes (asks for the master password; keyshroud does not store it)
@@ -184,7 +184,7 @@ yourself.
   hidden-input dialog on the user's desktop; the user pastes the value there.
 - **Move an existing `.env` into the vault:** `keyshroud import` shows a dry
   run with names only; `keyshroud import --yes` stores the values and writes a
-  commit-safe `.env.refs` file of `local://` (or `bw://`) references.
+  commit-safe `.env.refs` file of `keyshroud://` (or `bw://`) references.
 - **Run a command that needs secrets:** `keyshroud run -- <command>` (or the
   `secrets_run` MCP tool). Values are injected into the command's environment
   and masked as `<redacted:NAME>` in its output, even when it fails.

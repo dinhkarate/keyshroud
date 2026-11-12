@@ -50,7 +50,7 @@ webhooks, databases. The usual options are bad:
 
 **keyshroud fixes this:**
 
-- ✅ **Names, not values** — agents see `GH_TOKEN` and `local://GitHub token`, never the token
+- ✅ **Names, not values** — agents see `GH_TOKEN` and `keyshroud://GitHub token`, never the token
 - ✅ **Masked output** — any value that reaches stdout/stderr becomes `<redacted:GH_TOKEN>`
 - ✅ **Nothing to set up** — an encrypted vault file with its key in your OS keychain; no account, no server
 - ✅ **Sync if you want it** — Vaultwarden on a $5 VPS or a Raspberry Pi, or Bitwarden, for several machines
@@ -64,12 +64,12 @@ webhooks, databases. The usual options are bad:
 | 🔐 **Local vault** | An AES-256-GCM file whose key is in the macOS keychain, the Linux Secret Service or Windows DPAPI (a passphrase where there is none). No account, no server, no `bw`. |
 | 🪝 **Agent hooks** | The pi/omp `tool_result` hook redacts every tool result, failed ones included. Claude Code's `PostToolUse` hook redacts every *successful* tool result (Bash, Read, Grep, MCP…) — see [limits](#security-model). |
 | 🔌 **MCP server** | For clients without a shell: `keyshroud mcp` gives them `secrets_run`, `secrets_list`, `secrets_request`, `vault_status`. No tool ever returns a value. |
-| 🔗 **Committable references** | `local://item`, `bw://item`, `bw://item/username`, `bw://item/fields/name`, `bw://item/totp` in `.env.refs` files and templates: names, not values. |
+| 🔗 **Committable references** | `keyshroud://item`, `bw://item`, `bw://item/username`, `bw://item/fields/name`, `bw://item/totp` in `.env.refs` files and templates: names, not values. |
 | ⌨️ **Paste-to-create** | New secrets go through a masked prompt in the user's terminal or a masked popup in pi — never through the chat. |
-| 📄 **`inject`** | Render `{{ local://… }}` and `{{ bw://… }}` templates into `0600` config files for tools that can't read env vars (`.npmrc`, kubeconfig). |
+| 📄 **`inject`** | Render `{{ keyshroud://… }}` and `{{ bw://… }}` templates into `0600` config files for tools that can't read env vars (`.npmrc`, kubeconfig). |
 | 🔎 **`scan`** | Find vault values that leaked into your working tree (pre-commit friendly). |
 | ⚡ **Fast** | The local vault answers in milliseconds, offline. With Vaultwarden: one batched `bw list items` per session instead of one `bw get` (~3 s) per secret. |
-| 🔄 **Optional sync** | Vaultwarden on a $5 VPS or a Raspberry Pi, or Bitwarden, when the same secrets should reach several machines. `local://` and `bw://` references work side by side. |
+| 🔄 **Optional sync** | Vaultwarden on a $5 VPS or a Raspberry Pi, or Bitwarden, when the same secrets should reach several machines. `keyshroud://` and `bw://` references work side by side. |
 | 🧾 **Audit log** | `audit.jsonl` records which *names* were used, when, by which command. Never values. |
 
 ## Supported agents
@@ -89,7 +89,7 @@ clients that cannot run commands.
 ## Use cases
 
 **"Claude Code keeps reading my `.env`."** Run `keyshroud import` to move the values into
-the vault and write a `.env.refs` file with lines like `GH_TOKEN=local://myapp GH_TOKEN`, then start
+the vault and write a `.env.refs` file with lines like `GH_TOKEN=keyshroud://myapp GH_TOKEN`, then start
 the agent with `keyshroud run --env-file .env.refs -- claude`. The plugin's hooks mask anything that still slips into a tool result.
 
 **"I already self-host Vaultwarden."** Log `bw` in to it and run `keyshroud doctor`: a machine with
@@ -180,7 +180,7 @@ npm install -g @bitwarden/cli
 bw config server https://vault.example.com
 bw login
 
-# 2. Make it the default for new items (local:// items keep working)
+# 2. Make it the default for new items (keyshroud:// items keep working)
 mkdir -p ~/.config/keyshroud && echo bw > ~/.config/keyshroud/backend
 
 # 3. Unlock for 30 minutes (asks for the master password, which is not stored)
@@ -193,8 +193,8 @@ keyshroud doctor
 keyshroud picks the default once per machine and writes it to `~/.config/keyshroud/backend`:
 Vaultwarden when it finds a `bw` login or anything keyshroud 0.7 left behind, so upgrades change
 nothing; the local vault otherwise. `KEYSHROUD_BACKEND=local|bw` overrides it, and `keyshroud setup`
-switches to Vaultwarden by itself. References name their vault, so `local://…` and `bw://…` items work
-side by side, and `--item local://Name` or `--item bw://Name` picks one for a single item.
+switches to Vaultwarden by itself. References name their vault, so `keyshroud://…` and `bw://…` items work
+side by side, and `--item keyshroud://Name` or `--item bw://Name` picks one for a single item.
 
 keyshroud never stores the master password unless you do. When Vaultwarden is locked
 and a command needs a secret, it asks: a masked prompt in a terminal, a native dialog
@@ -249,7 +249,7 @@ keyshroud migrate --yes                          # copy them; references keep wo
               │  vault.json ◄── key: keychain · Secret Service · DPAPI · passphrase   │
               │      │                                                                │
               │      ▼                                                                │
- Vaultwarden ◄┼─bw─ keyshroud ── resolves local:// and bw:// refs ──► command's env   │
+ Vaultwarden ◄┼─bw─ keyshroud ── resolves keyshroud:// and bw:// refs ──► command's env   │
  (optional)   │      ▲                                                   │            │
               │      └──── redactor ◄──── stdout / stderr ◄──────────────┘            │
               │                │ <redacted:NAME>                                      │
@@ -258,7 +258,7 @@ keyshroud migrate --yes                          # copy them; references keep wo
                   agent transcript / LLM provider
 ```
 
-1. **Wiring.** A secret is wired by *name*: `GH_TOKEN → local://GitHub token` (or
+1. **Wiring.** A secret is wired by *name*: `GH_TOKEN → keyshroud://GitHub token` (or
    `bw://GitHub CLI token`). Wiring lives in `~/.config/keyshroud/env.json` and in project `.env.refs`
    files. When pi or omp is installed (`~/.pi/agent`, `~/.omp/agent` exists), a name is also
    written to its `auth.json`, where pi/omp run the `!keyshroud get '…'` entries on their own
@@ -267,7 +267,7 @@ keyshroud migrate --yes                          # copy them; references keep wo
    ends after 30 minutes. Vaultwarden: keyshroud asks for the master password (or reads one you
    stored in the OS keychain); the session token is cached in `~/.config/keyshroud/session`
    (`0600`) and locked again after 30 minutes.
-3. **Resolve.** `local://` references are read from the vault file; `bw://` references resolve
+3. **Resolve.** `keyshroud://` references are read from the vault file; `bw://` references resolve
    from one `bw list items` snapshot held in memory for `KEYSHROUD_CACHE_TTL_MS` (default 1 h).
 4. **Inject.** Values go into the child process environment — never into argv
    or tool results (`inject` writes `0600` files only when you ask it to).
@@ -401,7 +401,7 @@ OpenCode: `opencode mcp add keyshroud -- keyshroud mcp`.
 ## CLI reference
 
 ```text
-keyshroud get <ENV_NAME | local://ref | bw://ref>   print one value (for scripts; not for agents)
+keyshroud get <ENV_NAME | keyshroud://ref | bw://ref>   print one value (for scripts; not for agents)
 keyshroud run [--env-file F]... [--only A,B] [--no-auth] [--mask|--no-mask] -- <cmd>
 keyshroud inject [-i template] [-o out] [--force]
 keyshroud redact < log.txt
@@ -427,7 +427,7 @@ keyshroud api-key --item ITEM
 keyshroud link-cli [--dir DIR] [--force]
 ```
 
-`--item` takes a name (stored in the default vault), `local://Name` or `bw://Name`.
+`--item` takes a name (stored in the default vault), `keyshroud://Name` or `bw://Name`.
 
 `rm` prints what it would do (delete a local item permanently, or move a bw item to the bw trash, and
 which variables it unwires) until you add `--yes`. With `--yes` it needs a terminal, or
@@ -449,7 +449,7 @@ value with `--stdin`.
 `*_TOKEN` or `*_KEY`, or by value, such as `sk-…` or a URL with a password), and prints a plan of
 names only. Nothing is written until you add `--yes`: it then creates one vault item per secret,
 named `<prefix> NAME` (prefix defaults to the directory name), reads each value back to verify it,
-and writes `.env.refs` (`NAME=local://<prefix> NAME`) with comments and non-secret lines kept. Re-running reuses items that already
+and writes `.env.refs` (`NAME=keyshroud://<prefix> NAME`) with comments and non-secret lines kept. Re-running reuses items that already
 hold the same value and stops on a conflicting one. `--replace` rewrites the source file in place
 instead (atomically, no backup copy). Multiline values, `${VAR}` expansion and duplicate keys are
 rejected with the line number, never the value.
@@ -468,15 +468,16 @@ missing or item name ambiguous · `5` refusing to overwrite existing state.
 
 | Reference | Resolves to |
 |---|---|
-| `local://GitHub token` | the value stored in the local vault |
-| `local://GitHub token/notes` | its notes (`id` also works) |
-| `!keyshroud get 'local://Item'` | the env.json / auth.json form keyshroud writes for local items |
+| `keyshroud://GitHub token` | the value stored in the local vault |
+| `keyshroud://GitHub token/notes` | its notes (`id` also works) |
+| `!keyshroud get 'keyshroud://Item'` | the env.json / auth.json form keyshroud writes for local items |
 | `bw://GitHub CLI token` | login password |
 | `bw://GitHub CLI token/username` | login username (`notes`, `uri`, `id` also work) |
 | `bw://Sentry/fields/dsn` | custom field `dsn` |
 | `bw://AWS root/totp` | current TOTP code |
-| `bw://a%2Fb` | item named `a/b` (`local://a%2Fb` alike) |
+| `bw://a%2Fb` | item named `a/b` (`keyshroud://a%2Fb` alike) |
 | `!bw get password 'Item'` | legacy auth.json form, still supported |
+| `local://GitHub token` | the first spelling of `keyshroud://`, still read the same way |
 
 Item lookup is case-insensitive by name or exact by id. Duplicate names fail
 closed (exit `4`) instead of guessing; the local vault refuses to create one.

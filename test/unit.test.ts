@@ -21,7 +21,14 @@ test("parseRef keeps legacy auth.json shell forms working", () => {
 });
 
 test("formatRef round-trips", () => {
-  for (const raw of ["bw://a%2Fb", "bw://Item/notes", "bw://Item/fields/x%20y"]) assert.equal(formatRef(parseRef(raw)!), raw);
+  for (const raw of ["bw://a%2Fb", "bw://Item/notes", "bw://Item/fields/x%20y", "keyshroud://a%2Fb", "keyshroud://Item/fields/x%20y"]) assert.equal(formatRef(parseRef(raw)!), raw);
+});
+
+test("keyshroud:// and local:// both name local vault items; local:// is written as keyshroud://", () => {
+  for (const raw of ["keyshroud://Item/notes", "local://Item/notes"]) assert.deepEqual(parseRef(raw), { item: "Item", field: "notes", scheme: "local" });
+  assert.equal(formatRef(parseRef("local://a%2Fb")!), "keyshroud://a%2Fb");
+  assert.deepEqual(parseRef("!keyshroud get 'local://Item'"), { item: "Item", field: "password", scheme: "local" });
+  for (const raw of ["keyshroud:///x", "local:///var/data"]) assert.equal(parseRef(raw), null);
 });
 
 test("legacyRefFor refuses quotes that would break the shell form", () => {

@@ -995,7 +995,7 @@ export async function resolveEntries(entries: Array<{ name: string; raw: string 
 // references and literals are allowed; `!command` values would be code execution.
 export async function envFileEntries(path: string): Promise<Array<{ name: string; raw: string }>> {
   return parseEnvFile(await readFile(path, "utf8")).map(({ name, value }) => {
-    if (value.trim().startsWith("!")) throw new Error(`${path}: ${name} uses a shell command; env files accept only bw:// references, local:// references and literals`);
+    if (value.trim().startsWith("!")) throw new Error(`${path}: ${name} uses a shell command; env files accept only bw:// references, ${BRAND.refScheme}:// references and literals`);
     if (isLoaderEnvName(name)) throw new Error(`${path}: ${name} changes what programs load or run; env files cannot set it`);
     return { name, raw: value };
   });
@@ -1445,13 +1445,13 @@ async function usesBw(): Promise<boolean> {
   return bwInUse || Boolean(process.env.BW_SESSION?.trim()) || (await defaultBackend()) === "bw";
 }
 
-// `local://Name` or `bw://Name` picks the backend; a plain name uses the default one.
+// `keyshroud://Name` (or `local://Name`) or `bw://Name` picks the backend; a plain name uses the default one.
 export async function parseItemArg(arg: string): Promise<{ backend: BackendName; name: string }> {
-  for (const scheme of ["local", "bw"] as const) {
-    if (!arg.startsWith(`${scheme}://`)) continue;
+  for (const [prefix, backend] of [[`${BRAND.refScheme}://`, "local"], ["local://", "local"], ["bw://", "bw"]] as const) {
+    if (!arg.startsWith(prefix)) continue;
     const ref = parseRef(arg);
-    if (!ref || ref.field !== "password") throw new Error(`An item is a name, or ${scheme}://NAME`);
-    return { backend: scheme, name: ref.item };
+    if (!ref || ref.field !== "password") throw new Error(`An item is a name, or ${prefix}NAME`);
+    return { backend, name: ref.item };
   }
   return { backend: await defaultBackend(), name: arg };
 }

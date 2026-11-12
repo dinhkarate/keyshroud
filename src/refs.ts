@@ -3,7 +3,8 @@
 //   bw://<item>                 -> login password
 //   bw://<item>/<field>         -> password | username | notes | totp | uri | id
 //   bw://<item>/fields/<name>   -> custom field
-//   local://<item>[/...]        -> the same, from the local vault (the bare form is the item's value)
+//   keyshroud://<item>[/...]    -> the same, from the local vault (the bare form is the item's value);
+//                                  local://<item> is the older spelling and still reads the same
 //
 // Segments are percent-decoded, so an item named "a/b" is written bw://a%2Fb.
 // The legacy shell forms `!bw get <field> '<item>'` and `!…/bw-get '<item>'`
@@ -27,8 +28,14 @@ function decode(segment: string): string {
   try { return decodeURIComponent(segment); } catch { throw new Error("Invalid percent-encoding in secret reference"); }
 }
 
+// keyshroud:// names local vault items; local:// (its first spelling) is still read.
 // `local:///x` is not a reference: a value like `local:///var/data` predates local://.
-function isLocalUrl(value: string): boolean { return value.startsWith("local://") && !value.startsWith("local:///"); }
+const LOCAL_SCHEMES = [BRAND.refScheme, "local"];
+function localPrefix(value: string): string | null {
+  for (const scheme of LOCAL_SCHEMES) if (value.startsWith(`${scheme}://`) && !value.startsWith(`${scheme}:///`)) return `${scheme}://`;
+  return null;
+}
+function isLocalUrl(value: string): boolean { return localPrefix(value) !== null; }
 
 export function isRef(raw: string): boolean {
   return raw.startsWith("bw://") || isLocalUrl(raw) || LEGACY_RE.test(raw) || SELF_GET_RE.test(raw);
@@ -42,15 +49,16 @@ export function parseRef(raw: string): SecretRef | null {
   const legacy = LEGACY_RE.exec(value);
   if (legacy) return { item: legacy[2], field: (legacy[1] as RefField | undefined) ?? "password" };
   const self = SELF_GET_RE.exec(value);
-  // Only a bw:// or local:// reference inside: anything else (a variable name) would ask auth.json again.
+  // Only a bw:// or keyshroud:// reference inside: anything else (a variable name) would ask auth.json again.
   if (self) return parseUrlRef(self[1].trim());
   return parseUrlRef(value);
 }
 
 function parseUrlRef(value: string): SecretRef | null {
-  const scheme = value.startsWith("bw://") ? "bw" : isLocalUrl(value) ? "local" : null;
+  const local = localPrefix(value);
+  const scheme = value.startsWith("bw://") ? "bw" : local ? "local" : null;
   if (!scheme) return null;
-  const [itemPart, ...rest] = value.slice(`${scheme}://`.length).split("/");
+  const [itemPart, ...rest] = value.slice(local?.length ?? "bw://".length).split("/");
   const item = decode(itemPart ?? "");
   if (!item) throw new Error("Secret reference has no item name");
   const ref = (field: SecretRef["field"]): SecretRef => scheme === "local" ? { item, field, scheme } : { item, field };
@@ -65,7 +73,7 @@ function parseUrlRef(value: string): SecretRef | null {
 }
 
 export function formatRef(ref: SecretRef): string {
-  const base = `${ref.scheme ?? "bw"}://${encodeURIComponent(ref.item)}`;
+  const base = `${ref.scheme ? BRAND.refScheme : "bw"}://${encodeURIComponent(ref.item)}`;
   if (typeof ref.field === "object") return `${base}/fields/${encodeURIComponent(ref.field.custom)}`;
   return ref.field === "password" ? base : `${base}/${ref.field}`;
 }
@@ -74,7 +82,7 @@ export function formatRef(ref: SecretRef): string {
 // that would end it early are encoded (a path, a quote, an env-file comment, a
 // {{ }} placeholder), so `bw://My item` reads as it did before local://.
 export function refFor(itemName: string, scheme: "bw" | "local" = "bw"): string {
-  return `${scheme}://${itemName.replace(/[%/'#}]/g, (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`)}`;
+  return `${scheme === "local" ? BRAND.refScheme : "bw"}://${itemName.replace(/[%/'#}]/g, (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`)}`;
 }
 
 // auth.json keeps the legacy shell form so pi/omp can still resolve the entry

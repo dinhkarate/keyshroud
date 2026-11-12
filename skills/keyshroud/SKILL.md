@@ -53,20 +53,20 @@ masked automatically when not attached to a terminal. MCP: `secrets_run`.
 ## References (safe to commit)
 
 ```
-local://<item>              value in the local vault (also: /notes, /id)
+keyshroud://<item>              value in the local vault (also: /notes, /id)
 bw://<item>                 Vaultwarden login password
 bw://<item>/username        also: notes, totp, uri, id
 bw://<item>/fields/<name>   custom field
 ```
-Percent-encode `/` in item names (`local://a%2Fb`). A project's `.env.refs`:
+Percent-encode `/` in item names (`keyshroud://a%2Fb`). A project's `.env.refs`:
 ```dotenv
-GH_TOKEN=local://GitHub CLI token
+GH_TOKEN=keyshroud://GitHub CLI token
 DATABASE_URL=bw://Prod DB/fields/url
 LOG_LEVEL=debug
 ```
 
 Config files that cannot read env vars: `keyshroud inject -i config.tpl -o config`
-renders `{{ local://item }}` and `{{ bw://item/field }}` placeholders into a 0600 file. Add the output to
+renders `{{ keyshroud://item }}` and `{{ bw://item/field }}` placeholders into a 0600 file. Add the output to
 `.gitignore`.
 
 ## Before committing

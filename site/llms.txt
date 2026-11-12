@@ -9,7 +9,7 @@ Key facts for agents:
 - Run secret-using commands as `keyshroud run -- <command>`. Output is masked even when the command fails. Agents with a shell use the CLI; the `secrets_run` MCP tool is for clients without one.
 - Never ask the user to paste a secret into chat. To store one, run `keyshroud add --env NAME --item "Item"` or call `secrets_request`; the user types the value into a hidden-input dialog or terminal prompt.
 - Never run `keyshroud get`, `bw get`, or `bw unlock`, and never read a vault password, passphrase or key from the keychain.
-- Projects commit `.env.refs` files with references like `GH_TOKEN=local://GitHub token` (or `bw://…` for Vaultwarden); `keyshroud import` converts an existing `.env` (names-only dry run by default).
+- Projects commit `.env.refs` files with references like `GH_TOKEN=keyshroud://GitHub token` (or `bw://…` for Vaultwarden); `keyshroud import` converts an existing `.env` (names-only dry run by default).
 - MCP server (for clients without a shell): `keyshroud mcp` (stdio). Tools: `secrets_run`, `secrets_list`, `secrets_request`, `vault_status`. None returns a secret value.
 - Requirements: Node.js 18.19+. The first `keyshroud add` creates the local vault (key in the macOS keychain, Linux Secret Service or Windows DPAPI; a passphrase where none works; on a Mac, optionally Touch ID through the Secure Enclave with `KEYSHROUD_VAULT_KEY=secure-enclave`). `keyshroud list` shows item names and wiring; `keyshroud rm` and `keyshroud rekey` are for the user to run. Vaultwarden or Bitwarden is optional, through the Bitwarden CLI (`bw`).
 

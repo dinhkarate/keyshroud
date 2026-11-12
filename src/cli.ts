@@ -18,17 +18,17 @@ import type { VaultKeyType } from "./vault.ts";
 const usage = `Usage: ${BRAND.bin} <command> [options]
 
 Secrets
-  get <ENV_NAME | local://ref | bw://ref>
+  get <ENV_NAME | ${BRAND.refScheme}://ref | bw://ref>
                                    Print one resolved value to stdout
   run [--env-file F]... [--only A,B] [--no-auth] [--mask|--no-mask] -- <cmd> [args]
                                    Run a command with secrets injected (alias: exec)
   inject [-i template] [-o out] [--force]
-                                   Render {{ local://ref }} and {{ bw://ref }} placeholders
+                                   Render {{ ${BRAND.refScheme}://ref }} and {{ bw://ref }} placeholders
   redact                           Copy stdin to stdout with vault secrets masked
   scan [paths...]                  Find vault secret values in files (exit 1 on leaks)
   env [--shell]                    List wired names (or print shell exports)
   add --env NAME --item ITEM [--notes TEXT] [--target pi|omp|both] [--stdin|--dialog]
-                                   ITEM is a name (default backend), local://NAME or bw://NAME
+                                   ITEM is a name (default backend), ${BRAND.refScheme}://NAME or bw://NAME
   import [--from F|-] [--out F] [--prefix P] [--only A,B] [--skip A,B] [--yes] [--replace] [--force]
                                    Move secrets from a .env into the vault and write .env.refs
                                    (dry run unless --yes; prints names only)
@@ -186,7 +186,7 @@ async function inject(args: string[]): Promise<void> {
   const input = valueAfter(args, "-i");
   const output = valueAfter(args, "-o");
   const template = input ? await readFile(input, "utf8") : await readStdin();
-  const pattern = /\{\{\s*((?:bw|local):\/\/[^\s}]+(?:\s+[^\s}]+)*?)\s*\}\}/g;
+  const pattern = new RegExp(`\\{\\{\\s*((?:bw|${BRAND.refScheme}|local)://[^\\s}]+(?:\\s+[^\\s}]+)*?)\\s*\\}\\}`, "g");
   const refs = [...new Set([...template.matchAll(pattern)].map((match) => match[1]))];
   let vaultError = "";
   try { await core.ensureUnlocked(refs, { prompt: true }); } catch (error) { vaultError = error instanceof Error ? error.message : String(error); }
@@ -326,7 +326,7 @@ async function setupCommand(args: string[]): Promise<void> {
   await core.rememberAccount(email, server);
   console.log(`${BRAND.name} now keeps its own bw login in ${core.OWN_BW_DIR}; your personal bw login is untouched.`);
   await core.rememberBackend("bw");
-  if (existsSync(core.VAULT_FILE)) console.log("New items now go to the agent account; local:// items keep resolving.");
+  if (existsSync(core.VAULT_FILE)) console.log(`New items now go to the agent account; ${BRAND.refScheme}:// items keep resolving.`);
   await core.audit("setup", [], "cli");
   const minutes = Math.round(core.SESSION_TTL_MS / 60000);
   console.log(`ready: bw login=${email} (own). ${unattended ? "The session stays open (unattended)." : `Sessions end after ${minutes} minutes; then ${kept ? "keyshroud unlocks again from the keychain" : "keyshroud asks for the master password again"}.`}`);

@@ -44,7 +44,7 @@ Agent cần credential để làm việc thật: `gh`, `npm publish`, CLI của 
 
 **keyshroud giải quyết:**
 
-- ✅ **Tên, không phải giá trị** — agent chỉ thấy `GH_TOKEN` và `local://GitHub token`
+- ✅ **Tên, không phải giá trị** — agent chỉ thấy `GH_TOKEN` và `keyshroud://GitHub token`
 - ✅ **Che output** — giá trị nào lọt ra stdout/stderr đều thành `<redacted:GH_TOKEN>`
 - ✅ **Không phải cài gì thêm** — một file vault mã hoá, khoá nằm trong keychain của hệ điều hành; không tài khoản, không server
 - ✅ **Đồng bộ nếu muốn** — Vaultwarden trên VPS $5 hay Raspberry Pi, hoặc Bitwarden, cho nhiều máy
@@ -114,7 +114,7 @@ npm install -g @bitwarden/cli
 bw config server https://vault.example.com
 bw login
 
-# 2. Từ giờ item mới vào Vaultwarden (item local:// vẫn dùng được)
+# 2. Từ giờ item mới vào Vaultwarden (item keyshroud:// vẫn dùng được)
 mkdir -p ~/.config/keyshroud && echo bw > ~/.config/keyshroud/backend
 
 # 3. Mở khoá 30 phút (hỏi master password; keyshroud không lưu gì)
@@ -122,7 +122,7 @@ keyshroud unlock
 ```
 
 Máy đã dùng keyshroud 0.7 (có `bw` đăng nhập, file của keyshroud, hoặc master password trong keychain)
-vẫn giữ Vaultwarden làm mặc định; không cần làm gì. Tham chiếu `local://…` và `bw://…` dùng song song được.
+vẫn giữ Vaultwarden làm mặc định; không cần làm gì. Tham chiếu `keyshroud://…` và `bw://…` dùng song song được.
 
 ### Claude Code
 
@@ -177,7 +177,7 @@ vào `~/.config/keyshroud/backend`.
 
 ## Tài liệu đầy đủ
 
-CLI reference, cú pháp `local://` và `bw://`, biến cấu hình và security model chi tiết nằm ở [README tiếng Anh](../README.md).
+CLI reference, cú pháp `keyshroud://` và `bw://`, biến cấu hình và security model chi tiết nằm ở [README tiếng Anh](../README.md).
 
 ## License
 

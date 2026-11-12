@@ -45,7 +45,7 @@ Coding agent 要做实际工作就需要凭据：`gh`、`npm publish`、云厂�
 
 **keyshroud 的解决方式：**
 
-- ✅ **只给名字，不给值** —— agent 看到的是 `GH_TOKEN` 和 `local://GitHub token`，永远看不到 token 本身
+- ✅ **只给名字，不给值** —— agent 看到的是 `GH_TOKEN` 和 `keyshroud://GitHub token`，永远看不到 token 本身
 - ✅ **输出遮蔽** —— 任何出现在 stdout/stderr 里的值都会变成 `<redacted:GH_TOKEN>`
 - ✅ **无需任何配置** —— 一个加密的 vault 文件，密钥存在操作系统的钥匙串里；不需要账号，也不需要服务器
 - ✅ **需要时再同步** —— 跑在 $5 VPS 或树莓派上的 Vaultwarden，或者 Bitwarden，供多台机器使用
@@ -112,7 +112,7 @@ npm install -g @bitwarden/cli
 bw config server https://vault.example.com
 bw login
 
-# 2. 之后新条目存入 Vaultwarden（local:// 条目照常可用）
+# 2. 之后新条目存入 Vaultwarden（keyshroud:// 条目照常可用）
 mkdir -p ~/.config/keyshroud && echo bw > ~/.config/keyshroud/backend
 
 # 3. 解锁 30 分钟（询问主密码；keyshroud 不保存任何内容）
@@ -120,7 +120,7 @@ keyshroud unlock
 ```
 
 用过 keyshroud 0.7 的机器（`bw` 已登录、有 keyshroud 的文件，或钥匙串里有主密码）会继续以 Vaultwarden 为默认，无需任何操作。
-`local://…` 和 `bw://…` 引用可以同时使用。
+`keyshroud://…` 和 `bw://…` 引用可以同时使用。
 
 可选：把 `vaultwarden-api-client-id` / `vaultwarden-api-client-secret`（在
 *Settings → Security → Keys → API key* 中获取）也存进钥匙串，这样 `bw` 登录过期（logged out）时
@@ -180,7 +180,7 @@ OpenCode：`opencode mcp add keyshroud -- keyshroud mcp`。
 
 ## 完整文档
 
-CLI 参考、`local://` 和 `bw://` 引用语法、配置变量和详细的安全模型，请参阅[英文 README](../README.md)。
+CLI 参考、`keyshroud://` 和 `bw://` 引用语法、配置变量和详细的安全模型，请参阅[英文 README](../README.md)。
 
 ## 许可证
 

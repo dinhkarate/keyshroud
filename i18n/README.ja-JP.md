@@ -45,7 +45,7 @@ dinhkarate
 
 **keyshroud ならこう解決します：**
 
-- ✅ **値ではなく名前** — エージェントに見えるのは `GH_TOKEN` と `local://GitHub token` だけで、トークンそのものは見えません
+- ✅ **値ではなく名前** — エージェントに見えるのは `GH_TOKEN` と `keyshroud://GitHub token` だけで、トークンそのものは見えません
 - ✅ **出力のマスク** — stdout/stderr に出た値はすべて `<redacted:GH_TOKEN>` に置き換わります
 - ✅ **準備はいらない** — 暗号化された vault ファイルと、OS のキーチェーンに置かれたその鍵。アカウントもサーバーも不要です
 - ✅ **必要なら同期** — $5 の VPS や Raspberry Pi 上の Vaultwarden、または Bitwarden で複数のマシンから使えます
@@ -114,7 +114,7 @@ npm install -g @bitwarden/cli
 bw config server https://vault.example.com
 bw login
 
-# 2. 以後の新しい項目は Vaultwarden へ（local:// の項目はそのまま使える）
+# 2. 以後の新しい項目は Vaultwarden へ（keyshroud:// の項目はそのまま使える）
 mkdir -p ~/.config/keyshroud && echo bw > ~/.config/keyshroud/backend
 
 # 3. 30 分間アンロック（マスターパスワードを尋ねる。keyshroud は何も保存しない）
@@ -122,7 +122,7 @@ keyshroud unlock
 ```
 
 keyshroud 0.7 を使っていたマシン（`bw` がログイン済み、keyshroud のファイルがある、キーチェーンにマスターパスワードがある）は
-引き続き Vaultwarden が既定になり、何もする必要はありません。`local://…` と `bw://…` の参照は並べて使えます。
+引き続き Vaultwarden が既定になり、何もする必要はありません。`keyshroud://…` と `bw://…` の参照は並べて使えます。
 
 任意：*Settings → Security → Keys → API key* で取得した `vaultwarden-api-client-id` /
 `vaultwarden-api-client-secret` もキーチェーンに入れておくと、`bw` のログインが切れたとき（logged out）に
@@ -182,7 +182,7 @@ OpenCode：`opencode mcp add keyshroud -- keyshroud mcp`。
 
 ## ドキュメント全文
 
-CLI リファレンス、`local://` と `bw://` 参照の構文、設定用の環境変数、詳しいセキュリティモデルは[英語版 README](../README.md) を参照してください。
+CLI リファレンス、`keyshroud://` と `bw://` 参照の構文、設定用の環境変数、詳しいセキュリティモデルは[英語版 README](../README.md) を参照してください。
 
 ## ライセンス
 

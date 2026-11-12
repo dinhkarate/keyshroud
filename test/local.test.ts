@@ -79,13 +79,15 @@ test("a blank machine: add creates the local vault, run masks, and bw is never c
   assert.equal((await keyEntries(box)).length, 1);
   // Wiring is keyshroud's own file; no agent is installed here, so no agent directory appears.
   assert.match(added.stdout, /targets=[^,]*env\.json verified=yes/);
-  assert.match(await readFile(join(box.configDir, "env.json"), "utf8"), /"!keyshroud get 'local:\/\/GitHub token'"/);
+  assert.match(await readFile(join(box.configDir, "env.json"), "utf8"), /"!keyshroud get 'keyshroud:\/\/GitHub token'"/);
   assert.ok(!existsSync(join(box.env.HOME, ".pi")) && !existsSync(join(box.env.HOME, ".omp")));
 
   const run = await runCli(box, ["run", "--mask", "--", "sh", "-c", 'echo "deploying with $GH_TOKEN"']);
   assert.equal(run.code, 0, run.stderr);
   assert.equal(run.stdout, "deploying with <redacted:GH_TOKEN>\n");
   assert.equal((await runCli(box, ["get", "GH_TOKEN"])).stdout, TOKEN);
+  assert.equal((await runCli(box, ["get", "keyshroud://GitHub token"])).stdout, TOKEN);
+  // local://, the first spelling, still reads the same item.
   assert.equal((await runCli(box, ["get", "local://GitHub token"])).stdout, TOKEN);
   assert.match((await runCli(box, ["env", "--shell"])).stdout, /^export GH_TOKEN=/m);
   assert.match((await runCli(box, ["status"])).stdout, /^backend=local vault=.*vault\.json key=keychain status=unlocked items=1$/m);
@@ -101,16 +103,16 @@ test("a blank machine: add creates the local vault, run masks, and bw is never c
   assert.deepEqual(await box.bwCalls(), []);
 });
 
-test("import writes local:// references; inject, scan, redact and hooks cover local values", async () => {
+test("import writes keyshroud:// references; inject, scan, redact and hooks cover local values", async () => {
   const box = await blank();
   await writeFile(join(box.dir, ".env"), `API_TOKEN=${TOKEN}\nLOG_LEVEL=debug\n`);
   const imported = await runCli(box, ["import", "--yes", "--prefix", "app"]);
   assert.equal(imported.code, 0, imported.stderr);
-  assert.match(imported.stdout, /API_TOKEN\s+secret\s+new\s+-> local:\/\/app API_TOKEN/);
-  assert.match(await readFile(join(box.dir, ".env.refs"), "utf8"), /^API_TOKEN=local:\/\/app API_TOKEN$/m);
+  assert.match(imported.stdout, /API_TOKEN\s+secret\s+new\s+-> keyshroud:\/\/app API_TOKEN/);
+  assert.match(await readFile(join(box.dir, ".env.refs"), "utf8"), /^API_TOKEN=keyshroud:\/\/app API_TOKEN$/m);
   const run = await runCli(box, ["run", "--env-file", ".env.refs", "--mask", "--", "sh", "-c", 'echo "$API_TOKEN $LOG_LEVEL"']);
   assert.equal(run.stdout, "<redacted:API_TOKEN> debug\n", run.stderr);
-  assert.equal((await runCli(box, ["inject"], "token={{ local://app API_TOKEN }}\n")).stdout, `token=${TOKEN}\n`);
+  assert.equal((await runCli(box, ["inject"], "token={{ keyshroud://app API_TOKEN }}\n")).stdout, `token=${TOKEN}\n`);
   await writeFile(join(box.dir, "leak.txt"), `oops ${TOKEN}\n`);
   const scan = await runCli(box, ["scan", "leak.txt"]);
   assert.equal(scan.code, 1);
@@ -125,26 +127,29 @@ test("import writes local:// references; inject, scan, redact and hooks cover lo
   assert.deepEqual(await box.bwCalls(), []);
 });
 
-test("rotate, wire and api-key take names or local:// references; bw references still resolve", async () => {
+test("rotate, wire and api-key take names or keyshroud:// references; bw references still resolve", async () => {
   const box = await blank();
   assert.equal((await add(box, "A_TOKEN", "Item A", "first-value-123")).code, 0);
-  const rotated = await runCli(box, ["rotate", "--item", "local://Item A", "--stdin"], "second-value-456");
+  const rotated = await runCli(box, ["rotate", "--item", "keyshroud://Item A", "--stdin"], "second-value-456");
   assert.equal(rotated.code, 0, rotated.stderr);
   assert.equal((await runCli(box, ["get", "A_TOKEN"])).stdout, "second-value-456");
   assert.equal((await runCli(box, ["wire", "--env", "B_TOKEN", "--item", "Item A"])).code, 0);
   assert.equal((await runCli(box, ["get", "B_TOKEN"])).stdout, "second-value-456");
   assert.equal((await runCli(box, ["api-key", "--item", "Item A"])).stdout, "second-value-456");
   assert.equal((await runCli(box, ["rotate", "--item", "Nope", "--stdin"], "x-value-789")).code, 4);
+  assert.equal((await runCli(box, ["wire", "--env", "D_TOKEN", "--item", "local://Item A"])).code, 0);
+  assert.equal((await runCli(box, ["get", "D_TOKEN"])).stdout, "second-value-456");
   assert.equal((await runCli(box, ["add", "--env", "C_TOKEN", "--item", "local:///x", "--stdin"], "x")).code, 2);
+  assert.equal((await runCli(box, ["add", "--env", "C_TOKEN", "--item", "keyshroud:///x", "--stdin"], "x")).code, 2);
   assert.deepEqual(await box.bwCalls(), []);
 
   // bw:// references keep working on a machine whose default is the local vault.
   await writeFile(box.vaultFile, JSON.stringify({ status: "locked", items: [item("id-1", "Old token", "bw-value-0001")] }));
   await writeFile(join(box.dir, "keychain", "vaultwarden-master-password"), "master\n");
   assert.equal((await runCli(box, ["get", "bw://Old token"])).stdout, "bw-value-0001");
-  await writeFile(join(box.dir, "mixed.env"), "A=local://Item A\nB=bw://Old token\n");
-  const mixed = await runCli(box, ["run", "--env-file", "mixed.env", "--no-mask", "--", "sh", "-c", 'echo "$A $B"']);
-  assert.equal(mixed.stdout, "second-value-456 bw-value-0001\n", mixed.stderr);
+  await writeFile(join(box.dir, "mixed.env"), "A=keyshroud://Item A\nB=bw://Old token\nC=local://Item A\n");
+  const mixed = await runCli(box, ["run", "--env-file", "mixed.env", "--no-mask", "--", "sh", "-c", 'echo "$A $B $C"']);
+  assert.equal(mixed.stdout, "second-value-456 bw-value-0001 second-value-456\n", mixed.stderr);
   // The value of A is also wired as A_TOKEN; either name may label it.
   assert.match((await runCli(box, ["run", "--env-file", "mixed.env", "--mask", "--", "sh", "-c", 'echo "$A $B"'])).stdout, /^<redacted:[A-Z_]+> <redacted:B>\n$/);
   assert.match((await runCli(box, ["status"])).stdout, /^backend=local/m);
@@ -679,7 +684,7 @@ test("migrate --to local moves wired Vaultwarden items into the local vault and 
   assert.match(saved, /bw:\/\/Sentry\/fields\/dsn/);
   for (const value of values) assert.ok(!saved.includes(value));
   const auth = await readFile(join(box.env.HOME, ".pi", "agent", "auth.json"), "utf8");
-  assert.match(auth, /local:\/\/Sentry \(field dsn\)/);
+  assert.match(auth, /keyshroud:\/\/Sentry \(field dsn\)/);
   assert.match(auth, /bw:\/\/Missing/);
 
   // Vaultwarden can go away: the moved names resolve from the local vault alone.
@@ -723,12 +728,12 @@ test("list shows names and wiring; rm is a dry run until --yes, then deletes and
   assert.equal((await add(box, "A_TOKEN", "A", "value-aaaa-1111")).code, 0);
   assert.equal((await add(box, "B_TOKEN", "B", "value-bbbb-2222")).code, 0);
   const list = await runCli(box, ["list"]);
-  assert.equal(list.stdout, "local://A  wired=A_TOKEN\nlocal://B  wired=B_TOKEN\n");
+  assert.equal(list.stdout, "keyshroud://A  wired=A_TOKEN\nkeyshroud://B  wired=B_TOKEN\n");
   assert.ok(!list.stdout.includes("value-"));
 
   const before = await readFile(vaultPath(box), "utf8");
   const dry = await runCli(box, ["rm", "--item", "A"]);
-  assert.equal(dry.stdout, "would delete local://A permanently; unwire A_TOKEN\nDry run: nothing removed. Re-run with --yes.\n");
+  assert.equal(dry.stdout, "would delete keyshroud://A permanently; unwire A_TOKEN\nDry run: nothing removed. Re-run with --yes.\n");
   assert.equal(await readFile(vaultPath(box), "utf8"), before);
   assert.equal((await runCli(box, ["rm", "--item", "missing"])).code, 4);
 
@@ -736,7 +741,7 @@ test("list shows names and wiring; rm is a dry run until --yes, then deletes and
   await writeFile(join(box.env.HOME, ".claude", "settings.json"), JSON.stringify({ apiKeyHelper: "'node' '/x/cli.js' api-key --item 'B'" }));
   const helper = await runCli(box, ["rm", "--item", "B", "--yes"]);
   assert.equal(helper.code, 5);
-  assert.match(helper.stderr, /apiKeyHelper uses local:\/\/B/);
+  assert.match(helper.stderr, /apiKeyHelper uses keyshroud:\/\/B/);
 
   const agent = await runCli(box, ["rm", "--item", "A", "--yes"], undefined, { FAKE_DIALOG_CANCEL: "1" });
   if (process.platform === "darwin") { assert.equal(agent.code, 3); assert.match(agent.stderr, /Touch ID was not approved; nothing was removed/); }
@@ -745,8 +750,8 @@ test("list shows names and wiring; rm is a dry run until --yes, then deletes and
 
   const removed = await runCliTtySteps(box, ["rm", "--item", "A", "--yes"], []);
   assert.equal(removed.code, 0, removed.stdout);
-  assert.match(removed.stdout, /removed local:\/\/A unwired=A_TOKEN targets=.*env\.json,.*auth\.json,.*auth\.json/);
-  assert.equal((await runCli(box, ["list"])).stdout, "local://B  wired=B_TOKEN\n");
+  assert.match(removed.stdout, /removed keyshroud:\/\/A unwired=A_TOKEN targets=.*env\.json,.*auth\.json,.*auth\.json/);
+  assert.equal((await runCli(box, ["list"])).stdout, "keyshroud://B  wired=B_TOKEN\n");
   for (const path of [join(box.configDir, "env.json"), join(box.env.HOME, ".pi", "agent", "auth.json"), join(box.env.PI_CODING_AGENT_DIR, "auth.json")]) {
     assert.deepEqual(Object.keys(JSON.parse(await readFile(path, "utf8"))), ["B_TOKEN"]);
   }

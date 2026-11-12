@@ -5,4 +5,6 @@ export const BRAND = {
   bin: "keyshroud",
   envPrefix: "KEYSHROUD",
   configDirName: "keyshroud",
+  // Scheme of a local vault reference (keyshroud://Item); local:// is still read.
+  refScheme: "keyshroud",
 } as const;

@@ -58,7 +58,7 @@ mkdir -p ~/.config/keyshroud && echo bw > ~/.config/keyshroud/backend   # new it
 ```
 
 The last line makes Vaultwarden the default for new items; items already in the local vault keep
-resolving through their `local://` references.
+resolving through their `keyshroud://` references.
 
 ## 4. Unlock
 
