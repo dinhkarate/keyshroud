@@ -15,7 +15,11 @@ The last finding of the independent review (round 3, of 0.10.4).
   rename then landed on top. The lock keyshroud takes beside `auth.json` now holds its owner's
   token, as the vault's does, so pi (which removes a stale lock with `rmdir`) waits and then reports
   the lock instead of breaking it. A lock left by a keyshroud that was killed mid-write is cleared by
-  the next keyshroud command that reads the wiring.
+  the next keyshroud command that reads the wiring, and a command that takes over such a lock first
+  voids the stalled writer's pending change, so pi cannot get in between the two.
+
+### Changed
+- README: what keyshroud cannot add to the lock pi keeps on its own `auth.json`.
 
 ## [0.10.4] - 2026-11-13
 

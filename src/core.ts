@@ -941,7 +941,8 @@ export function authEntryRaw(entry: unknown): string | undefined {
 // lock too (proper-lockfile: `<file>.lock/`): they wait for it as for their own, and cannot break
 // it, since they remove a stale lock with rmdir and this one is not empty. So no writer of theirs
 // gets in between a paused keyshroud's last check and its rename; they fail until the lock goes.
-async function acquireLock(dir: string): Promise<{ held: () => Promise<boolean>; release: () => Promise<void> }> {
+// `breakStale` is how a stale one goes (updateFile has an order to keep).
+async function acquireLock(dir: string, breakStale = () => rm(dir, { recursive: true, force: true })): Promise<{ held: () => Promise<boolean>; release: () => Promise<void> }> {
   const owner = join(dir, "owner");
   const token = randomBytes(8).toString("hex");
   const start = Date.now();
@@ -949,7 +950,7 @@ async function acquireLock(dir: string): Promise<{ held: () => Promise<boolean>;
     try { await mkdir(dir); await writeFile(owner, token, { mode: 0o600 }); break; } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       const lockedAt = await stat(dir).then((info) => info.mtimeMs, () => 0);
-      if (Date.now() - lockedAt > 30000) { await rm(dir, { recursive: true, force: true }); continue; }
+      if (Date.now() - lockedAt > 30000) { await breakStale(); continue; }
       if (Date.now() - start > 60000) throw new Error(`Timed out waiting for the lock ${dir}`);
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
@@ -996,12 +997,21 @@ async function readAuthForUpdate(path: string): Promise<Record<string, unknown>>
 // beside `path`, which pi and omp know, and the one of the target, which two links to one file
 // share. A writer paused past their 30 s is fenced as for the vault, `write` asking for both
 // once its temp file is on disk.
+// A stale lock beside `path` is removed under the target's lock, and only if still stale then:
+// pi can take it the moment it is gone, so its holder's pending write is void first (taking the
+// target's lock removes that writer's temp file and its claim), and two commands reclaiming at
+// once never remove the lock one of them has just taken.
 async function updateFile<T>(path: string, fn: (target: string, write: (content: string) => Promise<void>) => Promise<T>): Promise<T> {
   await mkdir(dirname(path), { recursive: true });
-  const outer = await acquireLock(`${path}.lock`);
+  const resolveTarget = () => realpath(path).catch(async () => join(await realpath(dirname(path)), basename(path)));
+  const targetLock = <R>(target: string, run: (held: () => Promise<boolean>) => Promise<R>) => withFileLock(target, `${target}.${BRAND.bin}.lock`, run);
+  const pathLock = `${path}.lock`;
+  const outer = await acquireLock(pathLock, async () => targetLock(await resolveTarget(), async () => {
+    if (Date.now() - (await stat(pathLock).then((info) => info.mtimeMs, () => Date.now())) > 30000) await rm(pathLock, { recursive: true, force: true });
+  }));
   try {
-    const target = await realpath(path).catch(async () => join(await realpath(dirname(path)), basename(path)));
-    return await withFileLock(target, `${target}.${BRAND.bin}.lock`, (inner) => {
+    const target = await resolveTarget();
+    return await targetLock(target, (inner) => {
       const held = async () => (await inner()) && (await outer.held());
       return fn(target, (content) => writePrivateFile(target, content, held).catch((error: NodeJS.ErrnoException) => {
         throw error.code === "ENOENT" ? new Error(`This process lost the lock of ${path} (it was paused for over 30 seconds); nothing was written`) : error;
