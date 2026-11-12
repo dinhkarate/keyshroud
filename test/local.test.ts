@@ -518,9 +518,9 @@ test("pi's auth writer cannot break the lock of a paused keyshroud writer; a loc
   assert.deepEqual((await readdir(dirname(auth))).filter((name) => /\.lock$|\.tmp\./.test(name)), []);
 });
 
-// The handoff: the stale lock beside auth.json is gone (pi can take it) only once the paused
-// writer's pending rename has nothing left to move.
-test("a command that reclaims a paused writer's auth.json lock voids its pending write before pi can get in", async () => {
+// However the lock beside auth.json went (a command acting on an old reading of it, say), pi can
+// take it from then on: the paused writer's rename must have nothing left to move.
+test("once the lock beside auth.json is gone, a writer paused before its rename replaces nothing, whatever removed it", async () => {
   const box = await blank();
   assert.equal((await add(box, "A_TOKEN", "Item A", "first-value-123")).code, 0);
   const auth = join(box.env.HOME, ".pi", "agent", "auth.json");
@@ -532,35 +532,20 @@ test("a command that reclaims a paused writer's auth.json lock voids its pending
     const add = async (current) => ({ result: null, next: JSON.stringify({ ...JSON.parse(current || "{}"), anthropic: { type: "api_key", key: "from-pi" } }) });
     await new FileAuthStorageBackend(${JSON.stringify(auth)}).withLockAsync(add).then(() => console.log("pi wrote"), (error) => console.log("pi failed: " + error.code));
   `;
-  const run = (script: string) => `process.stdout.write(require("node:child_process").execFileSync(process.execPath, ["--input-type=module", "-e", ${JSON.stringify(script)}]));`;
-  // Another keyshroud reading the wiring, stopped where the lock beside auth.json has just gone.
-  const reclaimer = `${PATCH_FS}
-    let seen = false;
-    patch("rm", async (real, target, ...rest) => {
-      await real(target, ...rest);
-      if (seen || String(target) !== ${JSON.stringify(`${auth}.lock`)}) return;
-      seen = true;
-      console.log("pending: " + fs.readdirSync(${JSON.stringify(dirname(auth))}).some((name) => name.includes(".tmp.")));
-      ${run(pi)}
-    });
-    const core = await import(${CORE});
-    await core.wiredEntries();
-  `;
   const out = await runScript(box, `${PATCH_FS}
     let stalled = false;
     patch("rename", async (real, from, to) => {
       if (!stalled && String(from).includes("auth.json.tmp.")) {
         stalled = true;
-        const old = new Date(Date.now() - 40000);
-        for (const lock of ${JSON.stringify([join(`${auth}.lock`, "owner"), `${auth}.lock`, `${auth}.keyshroud.lock`])}) await fsp.utimes(lock, old, old);
-        ${run(reclaimer)}
+        fs.rmSync(${JSON.stringify(`${auth}.lock`)}, { recursive: true });
+        process.stdout.write(require("node:child_process").execFileSync(process.execPath, ["--input-type=module", "-e", ${JSON.stringify(pi)}]));
       }
       return real(from, to);
     });
     const core = await import(${CORE});
     await core.writeAuthEntry(${JSON.stringify(auth)}, "C_TOKEN", core.referenceFor("Item A", "local")).then(() => console.log("written"), (error) => console.log(error.message));
   `);
-  assert.match(out, /^pending: false\npi wrote\nThis process lost the lock of .*auth\.json .*nothing was written\n$/);
+  assert.match(out, /^pi wrote\nThis process lost the lock of .*auth\.json .*nothing was written\n$/);
   assert.deepEqual(Object.keys(JSON.parse(await readFile(auth, "utf8"))), ["anthropic"]);
   assert.deepEqual((await readdir(dirname(auth))).filter((name) => /\.lock$|\.tmp\./.test(name)), []);
 });
