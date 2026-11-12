@@ -414,6 +414,7 @@ const args = process.argv.slice(2);
 const script = Buffer.from(args[args.indexOf("-EncodedCommand") + 1], "base64").toString("utf16le");
 const input = fs.readFileSync(0, "utf8").trim();
 const entropy = process.env.KEYSHROUD_VAULT_ID;
+if (process.env.FAKE_DPAPI_DENIED) { process.stderr.write("Exception calling \\"Unprotect\\": \\"Access is denied.\\""); process.exit(1); }
 if (script.includes("::Protect(")) process.stdout.write(Buffer.from("fake-dpapi|" + entropy + "|" + input).toString("base64"));
 else {
   const [tag, id, key] = Buffer.from(input, "base64").toString().split("|");
@@ -437,6 +438,11 @@ test("Windows keeps the key with DPAPI (a fake PowerShell here), entropy bound t
   assert.equal((await runCli(box, ["get", "D_TOKEN"], undefined, env)).stdout, "dpapi-value-1234");
   assert.equal((await runCli(box, ["unlock"], undefined, env)).stdout, "the local vault opens with its key from Windows DPAPI; nothing to unlock\n");
   assert.deepEqual(await keyEntries(box), []);
+  // Over a key-based SSH login Windows refuses DPAPI: say so, not that the vault belongs to someone else.
+  const ssh = await runCli(box, ["get", "D_TOKEN"], undefined, { ...env, SSH_CONNECTION: "10.0.0.2 50000 10.0.0.1 22", FAKE_DPAPI_DENIED: "1" });
+  assert.equal(ssh.code, 4, ssh.stderr);
+  assert.match(ssh.stderr, /refused DPAPI to this SSH session/);
+  assert.match(ssh.stderr, /keyshroud rekey --to passphrase/);
   // A blob moved to another vault does not open it.
   const other = { ...file, id: "0123456789abcdef" };
   await writeFile(vaultPath(box), JSON.stringify(other));

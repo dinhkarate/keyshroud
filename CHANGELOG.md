@@ -5,6 +5,13 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-11-12
+
+### Fixed
+- Over SSH with a key, Windows can refuse DPAPI (`Access is denied`, or `Key not valid for use in
+  specified state`), since such a login has no Windows password; on a test machine it came and went. keyshroud said the vault opened only for the Windows user who created it; it now names the
+  SSH session as the cause and says to use the desktop or RDP session, or a passphrase vault.
+
 ## [0.10.0] - 2026-11-12
 
 ### Changed

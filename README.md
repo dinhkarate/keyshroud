@@ -554,6 +554,9 @@ the unlock dialog is a small PowerShell window, and sessions end after 30 minute
 by `0600`. One gap: over an SSH session with a terminal (`ssh -t`), Windows ends the lock timer when the
 SSH session closes, so that session ends on the next keyshroud call instead. There is no keychain support
 for the Vaultwarden master password on Windows: keyshroud asks for it, and `migrate` cannot run there.
+DPAPI may be refused over SSH with a key (`Access is denied`): such a login carries no Windows
+password. keyshroud says so; run the command in the desktop or RDP session, or give a machine used only
+over SSH a passphrase vault (`keyshroud rekey --to passphrase`).
 
 **`bw login` prints `KeyIdBackfillError`?** `bw` 2026.9 and later call an endpoint that Vaultwarden
 added in 1.37.4 ([vaultwarden#7750](https://github.com/dani-garcia/vaultwarden/issues/7750)). The login

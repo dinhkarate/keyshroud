@@ -1887,9 +1887,12 @@ function dpapi(op: "protect" | "unprotect", input: string, id: string): Promise<
   return new Promise((resolve, reject) => {
     const child = execFile(POWERSHELL, ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")],
       // PowerShell can take a minute to start on a slow or busy machine (seen on a fresh Windows 11 VM).
-      { windowsHide: true, timeout: DPAPI_TIMEOUT_MS, maxBuffer: 1024 * 1024, env: childEnv({ [`${P}_VAULT_ID`]: id }) }, (error, stdout) => {
+      { windowsHide: true, timeout: DPAPI_TIMEOUT_MS, maxBuffer: 1024 * 1024, env: childEnv({ [`${P}_VAULT_ID`]: id }) }, (error, stdout, stderr) => {
         const out = String(stdout ?? "").trim();
-        if (error?.killed) reject(new Error(`Windows PowerShell, which keyshroud uses for DPAPI, did not answer within ${DPAPI_TIMEOUT_MS / 1000} seconds; ${op === "protect" ? "nothing was created" : "the vault is unchanged"}. Try again once the machine is less busy`));
+        // A key-based SSH login has no Windows password, so DPAPI may not reach the account's key; seen on Windows 10,
+        // where it came and went while the same user was signed in over RDP.
+        if (error && (process.env.SSH_CONNECTION || process.env.SSH_TTY) && /access is denied|key not valid for use in specified state/i.test(String(stderr ?? ""))) reject(new Error(`Windows refused DPAPI to this SSH session: an SSH login with a key carries no Windows password, so DPAPI cannot reach your account's key. Run the command in your Windows desktop or RDP session; for a machine used only over SSH, give the vault a passphrase there with \`${BRAND.bin} rekey --to passphrase\``));
+        else if (error?.killed) reject(new Error(`Windows PowerShell, which keyshroud uses for DPAPI, did not answer within ${DPAPI_TIMEOUT_MS / 1000} seconds; ${op === "protect" ? "nothing was created" : "the vault is unchanged"}. Try again once the machine is less busy`));
         else if (op === "protect" && (error || !out)) reject(new Error("Windows DPAPI could not protect the key of the local vault; nothing was created"));
         else resolve(error ? "" : out);
       });
