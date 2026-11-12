@@ -610,7 +610,9 @@ Guarantees we test for:
   never overwritten;
 - a local vault's passphrase is set only in a terminal, never stored, and refused as a secret;
 - env.json, auth.json and hook index writes are locked and atomic, a writer that lost its lock writes
-  nothing, and a wired name is never overwritten without `--force`;
+  nothing, and a wired name is never overwritten without `--force`; pi's own writer waits for the
+  lock on its `auth.json` and cannot break it (should keyshroud be killed while it holds one, pi
+  reports the lock until the next keyshroud command clears it);
 - commands started by `run` and `secrets_run` never receive `BW_SESSION`,
   `BW_PASSWORD`, `BW_CLIENTID` or `BW_CLIENTSECRET`, so `--only` really limits
   what a command can read (inside pi/omp the agent process keeps the session for

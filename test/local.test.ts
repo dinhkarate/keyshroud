@@ -476,6 +476,48 @@ test("two links to one auth file share a lock: writers through either keep each 
   for (const dir of [box.dir, ...links.map((link) => dirname(link))]) assert.deepEqual((await readdir(dir)).filter((name) => /\.lock$|\.tmp\./.test(name)), []);
 });
 
+// pi's own writer (proper-lockfile) as the successor: it removes a stale lock with rmdir.
+test("pi's auth writer cannot break the lock of a paused keyshroud writer; a lock left by a killed one is cleared", async () => {
+  const box = await blank();
+  assert.equal((await add(box, "A_TOKEN", "Item A", "first-value-123")).code, 0);
+  const auth = join(box.env.HOME, ".pi", "agent", "auth.json");
+  await mkdir(dirname(auth), { recursive: true });
+  await writeFile(auth, "{}");
+  const backend = new URL("../node_modules/@earendil-works/pi-coding-agent/dist/core/auth-storage.js", import.meta.url).href;
+  const pi = `
+    const { FileAuthStorageBackend } = await import(${JSON.stringify(backend)});
+    const add = async (current) => ({ result: null, next: JSON.stringify({ ...JSON.parse(current || "{}"), anthropic: { type: "api_key", key: "from-pi" } }) });
+    await new FileAuthStorageBackend(${JSON.stringify(auth)}).withLockAsync(add).then(() => console.log("pi wrote"), (error) => console.log("pi failed: " + error.code));
+  `;
+  const out = await runScript(box, `${PATCH_FS}
+    let stalled = false;
+    patch("rename", async (real, from, to) => {
+      if (!stalled && String(from).includes("auth.json.tmp.")) {
+        stalled = true;
+        const old = new Date(Date.now() - 40000);
+        for (const lock of ${JSON.stringify([`${auth}.lock`, `${auth}.keyshroud.lock`])}) await fsp.utimes(lock, old, old);
+        process.stdout.write(require("node:child_process").execFileSync(process.execPath, ["--input-type=module", "-e", ${JSON.stringify(pi)}]));
+      }
+      return real(from, to);
+    });
+    const core = await import(${CORE});
+    await core.writeAuthEntry(${JSON.stringify(auth)}, "C_TOKEN", core.referenceFor("Item A", "local")).then(() => console.log("written"), (error) => console.log(error.message));
+  `);
+  assert.equal(out, "pi failed: ENOTEMPTY\nwritten\n");
+  assert.deepEqual(Object.keys(JSON.parse(await readFile(auth, "utf8"))), ["C_TOKEN"]);
+
+  await mkdir(`${auth}.lock`);
+  await writeFile(join(`${auth}.lock`, "owner"), "a-killed-writer");
+  const old = new Date(Date.now() - 40000);
+  await utimes(join(`${auth}.lock`, "owner"), old, old);
+  await utimes(`${auth}.lock`, old, old);
+  assert.equal(await runScript(box, pi), "pi failed: ENOTEMPTY\n");
+  assert.equal((await runCli(box, ["env"])).code, 0);
+  assert.equal(await runScript(box, pi), "pi wrote\n");
+  assert.deepEqual(Object.keys(JSON.parse(await readFile(auth, "utf8"))), ["C_TOKEN", "anthropic"]);
+  assert.deepEqual((await readdir(dirname(auth))).filter((name) => /\.lock$|\.tmp\./.test(name)), []);
+});
+
 test("a passphrase protects the vault where there is no keychain; lock and the session's end close it, in a live MCP server too", { skip: process.platform === "win32" }, async () => {
   const box = await blank();
   const env = { KEYSHROUD_VAULT_KEY: "passphrase" };

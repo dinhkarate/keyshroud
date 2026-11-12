@@ -935,26 +935,46 @@ export function authEntryRaw(entry: unknown): string | undefined {
   return typeof raw === "string" ? raw : undefined;
 }
 
-// Directory lock compatible with pi/omp (proper-lockfile: `<file>.lock/`,
-// stale after 30 s without an mtime refresh, matching pi's auth storage).
-// The lock is the directory as made here: one a successor made after breaking
-// it is not this holder's, to rely on or to remove.
-async function acquireLock(path: string): Promise<{ held: () => Promise<boolean>; release: () => Promise<void> }> {
+// A lock: a directory holding its owner's token, so one holder at most finds its own there. It is
+// held for milliseconds and broken after 30 s; a holder that lost it (a paused process) neither
+// writes nor removes its successor's lock. Beside an auth.json it is the directory pi and omp
+// lock too (proper-lockfile: `<file>.lock/`): they wait for it as for their own, and cannot break
+// it, since they remove a stale lock with rmdir and this one is not empty. So no writer of theirs
+// gets in between a paused keyshroud's last check and its rename; they fail until the lock goes.
+async function acquireLock(dir: string): Promise<{ held: () => Promise<boolean>; release: () => Promise<void> }> {
+  const owner = join(dir, "owner");
+  const token = randomBytes(8).toString("hex");
   const start = Date.now();
   for (;;) {
-    try {
-      await mkdir(path);
-      const mine = await stat(path);
-      const held = () => stat(path).then((now) => now.ino === mine.ino && now.mtimeMs === mine.mtimeMs, () => false);
-      return { held, release: async () => { if (await held()) await rm(path, { recursive: true, force: true }); } };
-    } catch (error) {
-      if ((error as { code?: string }).code !== "EEXIST") throw error;
-      const lockedAt = await stat(path).then((info) => info.mtimeMs, () => 0);
-      if (Date.now() - lockedAt > 30000) { await rm(path, { recursive: true, force: true }); continue; }
-      if (Date.now() - start > 60000) throw new Error(`Timed out waiting for lock ${path}`);
+    try { await mkdir(dir); await writeFile(owner, token, { mode: 0o600 }); break; } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      const lockedAt = await stat(dir).then((info) => info.mtimeMs, () => 0);
+      if (Date.now() - lockedAt > 30000) { await rm(dir, { recursive: true, force: true }); continue; }
+      if (Date.now() - start > 60000) throw new Error(`Timed out waiting for the lock ${dir}`);
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
   }
+  const held = async () => (await readFile(owner, "utf8").catch(() => "")) === token;
+  return { held, release: async () => { if (await held()) await rm(dir, { recursive: true, force: true }); } };
+}
+
+// The lock of one file. Temp files found on taking it were left by a holder that lost it:
+// removing them makes its late rename fail rather than replace the file (see writeVaultFile and
+// writePrivateFile).
+async function withFileLock<T>(file: string, dir: string, fn: (held: () => Promise<boolean>) => Promise<T>): Promise<T> {
+  const lock = await acquireLock(dir);
+  try {
+    const temp = `${basename(file)}.tmp.`;
+    for (const name of await readdir(dirname(file)).catch(() => [])) if (name.startsWith(temp)) await rm(join(dirname(file), name), { force: true }).catch(() => {});
+    return await fn(lock.held);
+  } finally { await lock.release(); }
+}
+
+// A lock left by a keyshroud that was killed while it wrote: pi and omp cannot remove it, so it is
+// taken over (which fences that writer, were it only paused) and let go.
+async function clearAbandonedLock(path: string): Promise<void> {
+  const lockedAt = await stat(join(`${path}.lock`, "owner")).then((info) => info.mtimeMs, () => null);
+  if (lockedAt !== null && Date.now() - lockedAt > 30000) await updateFile(path, async () => {}).catch(() => {});
 }
 
 // Unlike readAuthEntries, a write must never start from an empty object just
@@ -972,11 +992,10 @@ async function readAuthForUpdate(path: string): Promise<Record<string, unknown>>
 }
 
 // One writer at a time for `path`: `fn` gets the file to read (a symlink's target, so the link is
-// written through, not replaced) and a `write` that replaces it. Two locks are held. The one
-// beside `path` is pi's and omp's, to keep them out; they remove it with rmdir, so it cannot hold
-// an owner's token. The one for the target (withFileLock) is keyshroud's own: two links to one
-// file share it, and a writer paused past its 30 s is fenced as for the vault, `write` asking for
-// both locks once its temp file is on disk.
+// written through, not replaced) and a `write` that replaces it. Two locks are held: the one
+// beside `path`, which pi and omp know, and the one of the target, which two links to one file
+// share. A writer paused past their 30 s is fenced as for the vault, `write` asking for both
+// once its temp file is on disk.
 async function updateFile<T>(path: string, fn: (target: string, write: (content: string) => Promise<void>) => Promise<T>): Promise<T> {
   await mkdir(dirname(path), { recursive: true });
   const outer = await acquireLock(`${path}.lock`);
@@ -1072,7 +1091,7 @@ export function wiringTargets(only?: Array<"omp" | "pi">): string[] {
 
 export async function wiredEntries(): Promise<Record<string, unknown>> {
   let merged: Record<string, unknown> = {};
-  for (const path of wiringFiles()) merged = { ...merged, ...(await readAuthEntries(path)) };
+  for (const path of wiringFiles()) { await clearAbandonedLock(path); merged = { ...merged, ...(await readAuthEntries(path)) }; }
   return merged;
 }
 
@@ -1867,30 +1886,6 @@ async function forgetVaultKey(service: string): Promise<void> {
     ? ["security", ["delete-generic-password", "-a", user, "-s", service]]
     : ["secret-tool", ["clear", "service", service, "account", user]];
   await runFile(command, args, { timeout: 10000, maxBuffer: 1024 * 1024 }).catch(() => {});
-}
-
-// A file's lock: a directory holding its owner's token, so one holder at most finds its own
-// there. It is held for milliseconds and broken after 30 s; a holder that lost it (a paused
-// process) neither writes nor removes its successor's lock. Temp files found on taking it were
-// left by such a holder: removing them makes its late rename fail rather than replace the file
-// (see writeVaultFile and writePrivateFile).
-async function withFileLock<T>(file: string, dir: string, fn: (held: () => Promise<boolean>) => Promise<T>): Promise<T> {
-  const owner = join(dir, "owner");
-  const token = randomBytes(8).toString("hex");
-  const start = Date.now();
-  for (;;) {
-    try { await mkdir(dir); await writeFile(owner, token, { mode: 0o600 }); break; } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      const lockedAt = await stat(dir).then((info) => info.mtimeMs, () => 0);
-      if (Date.now() - lockedAt > 30000) { await rm(dir, { recursive: true, force: true }); continue; }
-      if (Date.now() - start > 60000) throw new Error(`Timed out waiting for the lock ${dir}`);
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
-  }
-  const held = async () => (await readFile(owner, "utf8").catch(() => "")) === token;
-  const temp = `${basename(file)}.tmp.`;
-  for (const name of await readdir(dirname(file)).catch(() => [])) if (name.startsWith(temp)) await rm(join(dirname(file), name), { force: true }).catch(() => {});
-  try { return await fn(held); } finally { if (await held()) await rm(dir, { recursive: true, force: true }); }
 }
 
 // The vault's lock. Exported for tests.

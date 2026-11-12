@@ -5,6 +5,18 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.10.5] - 2026-11-13
+
+The last finding of the independent review (round 3, of 0.10.4).
+
+### Security
+- A keyshroud command that stalled for over 30 seconds just before replacing pi's `auth.json` could
+  still overwrite what pi itself had saved meanwhile: pi broke the stale lock, wrote, and keyshroud's
+  rename then landed on top. The lock keyshroud takes beside `auth.json` now holds its owner's
+  token, as the vault's does, so pi (which removes a stale lock with `rmdir`) waits and then reports
+  the lock instead of breaking it. A lock left by a keyshroud that was killed mid-write is cleared by
+  the next keyshroud command that reads the wiring.
+
 ## [0.10.4] - 2026-11-13
 
 Fixes from the second round of the independent review (of 0.10.3).
