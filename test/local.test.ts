@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { chmod, lstat, mkdir, readdir, readFile, stat, symlink, unlink, utimes, writeFile } from "node:fs/promises";
+import { chmod, cp, lstat, mkdir, readdir, readFile, stat, symlink, unlink, utimes, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { randomBytes } from "node:crypto";
@@ -1099,7 +1099,10 @@ test("neither vault's own password is stored as a secret in the other", { skip: 
   // A login that ran out says nothing about the value either; nobody logged in means no vault to open.
   const expired = await add(other, "S_TOKEN", "Unchecked", "some-value-123456", { ...env, FAKE_BW_UNLOCK_ERROR: "Refresh token has expired (401 Unauthorized); you are not logged in anymore" });
   assert.match(expired.stderr, /Could not check this value against the master password of the bw vault/);
-  assert.equal((await add(other, "T_TOKEN", "Logged out", "some-value-123456", { ...env, FAKE_BW_UNLOCK_ERROR: "You are not logged in." })).code, 0);
+  // "Not logged in" counts only when it is all bw says (what Node says about itself around it aside).
+  const mixed = await add(other, "S_TOKEN", "Unchecked", "some-value-123456", { ...env, FAKE_BW_UNLOCK_ERROR: "Failed to refresh the access token\nYou are not logged in." });
+  assert.match(mixed.stderr, /Could not check this value against the master password of the bw vault/);
+  assert.equal((await add(other, "T_TOKEN", "Logged out", "some-value-123456", { ...env, FAKE_BW_UNLOCK_ERROR: "(node:123) [DEP0040] DeprecationWarning: The `punycode` module is deprecated.\n(Use `node --trace-deprecation ...` to show where the warning was created)\nYou are not logged in." })).code, 0);
   // bw's data that is there but cannot be read: whether somebody is logged in is not known.
   for (const dir of [join(other.env.HOME, "Library", "Application Support", "Bitwarden CLI"), join(other.env.HOME, ".config", "Bitwarden CLI"), join(other.env.HOME, "AppData", "Roaming", "Bitwarden CLI")]) await writeFile(join(dir, "data.json"), "{ not json");
   const garbled = await add(other, "U_TOKEN", "Unchecked", "some-value-123456", env);
@@ -1110,6 +1113,29 @@ test("neither vault's own password is stored as a secret in the other", { skip: 
   assert.notEqual(unread.code, 0);
   assert.match(unread.stderr, /Could not check this value against the passphrase of the local vault/);
   assert.equal((await box.vault()).items.length, 0);
+});
+
+// "There is no bw" is said by the start of bw itself failing for want of a file, with no such
+// file anywhere it is looked for. A bw that is there but cannot start has not answered.
+test("the vault-password check: no bw program has nothing to ask, a bw that cannot start stops the save", { skip: process.platform === "win32" }, async () => {
+  const box = await blank();
+  for (const dir of [join(box.env.HOME, "Library", "Application Support", "Bitwarden CLI"), join(box.env.HOME, ".config", "Bitwarden CLI")]) {
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, "data.json"), JSON.stringify({ global_account_activeAccountId: "user-1" }));
+  }
+  const bin = join(box.dir, "bin"), nodeBin = join(box.dir, "node-bin");
+  await cp(new URL("./fixtures", import.meta.url), bin, { recursive: true });
+  await unlink(join(bin, "bw"));
+  await mkdir(nodeBin);
+  await symlink(process.execPath, join(nodeBin, "node"));
+  // The few tools the fakes call, and no system directory: one may hold a real bw.
+  for (const tool of ["cat", "rm", "sh", "env", "mkdir"]) for (const dir of ["/bin", "/usr/bin"]) if (existsSync(join(dir, tool))) { await symlink(join(dir, tool), join(nodeBin, tool)); break; }
+  const env = { KEYSHROUD_BACKEND: "local", PATH: `${bin}:${nodeBin}` };
+  assert.equal((await add(box, "A_TOKEN", "Item A", "value-aaaa-1111", env)).code, 0);
+  await writeFile(join(bin, "bw"), "#!/nonexistent/interpreter\n", { mode: 0o755 });
+  const broken = await add(box, "B_TOKEN", "Item B", "value-bbbb-2222", env);
+  assert.notEqual(broken.code, 0);
+  assert.match(broken.stderr, /Could not check this value against the master password of the bw vault/);
 });
 
 // Claude Code's settings have no lock of their own: keyshroud's writers share one, and what a

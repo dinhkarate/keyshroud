@@ -999,10 +999,13 @@ test("a key written into auth.json itself is masked like a vault value, by run a
     stale: { type: "api_key", key: "bw://Unused/unsupported" }, broken: { type: "api_key", key: "bw://%E0%A4%A" },
     // pi takes a `${…}` that holds no name as text, up to its brace; the `$UNSET` inside is no variable.
     braces: { type: "api_key", key: "FAKE-${literal$UNSET}-tail-$PART_ENV" },
+    // pi looks a variable up in the entry's own `env` before the environment.
+    mine: { type: "api_key", key: "FAKE-own-${PART_ENV}-x", env: { PART_ENV: "from-entry-0123" } },
+    single: { type: "api_key", key: "$ONLY_HERE", env: { ONLY_HERE: "only-here-FAKE-4567" } },
   });
   await writeFile(join(box.dir, ".env.refs"), "ORG=bw://npm publish\n");
-  const more = await runCli(box, ["run", "--env-file", ".env.refs", "--", "echo", "tpl-FAKE-$PART_ENV-end", "tpl-FAKE-middle0123-end", "acme-org", "scope-fake-0123", "FAKE-${literal$UNSET}-tail-middle0123"], "", { PART_ENV: "middle0123" });
-  assert.equal(more.stdout, "<redacted:together> <redacted:together (2)> <redacted:ORG (2)> <redacted:xai> <redacted:braces (2)>\n", more.stderr);
+  const more = await runCli(box, ["run", "--env-file", ".env.refs", "--", "echo", "tpl-FAKE-$PART_ENV-end", "tpl-FAKE-middle0123-end", "acme-org", "scope-fake-0123", "FAKE-${literal$UNSET}-tail-middle0123", "FAKE-own-from-entry-0123-x", "only-here-FAKE-4567"], "", { PART_ENV: "middle0123" });
+  assert.equal(more.stdout, "<redacted:together> <redacted:together (2)> <redacted:ORG (2)> <redacted:xai> <redacted:braces (2)> <redacted:mine (2)> <redacted:single>\n", more.stderr);
 });
 
 test("wire puts the value into the hook index at once; unwire leaves a provider's login alone", async () => {

@@ -5,6 +5,23 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.10.10] - 2026-11-13
+
+What the second reader found left over in 0.10.9 (review round 13).
+
+### Security
+- A key in `auth.json` with variables in it is filled in from the entry's own `env` first, then
+  from the environment, as pi does; 0.10.9 looked only at the environment, so a key completed
+  from the entry's `env` was not masked.
+- The check that refuses a vault's own password takes "there is no `bw`" only from the start of
+  `bw` itself failing for want of a file, with no file of that name anywhere a command is looked
+  for. A `bw` that is there but cannot start (an unreadable shim, a missing interpreter) stops the
+  save. "Nobody is logged in" counts only when it is all `bw` says.
+
+### Changed
+- The 0.10.9 note on the masking inventory said "a session the process opened"; it is a session
+  the process has verified (one it was given counts too). Nothing is opened or renewed for it.
+
 ## [0.10.9] - 2026-11-13
 
 What the second reader found left over in 0.10.8 (review round 12).

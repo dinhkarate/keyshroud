@@ -2,7 +2,7 @@
 // extensions, CLI, MCP server, hooks) goes through these functions.
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomBytes, randomUUID, scrypt, timingSafeEqual, type ScryptOptions } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { appendFile, chmod, mkdir, mkdtemp, open, readdir, readFile, realpath, rename, rm, stat, symlink, unlink, utimes, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, delimiter, join, dirname, resolve as absolutePath } from "node:path";
@@ -103,7 +103,7 @@ export function invocation(command: string, args: string[]): Invocation {
   // Not on PATH: fail instead of letting spawn find a file in the current directory.
   if (!found) {
     if (/[\\/]/.test(command)) return { command, args };
-    throw Object.assign(new Error(`${command}: not found on PATH`), { code: "ENOENT" });
+    throw Object.assign(new Error(`${command}: not found on PATH`), { code: "ENOENT", spawnCode: "ENOENT" });
   }
   if (found.script) return { command: process.execPath, args: [found.script, ...args] };
   if (!/\.(cmd|bat)$/i.test(found.file)) return { command: found.file, args };
@@ -207,7 +207,9 @@ function execRun(command: string, args: string[], { secrets, ...options }: Recor
       if (error) {
         const env = options.env as NodeJS.ProcessEnv | undefined;
         const message = withoutSecrets(String(stderr || error.message || "Command failed").trim(), [input, ...(secrets as string[] | undefined ?? []), env?.BW_PASSWORD, env?.BW_CLIENTSECRET, env?.BW_SESSION]);
-        reject(new Error(message));
+        // That the program could not be started at all is kept apart from anything it printed.
+        const { code, syscall } = error as NodeJS.ErrnoException;
+        reject(Object.assign(new Error(message), typeof code === "string" && syscall?.startsWith("spawn") ? { spawnCode: code } : {}));
         return;
       }
       resolve({ stdout: String(stdout ?? ""), stderr: String(stderr ?? "") });
@@ -421,10 +423,17 @@ export async function resolveRef(ref: SecretRef, opts: { open?: boolean } = {}):
   }
 }
 
-// Whether there is a bw program to run at all (looked up as a command would be).
-function bwInstalled(): boolean {
-  if (process.platform === "win32") { try { invocation("bw", []); return true; } catch { return false; } }
-  return (process.env.PATH ?? "").split(delimiter).some((dir) => dir && existsSync(join(dir, "bw")));
+// Whether no file of this name is in any directory a command is looked for in (an empty entry
+// of PATH is the current directory; without PATH the system's own two). A directory that cannot
+// be looked into is not known to be without it. On Windows `invocation` has made this search.
+function nowhereOnPath(command: string): boolean {
+  if (process.platform === "win32") return true;
+  for (const dir of (process.env.PATH ?? "/usr/bin:/bin").split(delimiter)) {
+    try { statSync(join(dir || ".", command)); return false; } catch (error) {
+      if (!["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) return false;
+    }
+  }
+  return true;
 }
 
 // The timeout leaves room for a macOS "allow access" prompt when the entry was
@@ -811,18 +820,24 @@ async function matchesMasterVerifier(secret: string): Promise<boolean | null> {
 
 // Without a verifier (an agent can delete the file) try the value itself: bw
 // unlock is local, and a match replaces the session token, so keep the new one.
-// "no" only when there is no vault on this machine for the value to open (no bw program on PATH,
-// or bw answers the unlock itself with "You are not logged in."), or when bw says the password is
-// wrong. A bw that fails any other way (a login that ran out, a file it cannot read, no answer)
-// has not answered: "unknown".
+// "no" only when there is no vault on this machine for the value to open (starting bw fails
+// because there is no such program, or all bw says to the unlock is "You are not logged in."), or
+// when bw says the password is wrong. A bw that fails any other way (a program that is there but
+// cannot be run, a login that ran out, a file it cannot read, no answer) has not answered: "unknown".
 async function unlocksVault(secret: string, keep = true): Promise<"yes" | "no" | "unknown"> {
-  if (!bwInstalled()) return "no";
   const before = await readSession();
   let token: string;
   try {
     token = (await runFile("bw", ["unlock", "--passwordenv", "BW_PASSWORD", "--raw"], { env: { ...process.env, BW_PASSWORD: secret }, timeout: 20000, maxBuffer: 4 * 1024 * 1024 })).stdout.trim();
   } catch (error) {
-    return /Invalid master password|decryption operation failed|^You are not logged in\.?$/im.test(error instanceof Error ? error.message.trim() : "") ? "no" : "unknown";
+    // No program: starting it failed for want of a file (the failure itself, not a text that any
+    // file operation could carry), and no file of that name is anywhere a command is looked for
+    // (a bw that is there but cannot start, a script without its interpreter, is not "no bw").
+    if ((error as { spawnCode?: string }).spawnCode === "ENOENT" && nowhereOnPath("bw")) return "no";
+    const message = error instanceof Error ? error.message : "";
+    // What bw said, without what Node adds about itself around it.
+    const said = message.split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !/^\(node:\d+\) |^\(Use `node --trace-/.test(line)).join("\n");
+    return /Invalid master password|decryption operation failed/i.test(message) || /^You are not logged in\.?$/i.test(said) ? "no" : "unknown";
   }
   if (!token) return "unknown";
   // A login keyshroud does not use is locked again: the try must not leave it open.
@@ -1268,8 +1283,9 @@ export function withEarlierValues(values: Record<string, string>, earlier: Recor
 
 // A key as pi 1.5 reads it, token by token as pi does: `$NAME` and `${NAME}` stand for variables,
 // `$$` and `$!` for the characters, a `${…}` that holds no name is text up to its brace, and any
-// other `$` is one. null when a variable it names is not set (pi then has no key).
-function filledTemplate(raw: string): string | null {
+// other `$` is one. null when a variable it names is not set (pi then has no key). `variable`
+// looks a name up as pi does: in the entry's own `env` first, then in the environment.
+function filledTemplate(raw: string, variable: (name: string) => string | undefined): string | null {
   let out = "";
   for (let at = 0; at < raw.length;) {
     const dollar = raw.indexOf("$", at);
@@ -1288,7 +1304,7 @@ function filledTemplate(raw: string): string | null {
       if (!name) { out += "$"; at = dollar + 1; continue; }
       end = dollar + 1 + name.length;
     }
-    const value = process.env[name];
+    const value = variable(name);
     if (!value) return null;
     out += value; at = end;
   }
@@ -1322,8 +1338,14 @@ async function wiringFileValues(): Promise<Array<[string, string]>> {
     // is that variable's value; the name is not masked. A bare name with no such variable is
     // the key itself. Any other text is the key as older pi reads it, and with its variables
     // filled in as pi 1.5 does.
+    // pi 1.5 takes a variable from the entry's own `env` (names to texts) before the environment.
+    const own = entry && typeof entry === "object" ? (entry as { env?: unknown }).env : undefined;
+    const variable = (wanted: string) => {
+      const mine = own && typeof own === "object" && Object.hasOwn(own, wanted) ? (own as Record<string, unknown>)[wanted] : undefined;
+      return (typeof mine === "string" && mine) || process.env[wanted];
+    };
     const named = /^(?:\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)|([A-Za-z_][A-Za-z0-9_]*))$/.exec(raw);
-    const values = named ? [process.env[named[1] ?? named[2] ?? named[3]] || (named[3] ? raw : "")] : [raw, filledTemplate(raw)];
+    const values = named ? [(named[3] ? process.env[named[3]] : variable((named[1] ?? named[2])!)) || (named[3] ? raw : "")] : [raw, filledTemplate(raw, variable)];
     for (const value of new Set(values)) if (value) found.push([name, value]);
   }
   return found;

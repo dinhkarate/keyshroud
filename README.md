@@ -670,8 +670,8 @@ overlap with the next one. That can mean a second dialog, a `bw` call that fails
 have to open again; it does not put a value anywhere. Claude Code's `settings.json` has no lock of
 its own: `claude-setup` is safe against another `claude-setup` (a stalled one replaces nothing and
 widens no file but the one it wrote), not against Claude Code writing the file at the same moment. The check that refuses a vault's own password as a secret asks `bw`: where
-`bw` is not installed, or says that nobody is logged in, there is no vault on this machine to ask,
-and the value is stored. A `.env.refs` can reference **any** item in your vault, not only the
+no `bw` program is found, or all `bw` answers is that nobody is logged in, there is no vault on this
+machine to ask, and the value is stored; a `bw` that is there but does not start stops the save. A `.env.refs` can reference **any** item in your vault, not only the
 ones you wired, so read a cloned repo's `.env.refs` before running `--env-file`
 with it. `import` decides what is secret by heuristics and keeps everything else
 as a literal; check its plan before committing `.env.refs`. The Claude Code
@@ -699,7 +699,9 @@ and `+/=_-`), so a key shown with line numbers or as a diff stays masked; values
 shorter than 6 characters are not redacted (to avoid noise), so don't wire short
 PINs. Of the keys written into `auth.json` as plain text, one that is nothing but the name of a
 variable (`OPENAI_API_KEY`, `$OPENAI_API_KEY`) stands for that variable when it is set: its value is
-masked, the name is not (masking it would change every file that mentions the variable). And a
+masked, the name is not (masking it would change every file that mentions the variable). A key
+with variables in it is masked as text and filled in as pi does, from the entry's own `env` first;
+the values in that `env` are not masked by themselves. And a
 `!command` there that is not a keyshroud reference is another program's: keyshroud does not run it
 to learn what it prints, so its output is masked only when the entry has a variable's name and is
 injected. pi's `/secret`, `/vault_add` and `/vault_rotate` popups store a pasted value without the spaces or line breaks
