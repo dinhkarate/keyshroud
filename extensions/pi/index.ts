@@ -2,7 +2,8 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import type { TSchema } from "typebox";
 import { BRAND } from "../../src/brand.ts";
 import * as core from "../../src/core.ts";
-import { createRedactor, redactDeep, type Redactor } from "../../src/redact.ts";
+import { StringDecoder } from "node:string_decoder";
+import { createRedactFeed, createRedactor, redactDeep, type Redactor } from "../../src/redact.ts";
 import { ENV_NAME_RE, isLoaderEnvName } from "../../src/refs.ts";
 import { confirmInBorderedPopup, inputInBorderedPopup, selectInBorderedPopup } from "./ui/bordered-popups.ts";
 
@@ -58,7 +59,8 @@ function refreshEnv(): Promise<void> {
     refreshPromise = (async () => {
       try { await core.ensureSession(); } catch { scheduleRetry(); }
       applyEnv(await core.buildEnvMap(own));
-      masked = { ...masked, ...await core.redactionValues(currentEnv) };
+      // A value masked once stays masked: a tool started before a rotation can still print the old one.
+      masked = core.withEarlierValues(await core.redactionValues(currentEnv), masked);
       redactor = createRedactor(masked);
       const local = await core.localStatus();
       sessionState = core.keyHasSessions(local.key) ? local.status : null;
@@ -232,7 +234,6 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   pi.on("session_start", () => { void refreshEnv(); });
   // Checked before every tool and `!command` starts.
   pi.on("tool_call", recheckSession);
-  pi.on("user_bash", recheckSession);
   // The model never sees vault values: every tool result is scrubbed before it
   // enters the context, whatever the tool printed. Its details and structured data (kept in the
   // session file, read by scripts) are scrubbed the same way.
@@ -263,6 +264,28 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   });
   // The output of the user's own `!command` reaches the model as a message, not as a tool
   // result: it is scrubbed in what is sent (the screen and the session file keep what was printed).
+  // A `!command` the user types: its output is masked as it arrives, so what pi shows, saves and
+  // later summarizes is the masked text. (An agent host without pi's local shell falls back to
+  // the `context` handler below, which masks what is sent to the model with a turn.)
+  pi.on("user_bash", async () => {
+    await recheckSession();
+    if (redactor.size === 0) return undefined;
+    const host = await import("@earendil-works/pi-coding-agent").catch(() => null) as { createLocalBashOperations?: () => { exec: (command: string, cwd: string, options: { onData: (data: Buffer) => void }) => Promise<{ exitCode: number | null }> } } | null;
+    if (!host?.createLocalBashOperations) return undefined;
+    const local = host.createLocalBashOperations();
+    const current = redactor;
+    return {
+      operations: {
+        exec: async (command, cwd, options) => {
+          const decoder = new StringDecoder("utf8"), feed = createRedactFeed(current);
+          const pass = (text: string) => { if (text) options.onData(Buffer.from(text, "utf8")); };
+          try { return await local.exec(command, cwd, { ...options, onData: (data: Buffer) => pass(feed.push(decoder.write(data))) }); }
+          finally { pass(feed.push(decoder.end()) + feed.end()); }
+        },
+      },
+    };
+  });
+
   pi.on("context", (event) => {
     if (redactor.size === 0) return undefined;
     let changed = false;

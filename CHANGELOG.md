@@ -5,6 +5,51 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.10.7] - 2026-11-13
+
+What the second reader found left over in 0.10.6 (review round 10).
+
+### Security
+- The stream redactor could still let one character through in the middle of a secret that
+  overlaps itself, when the output had first repeated it past the 4096 characters it may hold
+  back. The cut now never goes past the place where an unfinished secret may have begun; when the
+  hold is full it goes through finished secrets instead, which are masked on both sides of it.
+  The same rule applies where `secrets_run` truncates long output.
+- A lock beside a linked `auth.json` could be removed by a keyshroud command that had stalled
+  twice, leaving a pending write that an older pi's update could then be overwritten by. The
+  pending text is now named through that lock (`<link>.lock/via/…`), so it cannot land once either
+  lock is gone.
+- pi: the output of a `!command` is masked as it arrives, so pi shows, saves and summarizes the
+  masked text (0.10.6 masked only what was sent to the model with a turn). A value stays masked
+  after its name gets a new one, for tools that started before a rotation.
+- Masked values that were still left out: a key in `auth.json` that an env file overrides under the
+  same name; a reference that one wiring file overrides in another; a key that looks like a
+  variable's name when there is no such variable; an item called `__proto__`.
+- `KEYSHROUD_PASSPHRASE` can no longer be wired or set by an env file (it could be put back that
+  way), and on Windows inherited names are dropped whatever their case.
+- The master password of a `bw` login that keyshroud has never used (the local vault was chosen)
+  is refused as a secret too; the login is left locked.
+- A failed `bw create` or `bw edit` cannot quote a field of the item it was given (any of four
+  characters or more), and a command that cannot be started is reported by its error code alone.
+- `migrate --to local` groups references exactly as they are written: an id and a name that
+  differ only in case are no longer taken for one item. References that would get one name in the
+  local vault are moved only if they hold one value.
+- `claude-setup` writes its backup and the new settings `0600` from the first byte, and runs one
+  at a time.
+- `rekey` and the first `add` keep the new key when the vault cannot be read back after a failure
+  (they deleted it unless the read proved the vault was the new one).
+- MCP: `only: null` is refused like any other value that is not a list; after a timeout the whole
+  process group is killed even when the shell itself has gone.
+- CI: the check for "generated with" lines also reads a commit's subject.
+
+### Changed
+- `secrets_run` adds the values it resolves to the hook index, and `run` does so for keys written
+  out in `auth.json` as well.
+- README: what the locks around `bw`, the dialog and session files do not promise; which pi
+  reaches `auth.json` by which lock; what `!command` masking needs; Windows needs `/bin/sh` (WSL)
+  for `!command` entries.
+
+
 ## [0.10.6] - 2026-11-13
 
 A review of the whole code base (own reading and an independent one, round 9).

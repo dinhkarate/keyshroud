@@ -71,7 +71,7 @@ async function runTool(args: Json): Promise<Json> {
   let entries = await collectEntries(args.env_file);
   // With `only`, the other wired names do not reach the command from this server's own environment either.
   let dropped: string[] = [];
-  if (args.only !== undefined && args.only !== null) {
+  if (args.only !== undefined) {
     // Anything but a list of names would mean every secret: refused, not guessed.
     if (!Array.isArray(args.only) || !args.only.every((name) => typeof name === "string")) return text("only must be a list of names", true);
     const only = args.only as string[];
@@ -85,6 +85,8 @@ async function runTool(args: Json): Promise<Json> {
   const env = await core.resolveEntries(entries);
   await core.audit("run", Object.keys(env.secrets), "mcp");
   const redactor = createRedactor(await core.redactionValues(env.secrets));
+  // So a Claude Code hook knows these values too, should another tool show one later.
+  try { await core.writeRedactIndex(await core.indexedValues(env.secrets)); } catch {}
   // At most a day: a longer wait is past what a timer can hold, and would end at once.
   const timeout = typeof args.timeout_ms === "number" && args.timeout_ms > 0 ? Math.min(args.timeout_ms, 24 * 60 * 60 * 1000) : 120000;
   // Own process group so a timeout kills everything the command started
@@ -115,8 +117,10 @@ async function runTool(args: Json): Promise<Json> {
   // When its time is up the group is asked to stop, then killed; whatever still holds the pipes
   // open after that no longer keeps the answer waiting.
   let killer: ReturnType<typeof setTimeout> | undefined, giveUp: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
   const code = await new Promise<string>((done) => {
     const timer = setTimeout(() => {
+      timedOut = true;
       if (windows) spawn(join(core.SYSTEM32, "taskkill.exe"), ["/pid", String(child.pid), "/t", "/f"], { stdio: "ignore" }).on("error", () => {});
       else { try { process.kill(-child.pid!, "SIGTERM"); } catch {} }
       killer = setTimeout(() => { if (!windows) { try { process.kill(-child.pid!, "SIGKILL"); } catch {} } }, 5000);
@@ -126,11 +130,14 @@ async function runTool(args: Json): Promise<Json> {
     child.on("error", (error) => { clearTimeout(timer); done(`spawn error: ${(error as NodeJS.ErrnoException).code ?? "error"}`); });
   });
   clearTimeout(killer); clearTimeout(giveUp);
+  // The shell may be gone while something it started ignores the first signal: the group is killed now, not left.
+  if (timedOut && !windows) { try { process.kill(-child.pid!, "SIGKILL"); } catch {} }
   let truncated = false;
   const out = (stream: "stdout" | "stderr") => {
     let raw = Buffer.concat(chunks[stream]).toString("utf8");
-    if (sizes[stream] >= OUTPUT_LIMIT * 2) { truncated = true; raw = raw.slice(0, redactor.safeCut(raw)); }
-    const masked = redactor.redact(raw);
+    let rest = "";
+    if (sizes[stream] >= OUTPUT_LIMIT * 2) { truncated = true; const cut = redactor.safeCut(raw); rest = raw.slice(cut); raw = raw.slice(0, cut); }
+    const masked = redactor.redact(raw, "", rest);
     if (masked.length <= OUTPUT_LIMIT / 2) return masked;
     truncated = true;
     return masked.slice(0, OUTPUT_LIMIT / 2);

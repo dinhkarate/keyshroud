@@ -509,7 +509,7 @@ test("a writer paused before its rename is voided by the next writer through ano
     const run = (script) => process.stdout.write(require("node:child_process").execFileSync(process.execPath, ["--input-type=module", "-e", script], { cwd: "/" }));
     let stalled = false;
     patch("rename", async (real, from, to) => {
-      if (!stalled && String(from).includes("real-auth.json.lock/pending.")) {
+      if (!stalled && /auth\\.json\\.lock\\/via\\/pending\\./.test(String(from))) {
         stalled = true;
         const old = new Date(Date.now() - 40000);
         for (const lock of ${JSON.stringify([`${real}.lock`, `${links[0]}.lock`])}) await fsp.utimes(lock, old, old);
@@ -547,7 +547,7 @@ for (const linked of [false, true]) test(`pi's auth writer cannot break the lock
   const out = await runScript(box, `${PATCH_FS}
     let stalled = false;
     patch("rename", async (real, from, to) => {
-      if (!stalled && String(from).includes("auth.json.lock/pending.")) {
+      if (!stalled && /auth\\.json\\.lock\\/(via\\/)?pending\\./.test(String(from))) {
         stalled = true;
         const old = new Date(Date.now() - 40000);
         for (const lock of ${JSON.stringify([...new Set([`${real}.lock`, `${auth}.lock`])])}) await fsp.utimes(lock, old, old);
@@ -574,30 +574,33 @@ for (const linked of [false, true]) test(`pi's auth writer cannot break the lock
   for (const dir of new Set([dirname(auth), dirname(real)])) assert.deepEqual((await readdir(dir)).filter((name) => /\.lock$|\.tmp\./.test(name)), []);
 });
 
-// However the lock beside auth.json went (a command acting on an old reading of it, say), pi can
-// take it from then on: the paused writer's rename must have nothing left to move.
-test("once the lock beside auth.json is gone, a writer paused before its rename replaces nothing, whatever removed it", async () => {
+// However a lock of auth.json went (a command acting on an old reading of it, say), a pi that
+// locks there can take it from then on: the paused writer's rename must have nothing left to move.
+// Through a link there are two (beside the file, where pi 1.5 locks; beside the link, where older ones do).
+for (const gone of ["plain", "target", "link"]) test(`once a lock of auth.json is gone (${gone}), a writer paused before its rename replaces nothing, whatever removed it`, async () => {
   const box = await blank();
   assert.equal((await add(box, "A_TOKEN", "Item A", "first-value-123")).code, 0);
   const auth = join(box.env.HOME, ".pi", "agent", "auth.json");
+  const real = gone === "plain" ? auth : join(box.dir, "real-auth.json");
   await mkdir(dirname(auth), { recursive: true });
-  await writeFile(auth, "{}");
+  await writeFile(real, "{}");
+  if (gone !== "plain") await symlink(real, auth);
   const out = await runScript(box, `${PATCH_FS}
     let stalled = false;
     patch("rename", async (real, from, to) => {
-      if (!stalled && String(from).includes("auth.json.lock/pending.")) {
+      if (!stalled && /auth\\.json\\.lock\\/(via\\/)?pending\\./.test(String(from))) {
         stalled = true;
-        fs.rmSync(${JSON.stringify(`${auth}.lock`)}, { recursive: true });
-        process.stdout.write(require("node:child_process").execFileSync(process.execPath, ["--input-type=module", "-e", ${JSON.stringify(piWrites(auth))}]));
+        fs.rmSync(${JSON.stringify(`${gone === "link" ? auth : real}.lock`)}, { recursive: true });
+        process.stdout.write(require("node:child_process").execFileSync(process.execPath, ["--input-type=module", "-e", ${JSON.stringify(gone === "link" ? oldPiWrites(auth) : piWrites(auth))}]));
       }
       return real(from, to);
     });
     const core = await import(${CORE});
     await core.writeAuthEntry(${JSON.stringify(auth)}, "C_TOKEN", core.referenceFor("Item A", "local")).then(() => console.log("written"), (error) => console.log(error.message));
   `);
-  assert.match(out, /^pi wrote\nThis process lost the lock of .*auth\.json .*nothing was written\n$/);
-  assert.deepEqual(Object.keys(JSON.parse(await readFile(auth, "utf8"))), ["anthropic"]);
-  assert.deepEqual((await readdir(dirname(auth))).filter((name) => /\.lock$|\.tmp\./.test(name)), []);
+  assert.match(out, /^(old )?pi wrote\nThis process lost the lock of .*auth\.json .*nothing was written\n$/);
+  assert.deepEqual(Object.keys(JSON.parse(await readFile(real, "utf8"))), [gone === "link" ? "openai" : "anthropic"]);
+  for (const dir of new Set([dirname(auth), dirname(real)])) assert.deepEqual((await readdir(dir)).filter((name) => /\.lock$|\.tmp\./.test(name)), []);
 });
 
 test("a passphrase protects the vault where there is no keychain; lock and the session's end close it, in a live MCP server too", { skip: process.platform === "win32" }, async () => {
@@ -1046,6 +1049,11 @@ test("two different values under one label are both masked; the first wire makes
   const post = await runCli(box, ["hook", "claude", "post-tool-use"], JSON.stringify({ tool_response: { stdout: "value-aaaa-1111 value-bbbb-2222" } }));
   assert.doesNotMatch(JSON.parse(post.stdout).hookSpecificOutput.updatedToolOutput.stdout, /value-/);
 
+  // Any name an item can have is a label.
+  assert.equal((await add(box, "P_TOKEN", "__proto__", "value-cccc-3333")).code, 0);
+  assert.equal((await runCli(box, ["unwire", "--env", "P_TOKEN"])).code, 0);
+  assert.equal((await runCli(box, ["run", "--", "echo", "value-cccc-3333"])).stdout, "<redacted:__proto__>\n");
+
   assert.equal((await add(box, "N_TOKEN", "Nul", "abc\0def-0123456789")).code, 0);
   const nul = await runCli(box, ["run", "--only", "N_TOKEN", "--", "sh", "-c", "echo \"[${N_TOKEN:-none}]\""]);
   assert.equal(nul.stdout, "[none]\n");
@@ -1065,6 +1073,21 @@ test("neither vault's own password is stored as a secret in the other", { skip: 
   assert.notEqual(passphrase.code, 0);
   assert.match(passphrase.stderr, /passphrase of the local vault/);
   assert.equal((await box.vault()).items.length, 0);
+
+  // A bw login that keyshroud never used (no session, no stored password, the local vault chosen):
+  // its master password is tried too, and the login is left locked.
+  const other = await blank();
+  for (const dir of [join(other.env.HOME, "Library", "Application Support", "Bitwarden CLI"), join(other.env.HOME, ".config", "Bitwarden CLI"), join(other.env.HOME, "AppData", "Roaming", "Bitwarden CLI")]) {
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, "data.json"), JSON.stringify({ global_account_activeAccountId: "user-1" }));
+  }
+  const env = { KEYSHROUD_BACKEND: "local" };
+  assert.equal((await add(other, "A_TOKEN", "Item A", "value-aaaa-1111", env)).code, 0);
+  const shared = await add(other, "P_TOKEN", "Phished", "master", env);
+  assert.notEqual(shared.code, 0);
+  assert.match(shared.stderr, /Refusing to store the vault master password/);
+  assert.equal(((await other.vault()) as { status?: string }).status, "locked");
+  assert.ok(!existsSync(join(other.configDir, "session")));
 });
 
 test("migrate --to local leaves alone two references that would get one name, and a name rewired meanwhile", async () => {
@@ -1079,10 +1102,11 @@ test("migrate --to local leaves alone two references that would get one name, an
     P_TOKEN: { type: "api_key", key: "bw://Plain" },
   });
   const dry = await runCli(box, ["migrate", "--to", "local"]);
-  assert.equal(dry.stdout.match(/Sentry \(field dsn\)\s+refused: two different references would get this name\s+<- S[12]$/gm)?.length, 2, dry.stdout);
+  assert.equal(dry.stdout.match(/Sentry \(field dsn\)\s+copy, if the references that get this name hold one value\s+<- S[12]$/gm)?.length, 2, dry.stdout);
   const moved = await runCli(box, ["migrate", "--to", "local", "--yes"]);
   assert.equal(moved.code, 4, moved.stderr);
-  assert.match(moved.stderr, /two references would get this name/);
+  assert.match(moved.stderr, /two references with different values would get this name/);
+  assert.match(moved.stdout, /moved 1 item\(s\) into the local vault and rewired 2 name\(s\)/);
   const auth = join(box.env.HOME, ".pi", "agent", "auth.json");
   const entries = JSON.parse(await readFile(auth, "utf8"));
   assert.deepEqual([entries.S1.key, entries.S2.key], ["bw://Sentry/fields/dsn", "bw://Sentry (field dsn)"]);
@@ -1097,15 +1121,16 @@ test("migrate --to local leaves alone two references that would get one name, an
   assert.equal(out, "false true\n");
 });
 
-test("rekey keeps the new key once the vault is sealed with it, whatever fails afterwards", { skip: process.platform === "win32" }, async () => {
+for (const unreadable of [false, true]) test(`rekey keeps the new key once the vault is sealed with it, whatever fails afterwards${unreadable ? " (the vault cannot even be read back)" : ""}`, { skip: process.platform === "win32" }, async () => {
   const box = await blank();
   assert.equal((await add(box, "A_TOKEN", "A", "value-aaaa-1111", { KEYSHROUD_VAULT_KEY: "keychain" })).code, 0);
   const firstId = JSON.parse(await readFile(vaultPath(box), "utf8")).id;
   const out = await runScript(box, `${PATCH_FS}
     process.stdin.isTTY = process.stderr.isTTY = true;
-    let renamed = false;
+    let renamed = false, failed = false;
     patch("rename", async (real, from, to) => { const done = await real(from, to); if (String(to).endsWith("vault.json")) renamed = true; return done; });
-    patch("rm", async (real, path, ...rest) => { if (renamed && String(path).endsWith("vault.json.lock")) { renamed = false; throw Object.assign(new Error("EIO: i/o error"), { code: "EIO" }); } return real(path, ...rest); });
+    patch("rm", async (real, path, ...rest) => { if (renamed && String(path).endsWith("vault.json.lock")) { renamed = false; failed = true; throw Object.assign(new Error("EIO: i/o error"), { code: "EIO" }); } return real(path, ...rest); });
+    patch("readFile", async (real, path, ...rest) => { if (${unreadable} && failed && String(path).endsWith("vault.json")) throw Object.assign(new Error("EIO: i/o error"), { code: "EIO" }); return real(path, ...rest); });
     const core = await import(${CORE});
     await core.rekeyLocal().then(() => console.log("rekeyed"), (error) => console.log("failed: " + error.code));
   `);

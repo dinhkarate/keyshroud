@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { constants as fsConstants, existsSync } from "node:fs";
-import { chmod, copyFile, mkdir, lstat, readdir, readFile, readlink, rename, stat, symlink, unlink, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { chmod, mkdir, lstat, readdir, readFile, readlink, rename, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import { constants, homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { basename, dirname, join, relative, resolve } from "node:path";
@@ -186,7 +186,7 @@ async function runCommand(args: string[]): Promise<void> {
   const redactor = createRedactor(mask ? await core.redactionValues(env.secrets) : {});
   // Agents started through `run` (e.g. `keyshroud run -- claude`) rely on the
   // hook index, so it must cover env-file values too.
-  if (Object.keys(env.secrets).length) { try { await core.writeRedactIndex(await core.indexedValues(env.secrets)); } catch {} }
+  try { await core.writeRedactIndex(await core.indexedValues(env.secrets)); } catch {}
   let target: core.Invocation;
   try { target = core.invocation(command, commandArgs); } catch (error) { console.error(error instanceof Error ? error.message : String(error)); process.exitCode = 127; return; }
   let child: ReturnType<typeof spawn>;
@@ -201,7 +201,7 @@ async function runCommand(args: string[]): Promise<void> {
   await new Promise<void>((done) => {
     let failed = false;
     child.on("close", (code, signal) => { if (!failed) process.exitCode = code ?? 128 + (signal ? constants.signals[signal] ?? 0 : 1); done(); });
-    child.on("error", (error) => { failed = true; console.error(error.message); process.exitCode = 127; done(); });
+    child.on("error", (error) => { failed = true; console.error(`${BRAND.bin}: could not start ${command} (${(error as NodeJS.ErrnoException).code ?? "error"})`); process.exitCode = 127; done(); });
   });
 }
 
@@ -370,8 +370,8 @@ async function migrateLocalCommand(args: string[]): Promise<void> {
   requireKnownFlags(args, ["--to"], ["--yes"]);
   if (valueAfter(args, "--to") !== "local") fail("--to must be local", 2);
   type Wire = { path: string; name: string; raw: string };
-  type Group = { ref: SecretRef; local: string; wires: Wire[]; clash?: boolean };
-  // One group per reference (an item and a field of it), not per name it gets in the local vault.
+  type Group = { ref: SecretRef; local: string; wires: Wire[]; shared?: boolean };
+  // One group per reference exactly as it is written, not per name it gets in the local vault.
   const groups = new Map<string, Group>();
   for (const path of core.wiringFiles()) for (const [name, entry] of Object.entries(await core.readAuthEntries(path))) {
     const raw = core.authEntryRaw(entry);
@@ -380,22 +380,23 @@ async function migrateLocalCommand(args: string[]): Promise<void> {
     if (!ref || ref.scheme) continue;
     // A field other than the password becomes an item of its own: "Item (username)", "Item (field dsn)".
     const local = ref.field === "password" ? ref.item : `${ref.item} (${typeof ref.field === "object" ? `field ${ref.field.custom}` : ref.field})`;
-    const key = formatRef({ ...ref, item: ref.item.trim().toLowerCase() });
+    const key = formatRef(ref);
     const group = groups.get(key) ?? { ref, local, wires: [] };
     group.wires.push({ path, name, raw: raw! });
     groups.set(key, group);
   }
   const rows = [...groups.values()].sort((a, b) => a.local.localeCompare(b.local));
-  // Two references that would get one name there (a field "dsn" of "Sentry" and an item called
-  // "Sentry (field dsn)") are both left where they are.
-  for (const row of rows) row.clash = rows.some((other) => other !== row && other.local.toLowerCase() === row.local.toLowerCase());
+  // Two references that would get one name there (`Shared` and `shared`; a field "dsn" of "Sentry"
+  // and an item called "Sentry (field dsn)") become one item only if they hold one value: else
+  // both are left where they are.
+  for (const row of rows) row.shared = rows.some((other) => other !== row && other.local.toLowerCase() === row.local.toLowerCase());
   if (!rows.length) { console.log("Nothing to migrate: no wired name points at Vaultwarden."); return; }
   const existing = new Set((await core.findItems("", "local").catch(() => [])).map((item) => item.name.toLowerCase()));
   const width = Math.max(4, ...rows.map((row) => row.local.length));
   console.log("migrate plan (Vaultwarden -> local vault):");
   for (const row of rows) {
     const problem = itemNameProblem(row.local);
-    console.log(`  ${row.local.padEnd(width)}  ${problem ? `refused: the name ${problem}` : row.clash ? "refused: two different references would get this name" : existing.has(row.local.toLowerCase()) ? "in the local vault already (kept if the value is the same)" : "copy"}  <- ${[...new Set(row.wires.map((wire) => wire.name))].join(", ")}`);
+    console.log(`  ${row.local.padEnd(width)}  ${problem ? `refused: the name ${problem}` : row.shared ? "copy, if the references that get this name hold one value" : existing.has(row.local.toLowerCase()) ? "in the local vault already (kept if the value is the same)" : "copy"}  <- ${[...new Set(row.wires.map((wire) => wire.name))].join(", ")}`);
   }
   console.log(`${rows.length} item(s) for ${rows.reduce((n, row) => n + row.wires.length, 0)} wired name(s); Vaultwarden keeps the originals.`);
   if (!args.includes("--yes")) { console.log("Dry run: nothing copied. Re-run with --yes."); return; }
@@ -403,16 +404,18 @@ async function migrateLocalCommand(args: string[]): Promise<void> {
   await core.openBackend("bw", { prompt: true });
   await core.prepareLocalVault({ prompt: true });
   const moved: Group[] = [], failed: string[] = [];
+  const resolved = new Map<Group, string | null>();
+  for (const row of rows) resolved.set(row, await core.resolveRef(row.ref).catch(() => null));
   for (const row of rows) {
     if (itemNameProblem(row.local)) { failed.push(`${row.local} (name)`); continue; }
-    if (row.clash) { failed.push(`${row.local} (two references would get this name)`); continue; }
-    const value = await core.resolveRef(row.ref).catch(() => null);
+    const value = resolved.get(row) ?? null;
+    if (row.shared && rows.some((other) => other.local.toLowerCase() === row.local.toLowerCase() && resolved.get(other) !== value)) { failed.push(`${row.local} (two references with different values would get this name)`); continue; }
     if (value === null) { failed.push(`${row.local} (unresolved in Vaultwarden)`); continue; }
     const localRef: SecretRef = { item: row.local, field: "password", scheme: "local" };
     try {
       if (existing.has(row.local.toLowerCase())) {
         if ((await core.resolveRef(localRef)) !== value) { failed.push(`${row.local} (a different value is already in the local vault)`); continue; }
-      } else await core.createSecretItem({ itemName: row.local, secret: value, envName: row.wires[0].name, backend: "local" });
+      } else { await core.createSecretItem({ itemName: row.local, secret: value, envName: row.wires[0].name, backend: "local" }); existing.add(row.local.toLowerCase()); }
       if ((await core.resolveRef(localRef)) !== value) { failed.push(`${row.local} (not read back)`); continue; }
       moved.push(row);
     } catch (error) { failed.push(`${row.local} (${error instanceof Error ? error.message : String(error)})`); }
@@ -422,14 +425,15 @@ async function migrateLocalCommand(args: string[]): Promise<void> {
   const wires = moved.flatMap((row) => row.wires);
   await writeFile(backup, `${JSON.stringify(wires, null, 2)}\n`, { mode: 0o600 });
   // Only an entry that still holds the reference the plan was made from is rewired.
+  let rewired = 0;
   for (const row of moved) for (const wire of row.wires) {
     const result = await core.writeAuthEntry(wire.path, wire.name, core.referenceFor(row.local, "local"), { replaces: wire.raw });
-    if (!result.ok) failed.push(`${wire.name} in ${wire.path} (changed meanwhile; not rewired)`);
+    if (result.ok) rewired++; else failed.push(`${wire.name} in ${wire.path} (changed meanwhile; not rewired)`);
   }
   if (moved.length) await core.rememberBackend("local");
   await core.audit("migrate", moved.map((row) => row.local), "cli");
   await core.refreshRedactIndex();
-  console.log(`moved ${moved.length} item(s) into the local vault and rewired ${wires.length} name(s); new items go to the local vault.`);
+  console.log(`moved ${new Set(moved.map((row) => row.local.toLowerCase())).size} item(s) into the local vault and rewired ${rewired} name(s); new items go to the local vault.`);
   console.log(`Vaultwarden still holds the originals. The previous references are in ${core.shownPath(backup)}; .env.refs files with bw:// references still use Vaultwarden.`);
   if (failed.length) fail(`Not moved: ${failed.join("; ")}`, 4);
 }
@@ -829,17 +833,27 @@ async function main(): Promise<void> {
       const itemName = valueAfter(args, "--item"); if (!itemName) fail(usage, 2);
       const settingsPath = resolve(valueAfter(args, "--settings") ?? join(homedir(), ".claude", "settings.json"));
       const ttl = valueAfter(args, "--ttl-ms"); if (ttl && !/^\d+$/.test(ttl)) fail(usage, 2);
-      const settings = await readSettings(settingsPath);
-      if (settings.apiKeyHelper && !args.includes("--force")) fail("apiKeyHelper already set; use --force to replace it", 5);
-      // The backup is private (settings can hold keys), and the new file replaces the old one whole.
-      const existing = await stat(settingsPath).catch(() => null);
-      if (existing) { const backup = `${settingsPath}.bak-${timestamp()}-${randomBytes(3).toString("hex")}`; await copyFile(settingsPath, backup, fsConstants.COPYFILE_EXCL); await chmod(backup, 0o600); }
-      else await mkdir(dirname(settingsPath), { recursive: true });
-      const cliPath = fileURLToPath(import.meta.url); settings.apiKeyHelper = `${shellQuote(process.execPath)} ${shellQuote(cliPath)} api-key --item ${shellQuote(itemName)}`;
-      if (ttl) settings.env = { ...(settings.env as Record<string, unknown> ?? {}), CLAUDE_CODE_API_KEY_HELPER_TTL_MS: ttl };
-      const tmp = `${settingsPath}.tmp.${randomBytes(6).toString("hex")}`;
-      await writeFile(tmp, `${JSON.stringify(settings, null, 2)}\n`, { mode: existing ? existing.mode & 0o777 : 0o600, flag: "wx" });
-      await rename(tmp, settingsPath); console.log(`configured apiKeyHelper for item=${itemName}`); return;
+      await mkdir(dirname(settingsPath), { recursive: true });
+      // One keyshroud at a time reads, checks and replaces the file (Claude Code has no lock to share).
+      const taken = await core.withPathLock(settingsPath, async () => {
+        const settings = await readSettings(settingsPath);
+        if (settings.apiKeyHelper && !args.includes("--force")) return true;
+        // The backup and the new text are private from their first byte (settings can hold keys);
+        // the new file gets the old one's mode just before it replaces it whole.
+        const existing = await stat(settingsPath).catch(() => null);
+        if (existing) await writeFile(`${settingsPath}.bak-${timestamp()}-${randomBytes(3).toString("hex")}`, await readFile(settingsPath), { mode: 0o600, flag: "wx" });
+        const cliPath = fileURLToPath(import.meta.url); settings.apiKeyHelper = `${shellQuote(process.execPath)} ${shellQuote(cliPath)} api-key --item ${shellQuote(itemName)}`;
+        if (ttl) settings.env = { ...(settings.env as Record<string, unknown> ?? {}), CLAUDE_CODE_API_KEY_HELPER_TTL_MS: ttl };
+        const tmp = `${settingsPath}.tmp.${randomBytes(6).toString("hex")}`;
+        try {
+          await writeFile(tmp, `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600, flag: "wx" });
+          if (existing) await chmod(tmp, existing.mode & 0o777);
+          await rename(tmp, settingsPath);
+        } catch (error) { await rm(tmp, { force: true }).catch(() => {}); throw error; }
+        return false;
+      });
+      if (taken) fail("apiKeyHelper already set; use --force to replace it", 5);
+      console.log(`configured apiKeyHelper for item=${itemName}`); return;
     }
     if (command === "doctor") {
       requireKnownFlags(args, []);

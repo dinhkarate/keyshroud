@@ -52,5 +52,5 @@ jobs:
       - run: |
           bad=$(git log --format='%h %(trailers:key=Co-authored-by,valueonly,separator=%x20)' HEAD | grep -iE 'claude|anthropic|codex|openai|chatgpt|copilot|gemini|grok|xai|x\.ai|cursor|devin' || true)
           if [ -n "$bad" ]; then echo "AI co-author trailer in:"; echo "$bad"; exit 1; fi
-          bad=$(git log --format='%h %s%n%b' HEAD | grep -iE '^(🤖 )?(generated|co-authored) with ' || true)
+          bad=$(git log --format='%s%n%b' HEAD | grep -iE '^(🤖 )?(generated|co-authored) with ' || true)
           if [ -n "$bad" ]; then echo "AI attribution line:"; echo "$bad"; exit 1; fi

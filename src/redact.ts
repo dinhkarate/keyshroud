@@ -12,13 +12,15 @@ const MAX_HOLD = 4096;
 
 export interface Redactor {
   readonly size: number;
-  // `before` is text that came just ahead of `text` and is not returned: a secret that began in it
-  // is masked in `text` from its first character there.
-  redact(text: string, before?: string): string;
+  // `before` and `after` are the text around `text` in one output, which is masked piece by
+  // piece: only `text` is returned. A secret that runs on into `after` is masked up to the end
+  // of `text`; one that began in `before` got its placeholder there, and its rest just goes.
+  redact(text: string, before?: string, after?: string): string;
   // How much of the text already let go a stream keeps, to pass as `before`.
   readonly lookBehind: number;
-  // Largest prefix length that can be redacted now: the remainder may still
-  // grow into a secret, and no complete secret straddles the cut.
+  // A prefix length that can be let go now: nothing from the cut on has begun a secret that
+  // is still unfinished at the end of `text`. Finished secrets may straddle the cut (only when
+  // there are more of them than a stream may hold back): pass the rest to `redact` as `after`.
   safeCut(text: string): number;
 }
 
@@ -46,17 +48,18 @@ export function redactForms(value: string): string[] {
 interface Hit { start: number; end: number; name: string }
 
 // Overlapping matches merge into one placeholder, so no fragment of any secret
-// survives between two replacements. Only the text from `from` on is returned.
-function applyHits(text: string, hits: Hit[], from = 0): string {
-  if (!hits.length) return text.slice(from);
+// survives between two replacements. Only the text from `from` up to `to` is returned: a match
+// that began before `from` has its placeholder in what came before.
+function applyHits(text: string, hits: Hit[], from = 0, to = text.length): string {
+  if (!hits.length) return text.slice(from, to);
   hits.sort((a, b) => a.start - b.start || b.end - a.end);
   let out = "";
   let cursor = from;
   let current: Hit | null = null;
   const flush = (hit: Hit) => {
-    if (hit.end <= from) return;
-    out += text.slice(cursor, Math.max(cursor, hit.start)) + placeholder(hit.name);
-    cursor = hit.end;
+    if (hit.end <= from || hit.start >= to) return;
+    if (hit.start >= from) out += text.slice(cursor, Math.max(cursor, hit.start)) + placeholder(hit.name);
+    cursor = Math.min(hit.end, to);
   };
   for (const hit of hits) {
     if (current && hit.start < current.end) { current.end = Math.max(current.end, hit.end); continue; }
@@ -64,10 +67,11 @@ function applyHits(text: string, hits: Hit[], from = 0): string {
     current = { ...hit };
   }
   if (current) flush(current);
-  return out + text.slice(cursor);
+  return out + text.slice(cursor, to);
 }
 
-export function createRedactor(values: Record<string, string>): Redactor {
+// `maxHold`: see MAX_HOLD (tests lower it).
+export function createRedactor(values: Record<string, string>, maxHold = MAX_HOLD): Redactor {
   const byValue = new Map<string, string>();
   for (const [name, value] of Object.entries(values)) {
     for (const form of redactForms(value)) if (!byValue.has(form)) byValue.set(form, name);
@@ -78,28 +82,26 @@ export function createRedactor(values: Record<string, string>): Redactor {
   return {
     size: secrets.length,
     lookBehind: Math.max(0, maxLength - 1),
-    redact(text, before = "") {
-      const all = before + text;
+    redact(text, before = "", after = "") {
+      const all = before + text + after;
       const hits: Hit[] = [];
       for (const [value, name] of secrets) {
         for (let at = all.indexOf(value); at !== -1; at = all.indexOf(value, at + 1)) hits.push({ start: at, end: at + value.length, name });
       }
-      return applyHits(all, hits, before.length);
+      return applyHits(all, hits, before.length, before.length + text.length);
     },
     safeCut(text) {
-      let cut = text.length;
+      // The earliest place where a secret may have begun that the text ends inside of. Whatever
+      // covers a character before it is a finished secret, since one begun earlier and still
+      // unfinished would have put this place earlier: so nothing before it can still turn out to
+      // be part of a secret, and the cut is never moved past it.
+      let open = text.length;
       for (let i = Math.max(0, text.length - maxLength + 1); i < text.length; i++) {
         const tail = text.slice(i);
-        if (secrets.some(([value]) => value.length > tail.length && value.startsWith(tail))) { cut = i; break; }
+        if (secrets.some(([value]) => value.length > tail.length && value.startsWith(tail))) { open = i; break; }
       }
-      // Hold back any complete secret that straddles the cut too: it may merge
-      // with the unfinished one once the next chunk arrives.
-      const straddling = (at: number) => secrets.find(([value]) => {
-        for (let hit = text.indexOf(value, Math.max(0, at - value.length + 1)); hit !== -1 && hit < at; hit = text.indexOf(value, hit + 1)) {
-          if (hit + value.length > at) return true;
-        }
-        return false;
-      });
+      // A finished secret that straddles the cut is held back whole, so that it gets one placeholder.
+      let cut = open;
       for (let moved = true; moved;) {
         moved = false;
         for (const [value] of secrets) {
@@ -108,39 +110,39 @@ export function createRedactor(values: Record<string, string>): Redactor {
           }
         }
       }
-      if (text.length - cut <= MAX_HOLD) return cut;
-      // Bounded fallback: cut near the end, moving forward past any complete
-      // secret that straddles it, so whole matches are still replaced.
-      cut = Math.max(0, text.length - maxLength);
-      while (cut < text.length && straddling(cut)) cut++;
-      return cut;
+      // Output that keeps repeating a secret which overlaps itself would be held back without
+      // end: past the bound, the cut goes through finished secrets, which `redact` masks on both sides.
+      return text.length - cut <= maxHold ? cut : open;
     },
   };
 }
 
-// Streams child output through the redactor, holding back only a trailing
-// fragment that could still grow into a secret on the next chunk. What was let
-// go is remembered for the length of a secret: one that began there (the bounded
-// fallback of safeCut can cut inside overlapping matches) is still masked to its end.
-export function createRedactStream(redactor: Redactor): Transform {
-  const decoder = new StringDecoder("utf8");
+// An output masked as it arrives: `push` returns what can be let go of a chunk, `end` the rest.
+// Only a trailing fragment that could still grow into a secret is held back. What was let go
+// is remembered for the length of a secret, for one that the cut went through.
+export function createRedactFeed(redactor: Redactor): { push(text: string): string; end(): string } {
   let pending = "";
   let gone = "";
-  const emit = (text: string) => {
-    const out = redactor.redact(text, gone);
+  const emit = (cut: number) => {
+    const text = pending.slice(0, cut), after = pending.slice(cut);
+    const out = redactor.redact(text, gone, after);
     gone = redactor.lookBehind ? (gone + text).slice(-redactor.lookBehind) : "";
+    pending = after;
     return out;
   };
+  return {
+    push(text) { pending += text; return emit(redactor.safeCut(pending)); },
+    end() { return emit(pending.length); },
+  };
+}
+
+// Streams child output through the redactor (see createRedactFeed).
+export function createRedactStream(redactor: Redactor): Transform {
+  const decoder = new StringDecoder("utf8");
+  const feed = createRedactFeed(redactor);
   return new Transform({
-    transform(chunk: Buffer, _encoding, callback) {
-      const text = pending + decoder.write(chunk);
-      const cut = redactor.safeCut(text);
-      pending = text.slice(cut);
-      callback(null, emit(text.slice(0, cut)));
-    },
-    flush(callback) {
-      callback(null, emit(pending + decoder.end()));
-    },
+    transform(chunk: Buffer, _encoding, callback) { callback(null, feed.push(decoder.write(chunk))); },
+    flush(callback) { callback(null, feed.push(decoder.end()) + feed.end()); },
   });
 }
 

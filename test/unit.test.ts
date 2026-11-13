@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildRedactIndex, createRedactor, createRedactStream, redactWithIndex } from "../src/redact.ts";
+import { buildRedactIndex, createRedactFeed, createRedactor, createRedactStream, redactWithIndex } from "../src/redact.ts";
 import { formatRef, isLoaderEnvName, itemNameProblem, legacyRefFor, looksSecret, parseEnvFile, parseRef } from "../src/refs.ts";
 
 test("parseRef handles bw:// fields, custom fields, and encoding", () => {
@@ -163,6 +163,28 @@ test("redact stream keeps flowing on output that repeats a periodic secret", asy
 test("redact stream leaves no tail of a periodic secret that straddles what it already let go", async () => {
   const out = await streamThrough({ S: "ABCDEFABCDEF" }, ["ABCDEF".repeat(684), "ABCDEF"]);
   assert.equal(out.replaceAll("<redacted:S>", ""), "");
+});
+
+test("redact feed: however the output is cut up, exactly the characters outside every secret come through", () => {
+  let state = 7;
+  const random = (n: number) => { state = (state * 1103515245 + 12345) % 2147483648; return state % n; };
+  const pool = ["010101", "0101010", "001100", "111111", "0110110", "000000000", "10101100"];
+  for (let round = 0; round < 3000; round++) {
+    const values = Object.fromEntries(Array.from({ length: 1 + random(3) }, (_, i) => ["ABC"[i], pool[random(pool.length)]]));
+    // Runs of a few repeated patterns, so that secrets overlap themselves and each other.
+    let text = "";
+    while (text.length < 40 + random(120)) text += ["01", "0", "1", "011", "0011", "x"][random(6)].repeat(1 + random(9));
+    const covered = new Array(text.length).fill(false);
+    for (const value of Object.values(values)) for (let at = text.indexOf(value); at !== -1; at = text.indexOf(value, at + 1)) covered.fill(true, at, at + value.length);
+    const expected = [...text].filter((_, i) => !covered[i]).join("");
+    // A hold limit this low sends most rounds through the cut inside finished secrets.
+    const feed = createRedactFeed(createRedactor(values, random(3) ? 4 : 4096));
+    let out = "";
+    for (let at = 0; at < text.length;) { const size = 1 + random(12); out += feed.push(text.slice(at, at + size)); at += size; }
+    out += feed.end();
+    assert.equal(out.replace(/<redacted:[ABC]>/g, ""), expected, `round ${round}: ${JSON.stringify(values)} in ${text}`);
+    assert.equal(/<redacted:[ABC]>/.test(out), covered.includes(true), `round ${round}`);
+  }
 });
 
 test("index redaction matches plaintext redaction without holding values", () => {

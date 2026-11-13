@@ -46,7 +46,7 @@ test("pi extension with a passphrase vault: lock and the session's end take valu
   // Unlocked again in a terminal for 3 s: back before the next `!command`, gone once the session ends.
   const unlocked = await runCliTtySteps(box, ["unlock"], [["Passphrase of the local vault", PASS]], { ...env, KEYSHROUD_SESSION_TTL_MS: "3000" });
   assert.equal(unlocked.code, 0, unlocked.stdout);
-  assert.equal(await userBash(), undefined);
+  await userBash();
   assert.equal(process.env.A_TOKEN, `${VALUE}-A_TOKEN`);
   await new Promise((resolve) => setTimeout(resolve, 3300));
   await userBash();

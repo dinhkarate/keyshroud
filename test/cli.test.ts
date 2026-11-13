@@ -953,6 +953,13 @@ test("run: bw's own variables are never wired or injected, --only also drops the
   const mcp = await mcpCall(box, "secrets_run", { command: script, only: ["GH_TOKEN"] }, env);
   assert.match(mcp.text, /n=none c=none p=none g=<redacted:GH_TOKEN>\n<redacted:KEYSHROUD_PASSPHRASE>/);
   assert.match((await mcpCall(box, "secrets_run", { command: "true", only: "GH_TOKEN" })).text, /only must be a list of names/);
+  assert.match((await mcpCall(box, "secrets_run", { command: "true", only: null })).text, /only must be a list of names/);
+  // The passphrase's name is reserved like bw's: neither wiring nor an env file puts it back.
+  assert.equal((await runCli(box, ["wire", "--env", "KEYSHROUD_PASSPHRASE", "--item", "npm publish"])).code, 2);
+  await writeFile(join(box.dir, ".env.refs"), "KEYSHROUD_PASSPHRASE=from-a-file-fake-02\n");
+  const file = await runCli(box, ["run", "--env-file", ".env.refs", "--", "/bin/sh", "-c", "echo p=${KEYSHROUD_PASSPHRASE:-none}"]);
+  assert.notEqual(file.code, 0);
+  assert.ok(!file.stdout.includes("from-a-file"));
 });
 
 test("a key written into auth.json itself is masked like a vault value, by run and by the hook", async () => {
@@ -963,6 +970,13 @@ test("a key written into auth.json itself is masked like a vault value, by run a
   await runCli(box, ["hook", "claude", "session-start"]);
   const post = await runCli(box, ["hook", "claude", "post-tool-use"], JSON.stringify({ tool_response: { stdout: `key ${literal}` } }));
   assert.equal(JSON.parse(post.stdout).hookSpecificOutput.updatedToolOutput.stdout, "key <redacted:openai>");
+
+  // A key that looks like a variable's name is the key unless there is such a variable (then its value is);
+  // a literal that an env file overrides under the same name is still in the file, so both are masked.
+  await writeAuth(box, { groq: { type: "api_key", key: "FAKE_TOKEN_123456" }, mistral: { type: "api_key", key: "MISTRAL_ENV_KEY" }, API_TOKEN: "literal-api-FAKE-000111" });
+  await writeFile(join(box.dir, ".env.refs"), "API_TOKEN=bw://npm publish\n");
+  const both = await runCli(box, ["run", "--env-file", ".env.refs", "--", "echo", "FAKE_TOKEN_123456", "mistral-value-0123", "MISTRAL_ENV_KEY", "literal-api-FAKE-000111", NPM], "", { MISTRAL_ENV_KEY: "mistral-value-0123" });
+  assert.equal(both.stdout, "<redacted:groq> <redacted:mistral> MISTRAL_ENV_KEY <redacted:API_TOKEN (2)> <redacted:API_TOKEN>\n", both.stderr);
 });
 
 test("wire puts the value into the hook index at once; unwire leaves a provider's login alone", async () => {

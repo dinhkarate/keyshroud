@@ -39,6 +39,18 @@ test("pi extension hydrates env, registers tools, and redacts tool results", asy
   const context = handlers.get("context")!({ messages: [{ role: "user", content: "hi" }, { role: "bashExecution", command: "printenv", output: `GH_TOKEN=${GH}` }] }) as { messages: Array<{ output?: string }> };
   assert.equal(context.messages[1].output, "GH_TOKEN=<redacted:GH_TOKEN>");
   assert.equal(handlers.get("context")!({ messages: [{ role: "bashExecution", command: "true", output: "clean" }] }), undefined);
+  // The `!command` itself runs through pi's own shell with its output masked as it arrives.
+  const bash = await handlers.get("user_bash")!({ type: "user_bash", command: "printenv GH_TOKEN", excludeFromContext: false, cwd: box.dir }) as { operations: { exec: (command: string, cwd: string, options: { onData: (data: Buffer) => void }) => Promise<{ exitCode: number | null }> } };
+  let shown = "";
+  const ran = await bash.operations.exec(`printf 'a %s\\n' "$GH_TOKEN"; printf '%s' "$GH_TOKEN" | head -c 12; sleep 0.2; printf '%s\\n' "$GH_TOKEN" | tail -c 13`, box.dir, { onData: (data) => { shown += data; } });
+  assert.equal(ran.exitCode, 0);
+  // The second one arrived in two halves.
+  assert.equal(shown, "a <redacted:GH_TOKEN>\n<redacted:GH_TOKEN>\n");
+
+  // A value masked once stays masked after its name gets a new one.
+  const core = await import("../src/core.ts");
+  assert.deepEqual({ ...core.withEarlierValues({ GH_TOKEN: "new-value-1", Item: "new-value-1" }, { GH_TOKEN: "old-value-0", Item: "old-value-0", "Other (2)": "kept-value-9" }) },
+    { GH_TOKEN: "new-value-1", Item: "new-value-1", "GH_TOKEN (2)": "old-value-0", Other: "kept-value-9" });
 
   // Tools start without another vault call.
   const calls = (await box.bwCalls()).length;

@@ -3,7 +3,7 @@
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomBytes, randomUUID, scrypt, timingSafeEqual, type ScryptOptions } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { appendFile, chmod, mkdir, mkdtemp, open, readdir, readFile, realpath, rename, rm, stat, unlink, utimes, writeFile } from "node:fs/promises";
+import { appendFile, chmod, mkdir, mkdtemp, open, readdir, readFile, realpath, rename, rm, stat, symlink, unlink, utimes, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, delimiter, join, dirname, resolve as absolutePath } from "node:path";
 import process from "node:process";
@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { BRAND } from "./brand.ts";
 import { buildRedactIndex, type RedactIndex } from "./redact.ts";
-import { ENV_NAME_RE, isLoaderEnvName, isRef, isSelfCommand, itemNameProblem, legacyRefFor, localRefFor, parseEnvFile, parseRef, refFor, type SecretRef } from "./refs.ts";
+import { ENV_NAME_RE, PASSPHRASE_ENV, isLoaderEnvName, isRef, isSelfCommand, itemNameProblem, legacyRefFor, localRefFor, parseEnvFile, parseRef, refFor, type SecretRef } from "./refs.ts";
 import {
   derivePassphraseKey, findLocalItem, formatVersion, keychainService, newPassphraseKey, newVaultId, openSession, openVault, parseVaultFile, passphraseProblem,
   sealSession, sealVault, serializeVault, unwrapFromEnclave, VAULT_KIND, VaultFormatError, VaultVersionError, wrapForEnclave,
@@ -178,8 +178,15 @@ function execBw(args: string[], options: Record<string, unknown>, input?: string
 
 // What a command was given on stdin or as a password never comes back in its error.
 function withoutSecrets(message: string, secrets: Array<string | undefined>): string {
-  for (const secret of secrets) if (secret && secret.length >= 4) message = message.split(secret).join("<redacted>");
+  const known = secrets.filter((secret): secret is string => Boolean(secret) && secret!.length >= 4).sort((a, b) => b.length - a.length);
+  for (const secret of known) message = message.split(secret).join("<redacted>");
   return message;
+}
+
+// Every string in an item as bw is given one (base64 of its JSON): bw's error could quote any of them.
+function encodedStrings(input?: string): string[] {
+  const strings = (node: unknown): string[] => typeof node === "string" ? [node] : node && typeof node === "object" ? Object.values(node).flatMap(strings) : [];
+  try { return input ? strings(JSON.parse(Buffer.from(input, "base64").toString("utf8"))) : []; } catch { return []; }
 }
 
 function execRun(command: string, args: string[], { secrets, ...options }: Record<string, unknown>, input?: string): Promise<ExecResult> {
@@ -222,16 +229,17 @@ export function referenceFor(itemName: string, backend: BackendName = "bw"): str
 // session token a child could dump the whole vault, defeating `--only`.
 export const VAULT_ENV_KEYS: readonly string[] = ["BW_SESSION", "BW_PASSWORD", "BW_CLIENTID", "BW_CLIENTSECRET", "BITWARDENCLI_APPDATA_DIR"];
 
-// The passphrase a CI job pipes to `unlock --stdin` is usually exported under this name: it stays
-// out of the commands keyshroud runs, and is masked.
-const PASSPHRASE_ENV = `${P}_PASSPHRASE`;
-
+// Beside those, the passphrase a CI job pipes to `unlock --stdin` (PASSPHRASE_ENV, the name it is
+// usually exported under) stays out of the commands keyshroud runs, and is masked.
 // `drop`: wired names the caller did not select (`--only`): a value the agent itself was started
-// with does not reach the command either.
+// with does not reach the command either. Windows does not tell `Name` from `NAME`.
 export function childEnv(extra: Record<string, string> = {}, drop: string[] = []): Record<string, string> {
+  const fold = (name: string) => process.platform === "win32" ? name.toUpperCase() : name;
+  const injected = Object.entries(extra).filter(([name]) => !isLoaderEnvName(name));
+  const left = new Set([...VAULT_ENV_KEYS, PASSPHRASE_ENV, ...drop, ...injected.map(([name]) => name)].map(fold));
   const env: Record<string, string> = {};
-  for (const [name, value] of Object.entries(process.env)) if (value !== undefined && !VAULT_ENV_KEYS.includes(name) && name !== PASSPHRASE_ENV && !drop.includes(name)) env[name] = value;
-  for (const [name, value] of Object.entries(extra)) if (!isLoaderEnvName(name)) env[name] = value;
+  for (const [name, value] of Object.entries(process.env)) if (value !== undefined && !left.has(fold(name))) env[name] = value;
+  for (const [name, value] of injected) env[name] = value;
   return env;
 }
 
@@ -239,7 +247,7 @@ export function childEnv(extra: Record<string, string> = {}, drop: string[] = []
 export async function bw(args: string[], opts: { input?: string; session?: string; secrets?: string[] } = {}): Promise<string> {
   const session = opts.session ?? process.env.BW_SESSION;
   const env = { ...process.env, ...(session ? { BW_SESSION: session } : {}) };
-  const result = await runFile("bw", args, { env, timeout: 20000, maxBuffer: 16 * 1024 * 1024, secrets: opts.secrets }, opts.input);
+  const result = await runFile("bw", args, { env, timeout: 20000, maxBuffer: 16 * 1024 * 1024, secrets: [...(opts.secrets ?? []), ...encodedStrings(opts.input)] }, opts.input);
   return result.stdout;
 }
 
@@ -782,13 +790,15 @@ async function matchesMasterVerifier(secret: string): Promise<boolean | null> {
 
 // Without a verifier (an agent can delete the file) try the value itself: bw
 // unlock is local, and a match replaces the session token, so keep the new one.
-async function unlocksVault(secret: string): Promise<boolean> {
+async function unlocksVault(secret: string, keep = true): Promise<boolean> {
   const before = await readSession();
   let token: string;
   try {
     token = (await runFile("bw", ["unlock", "--passwordenv", "BW_PASSWORD", "--raw"], { env: { ...process.env, BW_PASSWORD: secret }, timeout: 20000, maxBuffer: 4 * 1024 * 1024 })).stdout.trim();
   } catch { return false; }
   if (!token) return false;
+  // A login keyshroud does not use is locked again: the try must not leave it open.
+  if (!keep) { await runFile("bw", ["lock"], { env: process.env, timeout: 20000, maxBuffer: 1024 * 1024 }).catch(() => {}); return true; }
   // The session keeps its end, at most one session length away: the file is the agent's to write.
   await writeSession(token, false, Math.min(before?.expiresAt ?? Infinity, Date.now() + SESSION_TTL_MS));
   await writeMasterVerifier(secret);
@@ -971,9 +981,10 @@ async function acquireLock(dir: string): Promise<{ held: () => Promise<boolean>;
   const start = Date.now();
   for (;;) {
     try { await mkdir(dir, { mode: 0o700 }); await writeFile(owner, token, { mode: 0o600 }); break; } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      const lockedAt = await stat(dir).then((info) => info.mtimeMs, () => 0);
-      if (Date.now() - lockedAt > 30000) { await rm(dir, { recursive: true, force: true }); continue; }
+      // ENOENT: the directory just made was taken over before its owner was written.
+      if (!["EEXIST", "ENOENT"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+      const lockedAt = await stat(dir).then((info) => info.mtimeMs, () => null);
+      if (lockedAt !== null && Date.now() - lockedAt > 30000) { await rm(dir, { recursive: true, force: true }); continue; }
       if (Date.now() - start > 60000) throw new Error(`Timed out waiting for the lock ${dir}`);
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
@@ -1034,10 +1045,11 @@ async function readAuthForUpdate(path: string): Promise<Record<string, unknown>>
 // target, `<target>.lock`: every link to the file leads to it, and it is the directory pi and omp
 // lock (pi up to 1.2 locks beside the path as it is spelled instead, so when the path's last name
 // is itself a link, the lock beside it is taken as well, after the target's).
-// A writer paused past the 30 s replaces nothing, whoever comes next and however its lock went,
-// because of where its new text waits for the rename: inside the target's lock. Anyone's next
-// write needs that directory gone first (keyshroud removes it whole, pi can only once it is
-// empty), so the text went before the next writer read the file.
+// A writer paused past the 30 s replaces nothing, whoever comes next and however its locks went,
+// because of where its new text waits for the rename: inside the target's lock, and, when there
+// is a lock beside a link, named through a link inside that one (`<link>.lock/via/pending.x`).
+// Anyone's next write needs one of the two directories gone first (keyshroud removes them whole,
+// pi can only once they are empty), and with either gone the rename has nothing to move.
 async function updateFile<T>(given: string, fn: (target: string, write: (content: string) => Promise<void>) => Promise<T>): Promise<T> {
   const path = absolutePath(given);
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
@@ -1049,16 +1061,18 @@ async function updateFile<T>(given: string, fn: (target: string, write: (content
     try {
       const held = async () => (await lock.held()) && (!beside || await beside.held());
       const lost = new Error(`This process lost the lock of ${path} (it was paused for over 30 seconds); nothing was written`);
+      const through = beside ? join(`${spelled}.lock`, "via") : `${target}.lock`;
+      if (beside) await symlink(`${target}.lock`, through, "junction").catch(() => { throw lost; });
       return await fn(target, async (content) => {
-        const staged = join(`${target}.lock`, `pending.${randomBytes(6).toString("hex")}`);
+        const name = `pending.${randomBytes(6).toString("hex")}`;
         // Nothing is put into a directory that has become someone else's lock.
         if (!(await held())) throw lost;
         try {
-          await writeFile(staged, content, { encoding: "utf8", mode: 0o600, flag: "wx" });
+          await writeFile(join(through, name), content, { encoding: "utf8", mode: 0o600, flag: "wx" });
           if (!(await held())) throw lost;
-          await rename(staged, target);
+          await rename(join(through, name), target);
         } catch (error) {
-          await rm(staged, { force: true }).catch(() => {});
+          await rm(join(`${target}.lock`, name), { force: true }).catch(() => {});
           throw (error as NodeJS.ErrnoException).code === "ENOENT" ? lost : error;
         }
         // The staged file was 0600 already; a filesystem without modes must not undo a finished write.
@@ -1066,6 +1080,13 @@ async function updateFile<T>(given: string, fn: (target: string, write: (content
       });
     } finally { await beside?.release(); }
   } finally { await lock.release(); }
+}
+
+// One keyshroud command at a time around `fn`, for a file other programs write without a lock of
+// theirs to share (Claude Code's settings).
+export async function withPathLock<T>(path: string, fn: () => Promise<T>): Promise<T> {
+  const lock = await acquireLock(`${await resolvedPath(absolutePath(path))}.lock`);
+  try { return await fn(); } finally { await lock.release(); }
 }
 
 async function updateAuthFile(path: string, update: (current: Record<string, unknown>) => Record<string, unknown> | null): Promise<boolean> {
@@ -1189,7 +1210,7 @@ export async function buildEnvMap(injected: Record<string, string> = {}): Promis
 export async function redactionValues(wired: Record<string, string> = {}): Promise<Record<string, string>> {
   let local: LocalVault | null = null;
   try { local = await openLocal(); } catch {}
-  const values = indexValues({ ...await authLiterals(), ...wired });
+  const values = await indexedValues(wired);
   try { const master = (await readFile(MASTER_PASSWORD_FILE, "utf8")).trim(); if (master) addValue(values, "MASTER_PASSWORD", master); } catch {}
   if (await usesBw()) {
     try {
@@ -1208,29 +1229,51 @@ function addValue(values: Record<string, string>, name: string, value: string): 
   values[label] = value;
 }
 
-// Keys written out in a wiring file (an API key pasted into pi's auth.json): credentials like
-// the ones the vault holds, so they are masked too.
-export async function authLiterals(): Promise<Record<string, string>> {
-  const values: Record<string, string> = {};
-  for (const path of wiringFiles()) for (const [name, entry] of Object.entries(await readAuthEntries(path))) {
-    const raw = authEntryRaw(entry)?.trim();
-    if (!raw || isSecretSource(raw)) continue;
-    // pi also reads a key that is a variable's name from the environment: that value is the key.
-    const value = ENV_NAME_RE.test(raw) ? process.env[raw] : raw;
-    if (value) addValue(values, name, value);
-  }
+// Values masked before stay masked when a name gets a new one (a rotation): a tool started
+// earlier can still print the old one. `earlier` is what a long-lived process masked so far.
+export function withEarlierValues(values: Record<string, string>, earlier: Record<string, string>): Record<string, string> {
+  const known = new Set(Object.values(values));
+  for (const [name, value] of Object.entries(earlier)) if (!known.has(value)) { addValue(values, name.replace(/ \(\d+\)$/, ""), value); known.add(value); }
   return values;
 }
 
-// What the hook index holds: wired values, keys written out in a wiring file, and the session tokens.
+// What the wiring files hold beside the entries `run` injects, masked like those:
+// - a key written out in a file (an API key pasted into pi's auth.json);
+// - a reference that another file overrides under the same name (pi still uses its own).
+async function wiringFileValues(): Promise<Array<[string, string]>> {
+  const merged = await wiredEntries();
+  const found: Array<[string, string]> = [];
+  for (const path of wiringFiles()) for (const [name, entry] of Object.entries(await readAuthEntries(path))) {
+    const raw = authEntryRaw(entry)?.trim();
+    if (!raw) continue;
+    if (isSecretSource(raw)) {
+      if (raw === authEntryRaw(merged[name])?.trim()) continue;
+      const value = await resolveShellValue(raw).catch(() => null);
+      if (value) found.push([name, value]);
+      continue;
+    }
+    // pi takes a key that names a variable (`NAME`; `$NAME` or `${NAME}` since 1.5) from the
+    // environment: then that value is the key. With no such variable, the text itself is.
+    const named = /^(?:\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)|([A-Za-z_][A-Za-z0-9_]*))$/.exec(raw);
+    const value = named ? process.env[named[1] ?? named[2] ?? named[3]] || (named[3] ? raw : "") : raw;
+    if (value) found.push([name, value]);
+  }
+  return found;
+}
+
+// What the hook index holds: wired values, what else the wiring files hold, and the session tokens.
 export async function indexedValues(wired: Record<string, string> = {}): Promise<Record<string, string>> {
-  return indexValues({ ...await authLiterals(), ...wired });
+  const values = indexValues(wired);
+  for (const [name, value] of await wiringFileValues()) addValue(values, name, value);
+  return values;
 }
 
 // The on-disk index (for out-of-process hooks) covers only wired secrets and
 // the session tokens, so it never fingerprints the user's personal passwords.
 export function indexValues(wired: Record<string, string> = {}): Record<string, string> {
-  const values: Record<string, string> = { ...wired };
+  // Without a prototype: a label is whatever an item is called, `__proto__` included.
+  const values: Record<string, string> = Object.create(null);
+  for (const [name, value] of Object.entries(wired)) addValue(values, name, value);
   const session = process.env.BW_SESSION?.trim();
   if (session) addValue(values, "BW_SESSION", session);
   if (localOpen) addValue(values, "LOCAL_VAULT_KEY", localOpen.key.toString("hex"));
@@ -1313,11 +1356,13 @@ export async function getSecret(itemName: string, backend?: BackendName): Promis
 // local vault's passphrase are both refused outright.
 async function refuseVaultPasswords(secret: string): Promise<void> {
   if (!secret) return;
+  const refused = new Error("Refusing to store the vault master password as a secret");
   if (await usesBw() || OWN_BW_LOGIN || [SESSION_FILE, MASTER_PASSWORD_FILE, MASTER_VERIFIER_FILE].some((path) => existsSync(path)) || await keychainHas(KEYCHAIN_MASTER_SERVICE)) {
     // The stored value and the verifier only short-cut a match: an agent can replace either.
     const stored = await readMasterPassword();
-    if (secret === stored || await matchesMasterVerifier(secret) || await unlocksVault(secret)) throw new Error("Refusing to store the vault master password as a secret");
-  }
+    if (secret === stored || await matchesMasterVerifier(secret) || await unlocksVault(secret)) throw refused;
+  // A bw login on this machine that keyshroud has not used (the local vault was chosen) is tried as well.
+  } else if (await sharedBwLoggedIn() && await unlocksVault(secret, false)) throw refused;
   // Tried against the vault file itself (or the vault about to be created), open or not.
   const file = (await readVaultFile().catch(() => null))?.file;
   let opens = false;
@@ -1961,7 +2006,7 @@ async function updateLocal(change: (data: VaultData) => void, opts: SessionOptio
       });
     } catch (error) {
       // A vault that was not written leaves no key behind.
-      if (fresh && (await readVaultFile().catch(() => null))?.file.id !== fresh.header.id) {
+      if (fresh && await vaultIsNot(fresh.header.id)) {
         localPending = null;
         if (fresh.header.key.type === "keychain") await forgetVaultKey(fresh.header.key.service);
       }
@@ -2021,8 +2066,14 @@ async function writeVaultFile(text: string, held: () => Promise<boolean>): Promi
   // The rename itself reaches the disk with its directory (not on Windows, which cannot open one).
   if (process.platform !== "win32") {
     const dir = await open(CONFIG_DIR, "r").catch(() => null);
-    if (dir) { try { await dir.sync(); } catch {} finally { await dir.close(); } }
+    if (dir) { try { await dir.sync(); } catch {} finally { await dir.close().catch(() => {}); } }
   }
+}
+
+// Whether the vault on disk is known to be another one than `id` (or none). A file that cannot
+// be read is not known: the key made for `id` is then kept, since it may be the only one.
+async function vaultIsNot(id: string): Promise<boolean> {
+  try { return (await readVaultFile())?.file.id !== id; } catch { return false; }
 }
 
 function creationNotice(header: VaultHeader): string {
@@ -2302,7 +2353,7 @@ export async function rekeyLocal(to?: VaultKeyType): Promise<{ from: VaultKeyTyp
     });
   } catch (error) {
     // The new key goes only while the vault on disk is not the one sealed with it.
-    if (fresh.header.key.type === "keychain" && (await readVaultFile().catch(() => null))?.file.id !== fresh.header.id) await forgetVaultKey(fresh.header.key.service);
+    if (fresh.header.key.type === "keychain" && await vaultIsNot(fresh.header.id)) await forgetVaultKey(fresh.header.key.service);
     throw error;
   }
   localOpen = null;

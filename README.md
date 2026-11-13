@@ -153,7 +153,8 @@ A Touch ID vault needs the Xcode Command Line Tools once (`xcode-select --instal
 a small helper from `src/touchid.swift` on first use, which takes a few seconds. The sheet appears for
 any caller that may ask (the CLI, `secrets_run`, Claude Code's apiKeyHelper); for this vault hooks,
 `status` and `doctor` never ask (with Vaultwarden they renew a session from a stored master
-password, which asks if you set that keychain entry to ask), and over SSH it tells you to run `keyshroud unlock` at the Mac. `keyshroud rekey`
+password, which asks if you set that keychain entry to ask, and after bw has logged itself out they
+log in again once you approve a Touch ID sheet), and over SSH it tells you to run `keyshroud unlock` at the Mac. `keyshroud rekey`
 moves a vault between key types (a new key and vault id each time); run `rekey --to passphrase` before
 moving to another Mac.
 
@@ -342,9 +343,11 @@ The extension:
   resolves, so `$CUSTOM_KEY` provider references work at startup;
 - redacts every tool result, successful or failed, through the `tool_result`
   hook (wired values, the session token or vault key, and every password in the vault): its text,
-  and the details and structured data a tool returns beside it. The output of a `!command` you
-  type is masked in what is sent to the model; on your screen pi shows it as it was, like the
-  output of a tool that is still running;
+  and the details and structured data a tool returns beside it. What a tool streams while it is
+  still running is shown as it is; its result is masked;
+- masks the output of a `!command` you type as it arrives, so the masked text is what pi shows,
+  saves and later summarizes (through pi's own shell; in a host without it, or when another
+  extension runs your `!commands`, only what is sent to the model with a turn is masked);
 - with a passphrase vault, takes its values out of the agent's environment once the
   session ends or you run `keyshroud lock`, checked before every tool and `!command`;
 - adds `/secret` (describe → confirm name → masked paste), `/vault_add`,
@@ -454,8 +457,8 @@ value with `--stdin`.
 
 `import` reads a `.env` (default `./.env`), decides which lines are secrets (by name, such as
 `*_TOKEN` or `*_KEY`, or by value, such as `sk-…` or a URL with a password), and prints a plan of
-names only. No item and no file is written until you add `--yes` (reading the plan can open a vault
-session, as any command does): it then creates one vault item per secret,
+names only. No vault item and no `.env.refs` is written until you add `--yes` (reading the plan opens
+a vault session as any command does, with the files that belong to one): it then creates one vault item per secret,
 named `<prefix> NAME` (prefix defaults to the directory name), reads each value back to verify it,
 and writes `.env.refs` (`NAME=keyshroud://<prefix> NAME`) with comments and non-secret lines kept. Re-running reuses items that already
 hold the same value and stops on a conflicting one. `--replace` rewrites the source file in place
@@ -565,7 +568,8 @@ by `0600`. One gap: over an SSH session with a terminal (`ssh -t`), Windows ends
 SSH session closes, so that session ends on the next keyshroud call instead. There is no keychain support
 for the Vaultwarden master password on Windows: keyshroud asks for it (`migrate` too, in a terminal;
 it is not tested there). pi `auth.json` entries of the `!command` form and the `apiKeyHelper` that
-`claude-setup` writes need a POSIX shell (Git Bash, WSL).
+`claude-setup` writes need `/bin/sh`: for those, run keyshroud and the agent inside WSL (Git Bash beside
+a native Windows Node is not enough).
 DPAPI may be refused over SSH with a key (`Access is denied`): such a login carries no Windows
 password. keyshroud says so; run the command in the desktop or RDP session, or give a machine used only
 over SSH a passphrase vault (`keyshroud rekey --to passphrase`).
@@ -628,7 +632,7 @@ Guarantees we test for:
   so their writers wait for it and cannot break it (should keyshroud be killed while it holds one,
   pi reports the lock until the next keyshroud command clears it);
 - commands started by `run` and `secrets_run` never receive `BW_SESSION`,
-  `BW_PASSWORD`, `BW_CLIENTID`, `BW_CLIENTSECRET` or `KEYSHROUD_PASSPHRASE` (the `BW_*` names and
+  `BW_PASSWORD`, `BW_CLIENTID`, `BW_CLIENTSECRET` or `KEYSHROUD_PASSPHRASE` (these names and
   `BITWARDENCLI_APPDATA_DIR` cannot be wired or set by an env file either), and with `--only` the
   other wired names are removed from what the command inherits, so `--only` really limits
   what a command can read (inside pi/omp the agent process keeps the session for
@@ -649,16 +653,21 @@ what the vault held. The lock on pi's and omp's `auth.json` is their own (a dire
 after 30 s): keyshroud's writers are fenced against each other and pi cannot take over a lock
 keyshroud holds, but a lock that pi holds or left behind is only as safe as that scheme is between
 two pi processes. pi 1.5 locks beside the file a link leads to, pi 1.2 and older beside the path as
-it is written; keyshroud takes both, so either waits. One case is left to keyshroud's own check: an
-`auth.json` that is a link, an older pi, and a keyshroud writer stalled for over 30 seconds whose
-lock beside the link is removed by something other than keyshroud. A `.env.refs` can reference **any** item in your vault, not only the
+it is written; keyshroud takes the first, and the second for the path it was itself given, and a
+write that waits there cannot land once either lock is gone. What that leaves out: an older pi that
+reaches `auth.json` through a different link than keyshroud does (they then share no lock at all),
+so point both at the same path. The locks around calls to `bw`, the unlock dialog and the local
+vault's session files are simpler: one is taken over when its holder shows no sign of life for 30
+to 60 seconds, so a holder that was only stalled can overlap with the next one. That can mean a
+second dialog, a `bw` call that fails, or a session you have to open again; it does not put a value
+anywhere. A `.env.refs` can reference **any** item in your vault, not only the
 ones you wired, so read a cloned repo's `.env.refs` before running `--env-file`
 with it. `import` decides what is secret by heuristics and keeps everything else
 as a literal; check its plan before committing `.env.refs`. The Claude Code
 `PostToolUse` hook does not see failed commands (`PostToolUseFailure` cannot
 rewrite output) or anything a client sends as telemetry, it masks nothing until an index exists
-(written at session start and by every keyshroud command that resolves a value; a hook that fails
-lets the output through as it is), and it only knows wired
+(written at session start, and added to by `run`, `secrets_run`, `get`, `inject`, `api-key`, `add`,
+`rotate` and `wire`; a hook that fails lets the output through as it is), and it only knows wired
 values, keys written into `auth.json` as plain text, and values keyshroud itself printed (`get`, `inject`, `api-key`), so a failed
 `keyshroud get bw://…` or `run --no-mask` still shows in the clear; run
 secret-using commands through `keyshroud run` or `secrets_run`, with `--only` (or
@@ -677,7 +686,7 @@ also masked without its leading and trailing spaces or line breaks, and a value 
 JSON document (a PEM key, a service account file) is also masked run by run (20 or more letters, digits
 and `+/=_-`), so a key shown with line numbers or as a diff stays masked; values
 shorter than 6 characters are not redacted (to avoid noise), so don't wire short
-PINs. pi's `/secret` and `/vault_add` popups store a pasted value without the spaces or line breaks
+PINs. pi's `/secret`, `/vault_add` and `/vault_rotate` popups store a pasted value without the spaces or line breaks
 around it; for a value where those matter, use `keyshroud add --stdin`.
 
 Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
