@@ -61,7 +61,8 @@ function refreshEnv(): Promise<void> {
       const next = await core.buildEnvMap(own);
       // A value masked once stays masked: a tool started before a rotation can still print the old one.
       // And a value is masked before the environment holds it, for a command that starts meanwhile.
-      masked = core.withEarlierValues(await core.redactionValues(next), masked);
+      // Should the whole inventory fail, what is about to be injected is masked all the same.
+      masked = core.withEarlierValues(await core.redactionValues(next).catch(() => core.indexValues(next)), masked);
       redactor = createRedactor(masked);
       applyEnv(next);
       const local = await core.localStatus();
@@ -230,7 +231,8 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   let T: Builder;
   try { T = await getBuilder(pi); } catch { return; }
   const emptySchema = T.Object({});
-  await refreshEnv();
+  // A first refresh that fails is tried again; the handlers below are registered either way.
+  await refreshEnv().catch(() => scheduleRetry());
   // Fires on startup and every resume/fork; cache + single-flight make it free
   // while the vault is warm.
   pi.on("session_start", () => { void refreshEnv(); });

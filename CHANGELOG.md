@@ -5,6 +5,32 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.10.9] - 2026-11-13
+
+What the second reader found left over in 0.10.8 (review round 12).
+
+### Fixed
+- 0.10.8: one entry in a wiring file that is no reference after all (`bw://Item/nosuchfield`, a
+  broken `%` escape) stopped `run` and `secrets_run`, and kept the pi extension from loading, so
+  pi masked nothing. Such an entry is now left out by itself; the pi extension loads and masks
+  what it injects even if the rest of the inventory fails.
+
+### Security
+- The check that refuses a vault's own password: only "wrong password" from `bw`, no `bw` program,
+  or `bw` answering that nobody is logged in count as "not the master password". A login that
+  ran out, any other failure, or `bw` data that cannot be read now stop the save (0.10.8 took
+  several of these for a "no").
+- `claude-setup` gives the old file's mode to the very file it wrote, through its handle: a run
+  stalled after its rename can no longer widen the file a later run put in place.
+- A key in `auth.json` with variables in it is filled in exactly as pi does (a `${…}` that holds
+  no name is text), so the filled-in key is masked in those cases too.
+- The masking inventory reads a `bw://` reference only with a session the process opened that
+  has not run out, and never opens or renews one (0.10.8 could renew a session that had ended).
+
+### Changed
+- README: a masked `!command` in pi uses the shell from your own pi settings, not one that only a
+  project's settings name.
+
 ## [0.10.8] - 2026-11-13
 
 What the second reader found left over in 0.10.7 (review round 11).

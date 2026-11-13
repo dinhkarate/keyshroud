@@ -992,10 +992,17 @@ test("a key written into auth.json itself is masked like a vault value, by run a
   // A key with a variable inside it is masked as older pi reads it (the text) and as pi 1.5 does
   // (the variable filled in). A reference is masked whatever is injected of it: one an env file
   // overrides under its name, and one under a provider's name, which only pi uses.
-  await writeAuth(box, { together: { type: "api_key", key: "tpl-FAKE-$PART_ENV-end" }, ORG: "bw://GitHub CLI token/fields/org", xai: { type: "api_key", key: "!keyshroud get 'bw://npm publish/fields/scope'" } });
+  // An entry that is no reference after all (a field that does not exist, a broken escape) is
+  // left out by itself: the command runs and the rest is masked.
+  await writeAuth(box, {
+    together: { type: "api_key", key: "tpl-FAKE-$PART_ENV-end" }, ORG: "bw://GitHub CLI token/fields/org", xai: { type: "api_key", key: "!keyshroud get 'bw://npm publish/fields/scope'" },
+    stale: { type: "api_key", key: "bw://Unused/unsupported" }, broken: { type: "api_key", key: "bw://%E0%A4%A" },
+    // pi takes a `${…}` that holds no name as text, up to its brace; the `$UNSET` inside is no variable.
+    braces: { type: "api_key", key: "FAKE-${literal$UNSET}-tail-$PART_ENV" },
+  });
   await writeFile(join(box.dir, ".env.refs"), "ORG=bw://npm publish\n");
-  const more = await runCli(box, ["run", "--env-file", ".env.refs", "--", "echo", "tpl-FAKE-$PART_ENV-end", "tpl-FAKE-middle0123-end", "acme-org", "scope-fake-0123"], "", { PART_ENV: "middle0123" });
-  assert.equal(more.stdout, "<redacted:together> <redacted:together (2)> <redacted:ORG (2)> <redacted:xai>\n", more.stderr);
+  const more = await runCli(box, ["run", "--env-file", ".env.refs", "--", "echo", "tpl-FAKE-$PART_ENV-end", "tpl-FAKE-middle0123-end", "acme-org", "scope-fake-0123", "FAKE-${literal$UNSET}-tail-middle0123"], "", { PART_ENV: "middle0123" });
+  assert.equal(more.stdout, "<redacted:together> <redacted:together (2)> <redacted:ORG (2)> <redacted:xai> <redacted:braces (2)>\n", more.stderr);
 });
 
 test("wire puts the value into the hook index at once; unwire leaves a provider's login alone", async () => {

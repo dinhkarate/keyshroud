@@ -400,10 +400,13 @@ async function lookupItem(itemName: string): Promise<VaultItem | null> {
   }
 }
 
-export async function resolveRef(ref: SecretRef): Promise<string | null> {
+// `open: false` reads with the session this process has and never opens, renews or asks for one.
+export async function resolveRef(ref: SecretRef, opts: { open?: boolean } = {}): Promise<string | null> {
   if (ref.scheme === "local") return resolveLocalRef(ref);
-  bwInUse = true;
-  try { await ensureBwSession(); } catch {}
+  if (opts.open !== false) {
+    bwInUse = true;
+    try { await ensureBwSession(); } catch {}
+  }
   const item = await lookupItem(ref.item);
   if (!item) return null;
   const field = ref.field;
@@ -416,6 +419,12 @@ export async function resolveRef(ref: SecretRef): Promise<string | null> {
     case "id": return item.id;
     case "totp": return (await bw(["get", "totp", item.id])).trim() || null;
   }
+}
+
+// Whether there is a bw program to run at all (looked up as a command would be).
+function bwInstalled(): boolean {
+  if (process.platform === "win32") { try { invocation("bw", []); return true; } catch { return false; } }
+  return (process.env.PATH ?? "").split(delimiter).some((dir) => dir && existsSync(join(dir, "bw")));
 }
 
 // The timeout leaves room for a macOS "allow access" prompt when the entry was
@@ -802,16 +811,18 @@ async function matchesMasterVerifier(secret: string): Promise<boolean | null> {
 
 // Without a verifier (an agent can delete the file) try the value itself: bw
 // unlock is local, and a match replaces the session token, so keep the new one.
-// "no" only when bw said so (a wrong password, no login) or there is no bw to ask; a bw that
-// failed some other way has not answered: "unknown".
+// "no" only when there is no vault on this machine for the value to open (no bw program on PATH,
+// or bw answers the unlock itself with "You are not logged in."), or when bw says the password is
+// wrong. A bw that fails any other way (a login that ran out, a file it cannot read, no answer)
+// has not answered: "unknown".
 async function unlocksVault(secret: string, keep = true): Promise<"yes" | "no" | "unknown"> {
+  if (!bwInstalled()) return "no";
   const before = await readSession();
   let token: string;
   try {
     token = (await runFile("bw", ["unlock", "--passwordenv", "BW_PASSWORD", "--raw"], { env: { ...process.env, BW_PASSWORD: secret }, timeout: 20000, maxBuffer: 4 * 1024 * 1024 })).stdout.trim();
   } catch (error) {
-    const message = error instanceof Error ? error.message : "";
-    return /Invalid master password|decryption operation failed|ENOENT|not found on PATH/i.test(message) || DEAD_LOGIN_RE.test(message) ? "no" : "unknown";
+    return /Invalid master password|decryption operation failed|^You are not logged in\.?$/im.test(error instanceof Error ? error.message.trim() : "") ? "no" : "unknown";
   }
   if (!token) return "unknown";
   // A login keyshroud does not use is locked again: the try must not leave it open.
@@ -1088,16 +1099,20 @@ export async function updateFile<T>(given: string, fn: (target: string, write: (
         const name = `pending.${randomBytes(6).toString("hex")}`;
         // Nothing is put into a directory that has become someone else's lock.
         if (!(await held())) throw lost;
+        // A mode wider than 0600 is given to the very file that was staged, through a handle taken
+        // before the rename: by the time it is set, the path may name a later writer's file.
+        let staged: Awaited<ReturnType<typeof open>> | null = null;
         try {
           await writeFile(join(through, name), content, { encoding: "utf8", mode: 0o600, flag: "wx" });
+          if (mode !== 0o600 && process.platform !== "win32") staged = await open(join(through, name), "r");
           if (!(await held())) throw lost;
           await rename(join(through, name), target);
+          // The staged file was 0600 already; a filesystem without modes must not undo a finished write.
+          await (staged ? staged.chmod(mode) : chmod(target, mode)).catch(() => {});
         } catch (error) {
           await rm(join(`${target}.lock`, name), { force: true }).catch(() => {});
           throw (error as NodeJS.ErrnoException).code === "ENOENT" ? lost : error;
-        }
-        // The staged file was 0600 already; a filesystem without modes must not undo a finished write.
-        await chmod(target, mode).catch(() => {});
+        } finally { await staged?.close().catch(() => {}); }
       });
     } finally { await beside?.release(); }
   } finally { await lock.release(); }
@@ -1251,35 +1266,56 @@ export function withEarlierValues(values: Record<string, string>, earlier: Recor
   return values;
 }
 
-// A key as pi 1.5 reads it: `$NAME` and `${NAME}` stand for variables, `$$` and `$!` for the
-// characters. null when a variable it names is not set.
+// A key as pi 1.5 reads it, token by token as pi does: `$NAME` and `${NAME}` stand for variables,
+// `$$` and `$!` for the characters, a `${…}` that holds no name is text up to its brace, and any
+// other `$` is one. null when a variable it names is not set (pi then has no key).
 function filledTemplate(raw: string): string | null {
-  let unset = false;
-  const text = raw.replace(/\$(?:([$!])|\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))/g, (_all, char: string | undefined, braced: string | undefined, bare: string | undefined) => {
-    if (char) return char;
-    const value = process.env[(braced ?? bare)!];
-    if (!value) unset = true;
-    return value ?? "";
-  });
-  return unset ? null : text;
+  let out = "";
+  for (let at = 0; at < raw.length;) {
+    const dollar = raw.indexOf("$", at);
+    if (dollar < 0) { out += raw.slice(at); break; }
+    out += raw.slice(at, dollar);
+    const next = raw[dollar + 1];
+    if (next === "$" || next === "!") { out += next; at = dollar + 2; continue; }
+    let name: string | undefined, end: number;
+    if (next === "{") {
+      const close = raw.indexOf("}", dollar + 2);
+      if (close < 0) { out += "$"; at = dollar + 1; continue; }
+      name = raw.slice(dollar + 2, close); end = close + 1;
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) { out += raw.slice(dollar, end); at = end; continue; }
+    } else {
+      name = /^[A-Za-z_][A-Za-z0-9_]*/.exec(raw.slice(dollar + 1))?.[0];
+      if (!name) { out += "$"; at = dollar + 1; continue; }
+      end = dollar + 1 + name.length;
+    }
+    const value = process.env[name];
+    if (!value) return null;
+    out += value; at = end;
+  }
+  return out;
 }
 
 // What the wiring files hold, whatever a command injects of it, masked like the injected entries:
 // - every reference in every file, also one that another file or an env file overrides under
 //   the same name, and one under a provider's name that pi alone uses. It is read from a vault
-//   that is open: bw is not unlocked, logged in to or asked about for a value nobody asked for
-//   (that can take seconds, or a Touch ID sheet), and another program's `!command` is not run;
+//   that is open: a bw reference only with a session this process opened that has not run out,
+//   and without opening, renewing or asking for one (that can take seconds, or a Touch ID sheet,
+//   for a value nobody asked for); another program's `!command` is not run;
 // - a key written out in a file (an API key pasted into pi's auth.json).
+// An entry that cannot be read (a reference that is not one, an item that is gone) is left out
+// by itself: the rest is still masked.
 async function wiringFileValues(): Promise<Array<[string, string]>> {
   const found: Array<[string, string]> = [];
   for (const path of wiringFiles()) for (const [name, entry] of Object.entries(await readAuthEntries(path))) {
     const raw = authEntryRaw(entry)?.trim();
     if (!raw) continue;
     if (isSecretSource(raw)) {
-      const ref = parseRef(raw);
-      const open = ref && (ref.scheme === "local" || (sessionVerifiedAt > 0 && Boolean(process.env.BW_SESSION)));
-      const value = open ? await resolveRef(ref).catch(() => null) : null;
-      if (value) found.push([name, value]);
+      try {
+        const ref = parseRef(raw);
+        const live = sessionVerifiedAt > 0 && Boolean(process.env.BW_SESSION) && (sessionExpiresAt === null || Date.now() < sessionExpiresAt);
+        const value = ref && (ref.scheme === "local" || live) ? await resolveRef(ref, { open: false }) : null;
+        if (value) found.push([name, value]);
+      } catch {}
       continue;
     }
     // A key that is nothing but a variable's name (`NAME`, and `$NAME` or `${NAME}` since pi 1.5)
@@ -1296,7 +1332,7 @@ async function wiringFileValues(): Promise<Array<[string, string]>> {
 // What the hook index holds: wired values, what else the wiring files hold, and the session tokens.
 export async function indexedValues(wired: Record<string, string> = {}): Promise<Record<string, string>> {
   const values = indexValues(wired);
-  for (const [name, value] of await wiringFileValues()) addValue(values, name, value);
+  for (const [name, value] of await wiringFileValues().catch(() => [])) addValue(values, name, value);
   return values;
 }
 
@@ -1393,7 +1429,9 @@ async function refuseVaultPasswords(secret: string): Promise<void> {
   const unchecked = (what: string) => new Error(`Could not check this value against ${what}, so it was not stored; try again`);
   const own = await usesBw() || OWN_BW_LOGIN || [SESSION_FILE, MASTER_PASSWORD_FILE, MASTER_VERIFIER_FILE].some((path) => existsSync(path)) || await keychainHas(KEYCHAIN_MASTER_SERVICE);
   // A bw login on this machine that keyshroud has not used (the local vault was chosen) is tried as well.
-  if (own || await sharedBwLoggedIn()) {
+  const shared = own ? true : await sharedBwLoggedIn();
+  if (shared === null) throw unchecked("the master password of the bw vault (bw's data cannot be read)");
+  if (shared) {
     // The stored value and the verifier only short-cut a match: an agent can replace either.
     if (own && (secret === await readMasterPassword() || await matchesMasterVerifier(secret))) throw refused;
     const answer = await unlocksVault(secret, own);
@@ -1683,16 +1721,19 @@ async function detectBackend(): Promise<BackendChoice> {
 }
 
 // bw's default login (the one 0.7 used before `setup`), read without spawning bw.
-async function sharedBwLoggedIn(): Promise<boolean> {
+// null: bw's data is there but cannot be read, so whether somebody is logged in is not known.
+async function sharedBwLoggedIn(): Promise<boolean | null> {
   const configured = process.env.BITWARDENCLI_APPDATA_DIR;
   const dir = configured ? configured
     : process.platform === "darwin" ? join(homedir(), "Library", "Application Support", "Bitwarden CLI")
     : process.platform === "win32" ? join(process.env.APPDATA ?? join(homedir(), "AppData", "Roaming"), "Bitwarden CLI")
     : join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "Bitwarden CLI");
+  let text: string;
+  try { text = await readFile(join(dir, "data.json"), "utf8"); } catch (error) { return (error as NodeJS.ErrnoException).code === "ENOENT" ? false : null; }
   try {
-    const data = JSON.parse(await readFile(join(dir, "data.json"), "utf8")) as Record<string, unknown>;
+    const data = JSON.parse(text) as Record<string, unknown>;
     return typeof data.global_account_activeAccountId === "string" || typeof data.activeUserId === "string";
-  } catch { return false; }
+  } catch { return null; }
 }
 
 // A path as people read it: ~ for the home directory (not on Windows, where cmd has no ~).

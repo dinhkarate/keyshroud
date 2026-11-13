@@ -8,7 +8,8 @@ const GH = "ghp_FAKE0123456789abcdef";
 
 test("pi extension hydrates env, registers tools, and redacts tool results", async () => {
   const box = await sandbox([item("id-1", "GitHub CLI token", GH)]);
-  await writeAuth(box, { GH_TOKEN: { type: "api_key", key: "!bw get password 'GitHub CLI token'" } });
+  // An entry that is no reference after all does not keep the extension from loading and masking.
+  await writeAuth(box, { GH_TOKEN: { type: "api_key", key: "!bw get password 'GitHub CLI token'" }, stale: { type: "api_key", key: "bw://Unused/unsupported" } });
   // core reads its configuration at import time.
   Object.assign(process.env, box.env);
   delete process.env.BW_SESSION;

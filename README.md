@@ -268,8 +268,9 @@ keyshroud migrate --yes                          # copy them; references keep wo
    these files, so what it wrote is safe to read. A key that you or pi put into `auth.json` as plain
    text is still there: keyshroud masks it in output like a vault value, but cannot take it out of
    the file. Every reference in these files is masked as well, whatever a command injects of it
-   (a `bw://` one when the command has the bw vault open already: keyshroud does not unlock bw for
-   a value nobody asked for).
+   (a `bw://` one when the command has the bw vault open already: keyshroud does not unlock bw,
+   renew its session or ask for one for a value nobody asked for). An entry that cannot be read
+   is left out by itself.
 2. **Unlock.** The local vault's key comes from the OS keychain, or from a passphrase session that
    ends after 30 minutes. Vaultwarden: keyshroud asks for the master password (or reads one you
    stored in the OS keychain); the session token is cached in `~/.config/keyshroud/session`
@@ -348,7 +349,8 @@ The extension:
   and the details and structured data a tool returns beside it. What a tool streams while it is
   still running is shown as it is; its result is masked;
 - masks the output of a `!command` you type as it arrives, so the masked text is what pi shows,
-  saves and later summarizes (through pi's own shell, the one your pi settings name; in a host
+  saves and later summarizes (through pi's own shell, the one your own pi settings name: a shell
+  that only a project's settings name is not used for a masked `!command`; in a host
   without it, or when another extension runs your `!commands`, only what is sent to the model with
   a turn is masked). A value is masked before pi's environment holds it;
 - with a passphrase vault, takes its values out of the agent's environment once the
@@ -666,9 +668,10 @@ for the session files, 60 s for `bw`, whose holder renews it while it works; a d
 open for 5 minutes and 30 s, the time it may stay on screen), so a holder that was only stalled can
 overlap with the next one. That can mean a second dialog, a `bw` call that fails, or a session you
 have to open again; it does not put a value anywhere. Claude Code's `settings.json` has no lock of
-its own: `claude-setup` is safe against another `claude-setup`, not against Claude Code writing the
-file at the same moment. The check that refuses a vault's own password as a secret asks `bw`: where
-`bw` is not installed there is nothing to ask, and the value is stored. A `.env.refs` can reference **any** item in your vault, not only the
+its own: `claude-setup` is safe against another `claude-setup` (a stalled one replaces nothing and
+widens no file but the one it wrote), not against Claude Code writing the file at the same moment. The check that refuses a vault's own password as a secret asks `bw`: where
+`bw` is not installed, or says that nobody is logged in, there is no vault on this machine to ask,
+and the value is stored. A `.env.refs` can reference **any** item in your vault, not only the
 ones you wired, so read a cloned repo's `.env.refs` before running `--env-file`
 with it. `import` decides what is secret by heuristics and keeps everything else
 as a literal; check its plan before committing `.env.refs`. The Claude Code

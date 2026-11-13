@@ -1096,6 +1096,15 @@ test("neither vault's own password is stored as a secret in the other", { skip: 
   assert.match(silent.stderr, /Could not check this value against the master password of the bw vault/);
   assert.ok(!silent.stderr.includes("some-value"));
   assert.equal((await runCli(other, ["run", "--", "sh", "-c", "echo ${S_TOKEN:-none}"], undefined, env)).stdout, "none\n");
+  // A login that ran out says nothing about the value either; nobody logged in means no vault to open.
+  const expired = await add(other, "S_TOKEN", "Unchecked", "some-value-123456", { ...env, FAKE_BW_UNLOCK_ERROR: "Refresh token has expired (401 Unauthorized); you are not logged in anymore" });
+  assert.match(expired.stderr, /Could not check this value against the master password of the bw vault/);
+  assert.equal((await add(other, "T_TOKEN", "Logged out", "some-value-123456", { ...env, FAKE_BW_UNLOCK_ERROR: "You are not logged in." })).code, 0);
+  // bw's data that is there but cannot be read: whether somebody is logged in is not known.
+  for (const dir of [join(other.env.HOME, "Library", "Application Support", "Bitwarden CLI"), join(other.env.HOME, ".config", "Bitwarden CLI"), join(other.env.HOME, "AppData", "Roaming", "Bitwarden CLI")]) await writeFile(join(dir, "data.json"), "{ not json");
+  const garbled = await add(other, "U_TOKEN", "Unchecked", "some-value-123456", env);
+  assert.notEqual(garbled.code, 0);
+  assert.match(garbled.stderr, /Could not check this value against the master password of the bw vault \(bw's data cannot be read\)/);
   await writeFile(vaultPath(box), "{ not a vault");
   const unread = await runCli(box, ["add", "--env", "R_TOKEN", "--item", "Unchecked too", "--stdin"], "some-value-123456");
   assert.notEqual(unread.code, 0);
@@ -1129,6 +1138,26 @@ test("claude-setup paused past its lock replaces nothing a later run wrote; what
   assert.equal(out, "waits as 600\n");
   assert.deepEqual(JSON.parse(await readFile(settings, "utf8")), { apiKeyHelper: "another run's" });
   assert.deepEqual((await readdir(dirname(settings))).filter((name) => /\.lock$|\.tmp\.|pending/.test(name)), []);
+
+  // Paused after its rename instead: the mode it remembered (0644) goes to the file it put in
+  // place, not to the one a later run has put there since.
+  await writeFile(settings, JSON.stringify({ model: "x" }));
+  await chmod(settings, 0o644);
+  await runScript(box, `${PATCH_FS}
+    let stalled = false;
+    patch("rename", async (real, from, to) => {
+      await real(from, to);
+      if (!stalled && /settings\\.json\\.lock\\/pending\\./.test(String(from))) {
+        stalled = true;
+        fs.rmSync(${JSON.stringify(settings)});
+        fs.writeFileSync(${JSON.stringify(settings)}, JSON.stringify({ apiKeyHelper: "a later run's" }), { mode: 0o600 });
+      }
+    });
+    process.argv = [process.argv[0], "cli", "claude-setup", "--item", "Item A"];
+    await import(${JSON.stringify(new URL("../src/cli.ts", import.meta.url).href)});
+  `);
+  assert.deepEqual(JSON.parse(await readFile(settings, "utf8")), { apiKeyHelper: "a later run's" });
+  assert.equal((await stat(settings)).mode & 0o777, 0o600);
 });
 
 test("migrate --to local leaves alone two references that would get one name, and a name rewired meanwhile", async () => {
