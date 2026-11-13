@@ -5,6 +5,17 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.10.11] - 2026-11-13
+
+What the second reader found left over in 0.10.10 (review round 14), both on Windows.
+
+### Security
+- The check that refuses a vault's own password, on Windows: "there is no `bw`" now needs the
+  lookup's own "not found" and a fresh search of every `PATH` directory with every `PATHEXT`
+  extension that finds nothing; a place that cannot be looked into is not "nothing". A `bw` batch
+  file whose `cmd.exe` cannot be started stops the save (0.10.10 took that for "no `bw`"), and a
+  `bw` installed while a long-lived process runs is found.
+
 ## [0.10.10] - 2026-11-13
 
 What the second reader found left over in 0.10.9 (review round 13).

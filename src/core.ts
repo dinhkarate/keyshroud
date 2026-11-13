@@ -82,20 +82,24 @@ const windowsResolved = new Map<string, { file: string; script?: string } | null
 export const SYSTEM32 = join(process.env.SystemRoot ?? "C:\\Windows", "System32");
 const POWERSHELL = join(SYSTEM32, "WindowsPowerShell", "v1.0", "powershell.exe");
 
+// Every file a command's name can stand for on Windows, in the order they are tried.
+function windowsCandidates(command: string, env: NodeJS.ProcessEnv = process.env): string[] {
+  const pathext = (env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean);
+  // `python3.12` still needs `.exe`; `npm.cmd` does not.
+  const exts = pathext.some((ext) => command.toLowerCase().endsWith(ext.toLowerCase())) ? [""] : pathext;
+  const dirs = /[\\/]/.test(command) ? [""] : (env.PATH ?? "").split(";").map((dir) => dir.replace(/^"(.*)"$/, "$1")).filter(Boolean);
+  return dirs.flatMap((dir) => exts.map((ext) => dir ? join(dir, command + ext) : command + ext));
+}
+
 export function invocation(command: string, args: string[]): Invocation {
   if (process.platform !== "win32") return { command, args };
   if (!windowsResolved.has(command)) {
-    const pathext = (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean);
-    // `python3.12` still needs `.exe`; `npm.cmd` does not.
-    const exts = pathext.some((ext) => command.toLowerCase().endsWith(ext.toLowerCase())) ? [""] : pathext;
-    const dirs = /[\\/]/.test(command) ? [""] : (process.env.PATH ?? "").split(";").map((dir) => dir.replace(/^"(.*)"$/, "$1")).filter(Boolean);
     let found: { file: string; script?: string } | null = null;
-    search: for (const dir of dirs) for (const ext of exts) {
-      const file = dir ? join(dir, command + ext) : command + ext;
+    for (const file of windowsCandidates(command)) {
       if (!existsSync(file)) continue;
       const script = /\.cmd$/i.test(file) ? /"%~?dp0%?\\([^"]+\.[cm]?js)"/i.exec(readFileSync(file, "utf8"))?.[1] : undefined;
       found = { file, script: script && join(dirname(file), script) };
-      break search;
+      break;
     }
     windowsResolved.set(command, found);
   }
@@ -103,6 +107,8 @@ export function invocation(command: string, args: string[]): Invocation {
   // Not on PATH: fail instead of letting spawn find a file in the current directory.
   if (!found) {
     if (/[\\/]/.test(command)) return { command, args };
+    // Not remembered: the program may be installed while this process lives.
+    windowsResolved.delete(command);
     throw Object.assign(new Error(`${command}: not found on PATH`), { code: "ENOENT", spawnCode: "ENOENT" });
   }
   if (found.script) return { command: process.execPath, args: [found.script, ...args] };
@@ -201,15 +207,21 @@ function encodedStrings(input?: string): string[] {
   try { return input ? strings(JSON.parse(Buffer.from(input, "base64").toString("utf8"))) : []; } catch { return []; }
 }
 
+// That a program could not be started at all, kept on the error apart from anything it printed.
+// Not on Windows: what fails to start there is what `invocation` chose to run the command with
+// (cmd.exe for a batch file, node for a script), after it had found the command; only its own
+// "not found on PATH" says a command is missing.
+export function startFailure(error: { code?: unknown; syscall?: string }, platform: string = process.platform): { spawnCode?: string } {
+  return platform !== "win32" && typeof error.code === "string" && error.syscall?.startsWith("spawn") ? { spawnCode: error.code } : {};
+}
+
 function execRun(command: string, args: string[], { secrets, ...options }: Record<string, unknown>, input?: string): Promise<ExecResult> {
   return new Promise((resolve, reject) => {
     const child = execFile(command, args, options as never, (error, stdout, stderr) => {
       if (error) {
         const env = options.env as NodeJS.ProcessEnv | undefined;
         const message = withoutSecrets(String(stderr || error.message || "Command failed").trim(), [input, ...(secrets as string[] | undefined ?? []), env?.BW_PASSWORD, env?.BW_CLIENTSECRET, env?.BW_SESSION]);
-        // That the program could not be started at all is kept apart from anything it printed.
-        const { code, syscall } = error as NodeJS.ErrnoException;
-        reject(Object.assign(new Error(message), typeof code === "string" && syscall?.startsWith("spawn") ? { spawnCode: code } : {}));
+        reject(Object.assign(new Error(message), startFailure(error)));
         return;
       }
       resolve({ stdout: String(stdout ?? ""), stderr: String(stderr ?? "") });
@@ -423,13 +435,15 @@ export async function resolveRef(ref: SecretRef, opts: { open?: boolean } = {}):
   }
 }
 
-// Whether no file of this name is in any directory a command is looked for in (an empty entry
-// of PATH is the current directory; without PATH the system's own two). A directory that cannot
-// be looked into is not known to be without it. On Windows `invocation` has made this search.
-function nowhereOnPath(command: string): boolean {
-  if (process.platform === "win32") return true;
-  for (const dir of (process.env.PATH ?? "/usr/bin:/bin").split(delimiter)) {
-    try { statSync(join(dir || ".", command)); return false; } catch (error) {
+// Whether no file of this name is in any directory a command is looked for in, asked of the
+// file system now (not of an earlier lookup). On Windows: every directory of PATH with every
+// extension of PATHEXT, as `invocation` looks. Elsewhere: an empty entry of PATH is the current
+// directory; without PATH the system's own two. A place that cannot be looked into is not known
+// to be without it: then the answer is no.
+export function nowhereOnPath(command: string, platform: string = process.platform, env: NodeJS.ProcessEnv = process.env): boolean {
+  const files = platform === "win32" ? windowsCandidates(command, env) : (env.PATH ?? "/usr/bin:/bin").split(delimiter).map((dir) => join(dir || ".", command));
+  for (const file of files) {
+    try { statSync(file); return false; } catch (error) {
       if (!["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) return false;
     }
   }
@@ -831,8 +845,9 @@ async function unlocksVault(secret: string, keep = true): Promise<"yes" | "no" |
     token = (await runFile("bw", ["unlock", "--passwordenv", "BW_PASSWORD", "--raw"], { env: { ...process.env, BW_PASSWORD: secret }, timeout: 20000, maxBuffer: 4 * 1024 * 1024 })).stdout.trim();
   } catch (error) {
     // No program: starting it failed for want of a file (the failure itself, not a text that any
-    // file operation could carry), and no file of that name is anywhere a command is looked for
-    // (a bw that is there but cannot start, a script without its interpreter, is not "no bw").
+    // file operation could carry; on Windows the lookup's own "not found"), and no file of that
+    // name is anywhere a command is looked for right now (a bw that is there but cannot start, a
+    // script without its interpreter, a batch file without cmd.exe, is not "no bw").
     if ((error as { spawnCode?: string }).spawnCode === "ENOENT" && nowhereOnPath("bw")) return "no";
     const message = error instanceof Error ? error.message : "";
     // What bw said, without what Node adds about itself around it.

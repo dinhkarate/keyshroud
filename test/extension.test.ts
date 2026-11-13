@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { item, sandbox, writeAuth } from "./helpers.ts";
 
@@ -74,6 +74,24 @@ test("pi extension hydrates env, registers tools, and redacts tool results", asy
 
   // A value masked once stays masked after its name gets a new one.
   const core = await import("../src/core.ts");
+  // "There is no bw" for the vault-password check. On Windows: every directory of PATH with every
+  // extension of PATHEXT, asked of the file system now; a place that cannot be looked into is not
+  // "nowhere". And what fails to start there is the launcher of a command that was found (cmd.exe
+  // for a batch file), which is never "no such command".
+  const winBin = join(box.dir, "win-bin"), shut = join(box.dir, "shut");
+  await mkdir(winBin);
+  const winEnv = { PATH: `${join(box.dir, "none")};"${winBin}"`, PATHEXT: ".EXE;.CMD" };
+  assert.equal(core.nowhereOnPath("bw", "win32", winEnv), true);
+  await writeFile(join(winBin, "bw.CMD"), "@echo off\r\n");
+  assert.equal(core.nowhereOnPath("bw", "win32", winEnv), false);
+  await mkdir(shut, { mode: 0o000 });
+  if (process.getuid?.() !== 0) assert.equal(core.nowhereOnPath("bw", "win32", { PATH: shut, PATHEXT: ".EXE" }), false);
+  assert.equal(core.nowhereOnPath("bw.CMD", "linux", { PATH: `/nonexistent-dir:${winBin}` }), false);
+  assert.equal(core.nowhereOnPath("bw", "linux", { PATH: `/nonexistent-dir:${winBin}` }), true);
+  assert.deepEqual(core.startFailure({ code: "ENOENT", syscall: "spawn bw" }, "linux"), { spawnCode: "ENOENT" });
+  assert.deepEqual(core.startFailure({ code: "ENOENT", syscall: "spawn C:\\Windows\\System32\\cmd.exe" }, "win32"), {});
+  assert.deepEqual(core.startFailure({ code: 1 }, "linux"), {});
+
   // An error from bw never quotes what bw was given, however the values overlap in it.
   assert.equal(core.withoutSecrets("x ABCDEFABCDEFABCDEF y abcd", ["ABCDEFABCDEF", "DEFA", undefined, "abc"]), "x <redacted> y abcd");
   assert.deepEqual({ ...core.withEarlierValues({ GH_TOKEN: "new-value-1", Item: "new-value-1" }, { GH_TOKEN: "old-value-0", Item: "old-value-0", "Other (2)": "kept-value-9" }) },
