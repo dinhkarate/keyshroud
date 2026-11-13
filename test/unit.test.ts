@@ -160,6 +160,11 @@ test("redact stream keeps flowing on output that repeats a periodic secret", asy
   assert.ok(!out.includes("00000000"));
 });
 
+test("redact stream leaves no tail of a periodic secret that straddles what it already let go", async () => {
+  const out = await streamThrough({ S: "ABCDEFABCDEF" }, ["ABCDEF".repeat(684), "ABCDEF"]);
+  assert.equal(out.replaceAll("<redacted:S>", ""), "");
+});
+
 test("index redaction matches plaintext redaction without holding values", () => {
   const values = { A: "sk-abcdef123456", B: "abcdef", C: "correct horse battery" };
   const index = buildRedactIndex(values);

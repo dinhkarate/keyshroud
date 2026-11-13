@@ -12,7 +12,11 @@ const MAX_HOLD = 4096;
 
 export interface Redactor {
   readonly size: number;
-  redact(text: string): string;
+  // `before` is text that came just ahead of `text` and is not returned: a secret that began in it
+  // is masked in `text` from its first character there.
+  redact(text: string, before?: string): string;
+  // How much of the text already let go a stream keeps, to pass as `before`.
+  readonly lookBehind: number;
   // Largest prefix length that can be redacted now: the remainder may still
   // grow into a secret, and no complete secret straddles the cut.
   safeCut(text: string): number;
@@ -42,19 +46,24 @@ export function redactForms(value: string): string[] {
 interface Hit { start: number; end: number; name: string }
 
 // Overlapping matches merge into one placeholder, so no fragment of any secret
-// survives between two replacements.
-function applyHits(text: string, hits: Hit[]): string {
-  if (!hits.length) return text;
+// survives between two replacements. Only the text from `from` on is returned.
+function applyHits(text: string, hits: Hit[], from = 0): string {
+  if (!hits.length) return text.slice(from);
   hits.sort((a, b) => a.start - b.start || b.end - a.end);
   let out = "";
-  let cursor = 0;
+  let cursor = from;
   let current: Hit | null = null;
+  const flush = (hit: Hit) => {
+    if (hit.end <= from) return;
+    out += text.slice(cursor, Math.max(cursor, hit.start)) + placeholder(hit.name);
+    cursor = hit.end;
+  };
   for (const hit of hits) {
     if (current && hit.start < current.end) { current.end = Math.max(current.end, hit.end); continue; }
-    if (current) { out += text.slice(cursor, current.start) + placeholder(current.name); cursor = current.end; }
+    if (current) flush(current);
     current = { ...hit };
   }
-  if (current) { out += text.slice(cursor, current.start) + placeholder(current.name); cursor = current.end; }
+  if (current) flush(current);
   return out + text.slice(cursor);
 }
 
@@ -68,12 +77,14 @@ export function createRedactor(values: Record<string, string>): Redactor {
   const maxLength = secrets.reduce((max, [value]) => Math.max(max, value.length), 0);
   return {
     size: secrets.length,
-    redact(text) {
+    lookBehind: Math.max(0, maxLength - 1),
+    redact(text, before = "") {
+      const all = before + text;
       const hits: Hit[] = [];
       for (const [value, name] of secrets) {
-        for (let at = text.indexOf(value); at !== -1; at = text.indexOf(value, at + 1)) hits.push({ start: at, end: at + value.length, name });
+        for (let at = all.indexOf(value); at !== -1; at = all.indexOf(value, at + 1)) hits.push({ start: at, end: at + value.length, name });
       }
-      return applyHits(text, hits);
+      return applyHits(all, hits, before.length);
     },
     safeCut(text) {
       let cut = text.length;
@@ -108,21 +119,41 @@ export function createRedactor(values: Record<string, string>): Redactor {
 }
 
 // Streams child output through the redactor, holding back only a trailing
-// fragment that could still grow into a secret on the next chunk.
+// fragment that could still grow into a secret on the next chunk. What was let
+// go is remembered for the length of a secret: one that began there (the bounded
+// fallback of safeCut can cut inside overlapping matches) is still masked to its end.
 export function createRedactStream(redactor: Redactor): Transform {
   const decoder = new StringDecoder("utf8");
   let pending = "";
+  let gone = "";
+  const emit = (text: string) => {
+    const out = redactor.redact(text, gone);
+    gone = redactor.lookBehind ? (gone + text).slice(-redactor.lookBehind) : "";
+    return out;
+  };
   return new Transform({
     transform(chunk: Buffer, _encoding, callback) {
       const text = pending + decoder.write(chunk);
       const cut = redactor.safeCut(text);
       pending = text.slice(cut);
-      callback(null, redactor.redact(text.slice(0, cut)));
+      callback(null, emit(text.slice(0, cut)));
     },
     flush(callback) {
-      callback(null, redactor.redact(pending + decoder.end()));
+      callback(null, emit(pending + decoder.end()));
     },
   });
+}
+
+// Every string in a JSON-like value, keys included, through `redact`.
+export function redactDeep(value: unknown, redact: (text: string) => string): unknown {
+  if (typeof value === "string") return redact(value);
+  // A secret of digits may come back as a JSON number.
+  if (typeof value === "number") { const text = String(value); const masked = redact(text); return masked === text ? value : masked; }
+  if (Array.isArray(value)) return value.map((entry) => redactDeep(entry, redact));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [redact(key), redactDeep(entry, redact)]));
+  }
+  return value;
 }
 
 // Out-of-process hooks (Claude Code PostToolUse) cannot hold plaintext, so
@@ -171,6 +202,12 @@ export function redactWithIndex(text: string, index: RedactIndex): string {
 }
 
 export function compileRedactIndex(index: RedactIndex): (text: string) => string {
+  const find = compileIndexSearch(index);
+  return (text) => applyHits(text, find(text));
+}
+
+// Where the indexed values are in a text: the name and the offset of each (for `scan`).
+export function compileIndexSearch(index: RedactIndex): (text: string) => Array<{ start: number; end: number; name: string }> {
   const key = Buffer.from(index.key, "base64");
   const byLength = new Map<number, Map<number, RedactIndex["entries"]>>();
   for (const entry of index.entries) {
@@ -196,6 +233,6 @@ export function compileRedactIndex(index: RedactIndex): (text: string) => string
         hash = (Math.imul((hash - outgoing) >>> 0, ROLL_BASE) + text.charCodeAt(start + length)) >>> 0;
       }
     }
-    return applyHits(text, hits);
+    return hits;
   };
 }

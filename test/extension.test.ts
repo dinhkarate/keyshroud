@@ -29,6 +29,16 @@ test("pi extension hydrates env, registers tools, and redacts tool results", asy
   const result = handlers.get("tool_result")!({ content: [{ type: "text", text: `token=${GH}` }, { type: "image", data: "x" }] }) as { content: Array<{ text?: string }> };
   assert.equal(result.content[0].text, "token=<redacted:GH_TOKEN>");
   assert.equal(handlers.get("tool_result")!({ content: [{ type: "text", text: "clean" }] }), undefined);
+  // What a tool returns beside its text is sent to the model too, and so is the output of a `!command`.
+  const beside = handlers.get("tool_result")!({ content: [{ type: "text", text: "clean" }], details: { stdout: GH, lines: [1, `a ${GH}`] }, structuredContent: { ok: true } }) as Record<string, unknown>;
+  assert.deepEqual(beside, { details: { stdout: "<redacted:GH_TOKEN>", lines: [1, "a <redacted:GH_TOKEN>"] } });
+  const structured = handlers.get("tool_result")!({ content: [{ type: "text", text: GH }], structuredContent: { token: GH } }) as { structuredContent: unknown };
+  assert.deepEqual(structured.structuredContent, { token: "<redacted:GH_TOKEN>" });
+  const kept = handlers.get("tool_result")!({ content: [{ type: "text", text: GH }], structuredContent: { ok: true } }) as { structuredContent: unknown };
+  assert.deepEqual(kept.structuredContent, { ok: true });
+  const context = handlers.get("context")!({ messages: [{ role: "user", content: "hi" }, { role: "bashExecution", command: "printenv", output: `GH_TOKEN=${GH}` }] }) as { messages: Array<{ output?: string }> };
+  assert.equal(context.messages[1].output, "GH_TOKEN=<redacted:GH_TOKEN>");
+  assert.equal(handlers.get("context")!({ messages: [{ role: "bashExecution", command: "true", output: "clean" }] }), undefined);
 
   // Tools start without another vault call.
   const calls = (await box.bwCalls()).length;

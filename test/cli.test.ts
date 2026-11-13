@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { randomBytes, scryptSync } from "node:crypto";
-import { cp, mkdir, readdir, readFile, stat, symlink, unlink, utimes, writeFile } from "node:fs/promises";
+import { chmod, cp, mkdir, readdir, readFile, stat, symlink, unlink, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
 import { BRAND } from "../src/brand.ts";
@@ -602,6 +602,14 @@ test("setup gives the CLI its own agent login; migrate copies only the wired ite
   assert.match(refused.stdout, /Vault login\s+refused/);
   assert.ok(!(await ownVault()).items.some((entry: { name: string }) => entry.name === "Vault login"));
 
+  // ...whether that password came from the keychain or was typed.
+  const master = join(box.dir, "keychain", "vaultwarden-master-password");
+  await unlink(master);
+  const typed = await runCliTty(box, ["migrate", "--item", "Vault login", "--yes"], "Master password of your personal vault", "master");
+  assert.match(typed.stdout, /Vault login\s+refused/);
+  assert.ok(!(await ownVault()).items.some((entry: { name: string }) => entry.name === "Vault login"));
+  await writeFile(master, "master\n");
+
   const run = await runCli(box, ["run", "--", "sh", "-c", "test \"$GH_TOKEN\" = \"$EXPECTED\" && echo same"], "", { EXPECTED: GH });
   assert.equal(run.code, 0, run.stderr);
   assert.match(run.stdout, /same/);
@@ -932,4 +940,108 @@ test("list and rm on bw: duplicate names by id, own agent account only, items go
     assert.equal(approved.code, 0, approved.stderr);
     assert.match(approved.stdout, /removed bw:\/\/Solo unwired=SOLO_TOKEN/);
   }
+});
+
+test("run: bw's own variables are never wired or injected, --only also drops the other wired names, and the CI passphrase stays out of the child", async () => {
+  const box = await wired();
+  assert.equal((await runCli(box, ["wire", "--env", "BW_SESSION", "--item", "npm publish"])).code, 2);
+  await writeAuth(box, { GH_TOKEN: { type: "api_key", key: "bw://GitHub CLI token" }, NPM_TOKEN: "bw://npm publish", BW_CLIENTSECRET: { type: "api_key", key: "bw://npm publish" } });
+  const env = { NPM_TOKEN: "inherited-npm-value-01", KEYSHROUD_PASSPHRASE: "ci passphrase fake 01" };
+  const script = "echo n=${NPM_TOKEN:-none} c=${BW_CLIENTSECRET:-none} p=${KEYSHROUD_PASSPHRASE:-none} g=$GH_TOKEN; echo 'ci passphrase fake 01'";
+  const run = await runCli(box, ["run", "--only", "GH_TOKEN", "--", "/bin/sh", "-c", script], "", env);
+  assert.equal(run.stdout, "n=none c=none p=none g=<redacted:GH_TOKEN>\n<redacted:KEYSHROUD_PASSPHRASE>\n", run.stderr);
+  const mcp = await mcpCall(box, "secrets_run", { command: script, only: ["GH_TOKEN"] }, env);
+  assert.match(mcp.text, /n=none c=none p=none g=<redacted:GH_TOKEN>\n<redacted:KEYSHROUD_PASSPHRASE>/);
+  assert.match((await mcpCall(box, "secrets_run", { command: "true", only: "GH_TOKEN" })).text, /only must be a list of names/);
+});
+
+test("a key written into auth.json itself is masked like a vault value, by run and by the hook", async () => {
+  const box = await wired();
+  const literal = "sk-literal-FAKE-0123456789";
+  await writeAuth(box, { GH_TOKEN: { type: "api_key", key: "bw://GitHub CLI token" }, openai: { type: "api_key", key: literal } });
+  assert.equal((await runCli(box, ["run", "--", "echo", literal])).stdout, "<redacted:openai>\n");
+  await runCli(box, ["hook", "claude", "session-start"]);
+  const post = await runCli(box, ["hook", "claude", "post-tool-use"], JSON.stringify({ tool_response: { stdout: `key ${literal}` } }));
+  assert.equal(JSON.parse(post.stdout).hookSpecificOutput.updatedToolOutput.stdout, "key <redacted:openai>");
+});
+
+test("wire puts the value into the hook index at once; unwire leaves a provider's login alone", async () => {
+  const box = await sandbox([item("id-1", "GitHub CLI token", GH), item("id-2", "Extra", "extra-value-0123456789")]);
+  await writeAuth(box, { anthropic: { type: "oauth" }, GH_TOKEN: { type: "api_key", key: "bw://GitHub CLI token" } });
+  await runCli(box, ["hook", "claude", "session-start"]);
+  const reads = (text: string) => runCli(box, ["hook", "claude", "post-tool-use"], JSON.stringify({ tool_response: { stdout: text } }));
+  assert.equal((await reads("is extra-value-0123456789")).stdout, "");
+  assert.equal((await runCli(box, ["wire", "--env", "EXTRA", "--item", "Extra"])).code, 0);
+  assert.equal(JSON.parse((await reads("is extra-value-0123456789")).stdout).hookSpecificOutput.updatedToolOutput.stdout, "is <redacted:EXTRA>");
+
+  const refused = await runCli(box, ["unwire", "--env", "anthropic"]);
+  assert.equal(refused.code, 2);
+  assert.match(refused.stderr, /not a variable name/);
+  assert.deepEqual(JSON.parse(await readFile(join(box.env.HOME, ".pi", "agent", "auth.json"), "utf8")).anthropic, { type: "oauth" });
+});
+
+test("claude-setup creates settings where there are none, backs an existing file up privately, and replaces it whole", async () => {
+  const box = await wired();
+  const settings = join(box.env.HOME, ".claude", "settings.json");
+  assert.equal((await runCli(box, ["claude-setup", "--item", "npm publish", "--ttl-ms", "soon"])).code, 2);
+  const first = await runCli(box, ["claude-setup", "--item", "npm publish"]);
+  assert.equal(first.code, 0, first.stderr);
+  assert.equal((await stat(settings)).mode & 0o777, 0o600);
+  assert.deepEqual(await readdir(join(box.env.HOME, ".claude")), ["settings.json"]);
+
+  await writeFile(settings, JSON.stringify({ env: { KEEP: "1" }, model: "x" }));
+  await chmod(settings, 0o644);
+  const second = await runCli(box, ["claude-setup", "--item", "npm publish", "--ttl-ms", "60000"]);
+  assert.equal(second.code, 0, second.stderr);
+  const now = JSON.parse(await readFile(settings, "utf8"));
+  assert.deepEqual(now.env, { KEEP: "1", CLAUDE_CODE_API_KEY_HELPER_TTL_MS: "60000" });
+  assert.match(now.apiKeyHelper, /api-key --item 'npm publish'$/);
+  assert.equal((await stat(settings)).mode & 0o777, 0o644);
+  const backups = (await readdir(join(box.env.HOME, ".claude"))).filter((name) => name !== "settings.json");
+  assert.equal(backups.length, 1);
+  assert.match(backups[0], /^settings\.json\.bak-/);
+  assert.equal((await stat(join(box.env.HOME, ".claude", backups[0]))).mode & 0o777, 0o600);
+
+  await writeFile(settings, `{ "token": "sk-in-settings-FAKE-01", `);
+  const broken = await runCli(box, ["claude-setup", "--item", "npm publish", "--force"]);
+  assert.notEqual(broken.code, 0);
+  assert.match(broken.stderr, /is not a valid JSON object/);
+  assert.ok(!broken.stderr.includes("sk-in-settings"));
+});
+
+test("scan finds a value that spans lines; a hook given something that is not JSON does not quote it", async () => {
+  const box = await sandbox([item("id-1", "Deploy key", "K3y1\nK3y2\nK3y3\nK3y4")]);
+  await writeAuth(box, { DEPLOY_KEY: { type: "api_key", key: "bw://Deploy key" } });
+  await writeFile(join(box.dir, "leak.txt"), "intro\nK3y1\nK3y2\nK3y3\nK3y4\n");
+  const scan = await runCli(box, ["scan", "leak.txt"]);
+  assert.equal(scan.code, 1);
+  assert.equal(scan.stdout.trim(), "leak.txt:2 DEPLOY_KEY");
+  const hook = await runCli(box, ["hook", "claude", "post-tool-use"], `{"tool_response": K3y1-not-json`);
+  assert.equal(hook.stdout, "");
+  assert.match(hook.stderr, /the hook input is not JSON/);
+  assert.ok(!hook.stderr.includes("K3y1"));
+});
+
+test("MCP: a malformed message gets an error and the server lives on; a command that ignores its timeout is killed", { skip: process.platform === "win32" }, async () => {
+  const box = await wired();
+  const child = spawn(NODE, [CLI, "mcp"], { env: box.env, cwd: box.dir });
+  const responses: Array<Record<string, any>> = [];
+  let buffer = "";
+  child.stdout.on("data", (chunk) => {
+    buffer += chunk;
+    for (let index = buffer.indexOf("\n"); index >= 0; index = buffer.indexOf("\n")) { responses.push(JSON.parse(buffer.slice(0, index))); buffer = buffer.slice(index + 1); }
+  });
+  child.stdin.write("null\n[1]\n");
+  child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: "secrets_list" })}\n`);
+  child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "secrets_run", arguments: [] } })}\n`);
+  child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "secrets_run", arguments: { command: "trap '' TERM; sleep 30 & wait", timeout_ms: 300 } } })}\n`);
+  child.stdin.end();
+  const started = Date.now();
+  await new Promise((resolve) => child.on("close", resolve));
+  assert.ok(Date.now() - started < 20000, "the command outlived its timeout");
+  assert.deepEqual(responses.filter((response) => response.id === null || response.id === undefined).map((response) => response.error.code), [-32600, -32600]);
+  const byId = new Map(responses.map((response) => [response.id, response]));
+  assert.equal(byId.get(1)!.error.code, -32602);
+  assert.ok(byId.get(2)!.error?.code === -32602 || byId.get(2)!.result.isError);
+  assert.match(byId.get(3)!.result.content[0].text, /exit: (signal SIGKILL|timed out)/);
 });

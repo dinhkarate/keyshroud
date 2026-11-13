@@ -72,7 +72,7 @@ renders `{{ keyshroud://item }}` and `{{ bw://item/field }}` placeholders into a
 ## Before committing
 
 ```bash
-keyshroud scan .          # exits 1 and lists file:line NAME for any leaked value
+keyshroud scan .          # exits 1 and lists file:line NAME for each vault value it finds
 ```
 
 ## Exit codes

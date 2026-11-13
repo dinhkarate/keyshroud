@@ -1,6 +1,6 @@
 {
   "name": "keyshroud",
-  "version": "0.10.5",
+  "version": "0.10.6",
   "mcpName": "io.github.dinhkarate/keyshroud",
   "description": "Let AI coding agents use your secrets without ever seeing them. Encrypted local vault or self-hosted Vaultwarden/Bitwarden, masked output, MCP server, Claude Code + pi plugins.",
   "keywords": [
@@ -97,8 +97,8 @@
     }
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "^1.2.0",
-    "@earendil-works/pi-tui": "^1.2.0",
+    "@earendil-works/pi-coding-agent": "^1.5.2",
+    "@earendil-works/pi-tui": "^1.5.2",
     "@types/node": "^26.6.6",
     "typebox": "^1.3.37",
     "typescript": "^7.0.2"

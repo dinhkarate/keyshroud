@@ -69,10 +69,15 @@ async function collectEntries(envFile: unknown): Promise<Array<{ name: string; r
 async function runTool(args: Json): Promise<Json> {
   if (typeof args.command !== "string" || !args.command.trim()) return text("command is required", true);
   let entries = await collectEntries(args.env_file);
-  if (Array.isArray(args.only)) {
-    const only = args.only.filter((name): name is string => typeof name === "string");
+  // With `only`, the other wired names do not reach the command from this server's own environment either.
+  let dropped: string[] = [];
+  if (args.only !== undefined && args.only !== null) {
+    // Anything but a list of names would mean every secret: refused, not guessed.
+    if (!Array.isArray(args.only) || !args.only.every((name) => typeof name === "string")) return text("only must be a list of names", true);
+    const only = args.only as string[];
     const unknown = only.filter((name) => !entries.some((entry) => entry.name === name));
     if (unknown.length) return text(`Not wired: ${unknown.join(", ")}`, true);
+    dropped = entries.filter((entry) => !only.includes(entry.name)).map((entry) => entry.name);
     entries = entries.filter((entry) => only.includes(entry.name));
   }
   let vaultError = "";
@@ -80,17 +85,22 @@ async function runTool(args: Json): Promise<Json> {
   const env = await core.resolveEntries(entries);
   await core.audit("run", Object.keys(env.secrets), "mcp");
   const redactor = createRedactor(await core.redactionValues(env.secrets));
-  const timeout = typeof args.timeout_ms === "number" && args.timeout_ms > 0 ? args.timeout_ms : 120000;
+  // At most a day: a longer wait is past what a timer can hold, and would end at once.
+  const timeout = typeof args.timeout_ms === "number" && args.timeout_ms > 0 ? Math.min(args.timeout_ms, 24 * 60 * 60 * 1000) : 120000;
   // Own process group so a timeout kills everything the command started
   // (Windows: cmd.exe, and taskkill for the tree).
   const windows = process.platform === "win32";
-  const child = spawn(windows ? process.env.ComSpec ?? join(core.SYSTEM32, "cmd.exe") : "/bin/sh", windows ? ["/d", "/s", "/c", `"${args.command}"`] : ["-c", args.command], {
-    cwd: typeof args.cwd === "string" && args.cwd ? args.cwd : process.cwd(),
-    env: core.childEnv(env.values),
-    stdio: ["ignore", "pipe", "pipe"],
-    detached: !windows,
-    windowsVerbatimArguments: windows,
-  });
+  let child: ChildProcessByStdio<null, Readable, Readable>;
+  // An error about the environment or the arguments could quote one of them.
+  try {
+    child = spawn(windows ? process.env.ComSpec ?? join(core.SYSTEM32, "cmd.exe") : "/bin/sh", windows ? ["/d", "/s", "/c", `"${args.command}"`] : ["-c", args.command], {
+      cwd: typeof args.cwd === "string" && args.cwd ? args.cwd : process.cwd(),
+      env: core.childEnv(env.values, dropped),
+      stdio: ["ignore", "pipe", "pipe"],
+      detached: !windows,
+      windowsVerbatimArguments: windows,
+    });
+  } catch (error) { return text(`The command could not be started (${(error as NodeJS.ErrnoException).code ?? "error"})`, true); }
   const chunks = { stdout: [] as Buffer[], stderr: [] as Buffer[] };
   // Collect generously per stream, mask, then truncate. If collection stopped
   // early, the tail may end inside a secret, so it is dropped before masking.
@@ -102,15 +112,20 @@ async function runTool(args: Json): Promise<Json> {
       chunks[stream].push(chunk);
     });
   }
-  const timer = setTimeout(() => {
-    if (windows) spawn(join(core.SYSTEM32, "taskkill.exe"), ["/pid", String(child.pid), "/t", "/f"], { stdio: "ignore" }).on("error", () => {});
-    else { try { process.kill(-child.pid!, "SIGTERM"); } catch {} }
-  }, timeout);
+  // When its time is up the group is asked to stop, then killed; whatever still holds the pipes
+  // open after that no longer keeps the answer waiting.
+  let killer: ReturnType<typeof setTimeout> | undefined, giveUp: ReturnType<typeof setTimeout> | undefined;
   const code = await new Promise<string>((done) => {
-    child.on("close", (exit, signal) => done(signal ? `signal ${signal}` : String(exit)));
-    child.on("error", (error) => done(`spawn error: ${error.message}`));
+    const timer = setTimeout(() => {
+      if (windows) spawn(join(core.SYSTEM32, "taskkill.exe"), ["/pid", String(child.pid), "/t", "/f"], { stdio: "ignore" }).on("error", () => {});
+      else { try { process.kill(-child.pid!, "SIGTERM"); } catch {} }
+      killer = setTimeout(() => { if (!windows) { try { process.kill(-child.pid!, "SIGKILL"); } catch {} } }, 5000);
+      giveUp = setTimeout(() => { child.stdout.destroy(); child.stderr.destroy(); done("timed out"); }, 10000);
+    }, timeout);
+    child.on("close", (exit, signal) => { clearTimeout(timer); done(signal ? `signal ${signal}` : String(exit)); });
+    child.on("error", (error) => { clearTimeout(timer); done(`spawn error: ${(error as NodeJS.ErrnoException).code ?? "error"}`); });
   });
-  clearTimeout(timer);
+  clearTimeout(killer); clearTimeout(giveUp);
   let truncated = false;
   const out = (stream: "stdout" | "stderr") => {
     let raw = Buffer.concat(chunks[stream]).toString("utf8");
@@ -188,6 +203,9 @@ async function callTool(name: string, args: Json): Promise<Json> {
 }
 
 async function handle(message: Json): Promise<Json | null> {
+  if (message.params !== undefined && (typeof message.params !== "object" || message.params === null || Array.isArray(message.params))) {
+    return message.id === undefined || message.id === null ? null : { jsonrpc: "2.0", id: message.id, error: { code: -32602, message: "Invalid params" } };
+  }
   const id = message.id;
   const method = message.method;
   const params = (message.params ?? {}) as Json;
@@ -206,7 +224,9 @@ async function handle(message: Json): Promise<Json | null> {
   if (method === "ping") return reply({});
   if (method === "tools/list") return reply({ tools: TOOLS });
   if (method === "tools/call") {
-    try { return reply(await callTool(String(params.name ?? ""), (params.arguments ?? {}) as Json)); } catch (error) {
+    const toolArgs = params.arguments ?? {};
+    if (typeof toolArgs !== "object" || Array.isArray(toolArgs)) return reply(text("arguments must be an object", true));
+    try { return reply(await callTool(String(params.name ?? ""), toolArgs as Json)); } catch (error) {
       return reply(text(error instanceof Error ? error.message : String(error), true));
     }
   }
@@ -280,10 +300,16 @@ export async function serveMcp(): Promise<void> {
       process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } })}\n`);
       continue;
     }
+    if (typeof message !== "object" || message === null || Array.isArray(message)) {
+      process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32600, message: "Invalid Request" } })}\n`);
+      continue;
+    }
     if (message.method === "initialize") initParams = (message.params ?? undefined) as Json | undefined;
     const isRequest = message.id !== undefined && message.id !== null && message.method !== "initialize";
     const task = (isRequest ? forward(line, message) : Promise.resolve(false))
-      .then(async (forwarded) => { if (forwarded) return; const response = await handle(message); if (response) process.stdout.write(`${JSON.stringify(response)}\n`); });
+      .then(async (forwarded) => { if (forwarded) return; const response = await handle(message); if (response) process.stdout.write(`${JSON.stringify(response)}\n`); })
+      // One request that fails does not end the server.
+      .catch(() => { if (isRequest) process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: message.id, error: { code: -32603, message: "Internal error" } })}\n`); });
     pending.add(task);
     void task.finally(() => pending.delete(task));
   }

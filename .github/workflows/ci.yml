@@ -13,10 +13,10 @@ jobs:
         node: ["22.18", "24"]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with: { node-version: "${{ matrix.node }}", cache: npm }
-      - run: npm ci
+      - run: npm ci --ignore-scripts
       - run: npm run check
       - name: Touch ID helper builds
         if: runner.os == 'macOS'
@@ -32,13 +32,13 @@ jobs:
         node: ["18.19", "20"]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with: { node-version: "${{ matrix.node }}" }
       - run: echo "OLD_NODE=$(command -v node)" >> "$GITHUB_ENV"
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with: { node-version: "24", cache: npm }
-      - run: npm ci
+      - run: npm ci --ignore-scripts
       - run: npm run build
       - run: npm test
         env: { KEYSHROUD_TEST_NODE: "${{ env.OLD_NODE }}", KEYSHROUD_TEST_CLI: dist/cli.js }
@@ -46,9 +46,11 @@ jobs:
   no-ai-coauthor:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with: { fetch-depth: 0 }
-      # Commits credit people only: no Co-authored-by trailer for an AI.
+      # Commits credit people only: no Co-authored-by trailer for an AI, no "generated with" line.
       - run: |
-          bad=$(git log --format='%h %(trailers:key=Co-authored-by,valueonly,separator=%x20)' HEAD | grep -iE 'claude|anthropic' || true)
+          bad=$(git log --format='%h %(trailers:key=Co-authored-by,valueonly,separator=%x20)' HEAD | grep -iE 'claude|anthropic|codex|openai|chatgpt|copilot|gemini|grok|xai|x\.ai|cursor|devin' || true)
           if [ -n "$bad" ]; then echo "AI co-author trailer in:"; echo "$bad"; exit 1; fi
+          bad=$(git log --format='%h %s%n%b' HEAD | grep -iE '^(🤖 )?(generated|co-authored) with ' || true)
+          if [ -n "$bad" ]; then echo "AI attribution line:"; echo "$bad"; exit 1; fi

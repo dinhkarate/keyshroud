@@ -3,25 +3,14 @@
 // index that SessionStart (or any other unlocked command) last wrote.
 import { BRAND } from "./brand.ts";
 import * as core from "./core.ts";
-import { compileRedactIndex } from "./redact.ts";
-
-function redactDeep(value: unknown, redact: (text: string) => string): unknown {
-  if (typeof value === "string") return redact(value);
-  // A secret of digits may come back as a JSON number.
-  if (typeof value === "number") { const text = String(value); const masked = redact(text); return masked === text ? value : masked; }
-  if (Array.isArray(value)) return value.map((entry) => redactDeep(entry, redact));
-  if (value && typeof value === "object") {
-    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [redact(key), redactDeep(entry, redact)]));
-  }
-  return value;
-}
+import { compileRedactIndex, redactDeep } from "./redact.ts";
 
 async function sessionStart(): Promise<string> {
   let context: string;
   try {
     await core.ensureSession();
     const env = await core.resolveEntries(await core.authEnvEntries());
-    await core.writeRedactIndex(core.indexValues(env.secrets));
+    await core.writeRedactIndex(await core.indexedValues(env.secrets));
     const names = Object.keys(env.values);
     context = names.length
       ? `${BRAND.name}: vault secrets are available by name only: ${names.join(", ")}. Run every command that uses one through \`${BRAND.bin} run --only NAME -- <command>\` (or the secrets_run MCP tool with \`only\`), naming just the secrets that command needs: its output is masked as <redacted:NAME> even when the command fails. Never print a secret. Never ask the user to paste a secret into chat. To store a new one, run \`${BRAND.bin} add --env NAME --item "Item"\` (or call secrets_request): it opens a dialog on the user's desktop for the value.`
@@ -46,7 +35,9 @@ async function postToolUse(input: { tool_response?: unknown }): Promise<string> 
 // Hooks must never break the agent: any failure produces no output and exit 0.
 export async function runClaudeHook(event: string, stdin: string): Promise<string> {
   try {
-    const input = stdin.trim() ? JSON.parse(stdin) as { tool_response?: unknown } : {};
+    // The input is a tool's output, and a JSON.parse error quotes what it was given.
+    let input: { tool_response?: unknown } = {};
+    if (stdin.trim()) { try { input = JSON.parse(stdin) as { tool_response?: unknown }; } catch { throw new Error("the hook input is not JSON"); } }
     if (event === "session-start") return await sessionStart();
     if (event === "post-tool-use") return await postToolUse(input);
     throw new Error(`Unknown Claude Code hook event: ${event}`);

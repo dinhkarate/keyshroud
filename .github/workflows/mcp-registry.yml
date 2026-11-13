@@ -9,7 +9,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Verify server.json matches package.json
         run: |
           v=$(node -p 'require("./package.json").version')
@@ -17,6 +17,10 @@ jobs:
           test "$(node -p 'require("./server.json").packages[0].version')" = "$v"
           test "$(node -p 'require("./server.json").name')" = "$(node -p 'require("./package.json").mcpName')"
       - name: Install mcp-publisher
-        run: curl -fsSL https://github.com/modelcontextprotocol/registry/releases/download/v1.8.1/mcp-publisher_linux_amd64.tar.gz | tar xz mcp-publisher
+        # The archive is checked against the digest of the v1.8.1 release asset before anything in it runs.
+        run: |
+          curl -fsSL -o mcp-publisher.tar.gz https://github.com/modelcontextprotocol/registry/releases/download/v1.8.1/mcp-publisher_linux_amd64.tar.gz
+          echo "a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc  mcp-publisher.tar.gz" | sha256sum -c -
+          tar xzf mcp-publisher.tar.gz mcp-publisher
       - run: ./mcp-publisher login github-oidc
       - run: ./mcp-publisher publish

@@ -5,6 +5,66 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.10.6] - 2026-11-13
+
+A review of the whole code base (own reading and an independent one, round 9).
+
+### Security
+- pi 1.5 locks its `auth.json` beside the file a link leads to; keyshroud locked beside the path as
+  it was written, so with a link anywhere in that path the two no longer excluded each other.
+  keyshroud now takes the lock pi 1.5 takes (`<file>.lock` of the resolved file, where every link
+  to the file meets), keeps the text of a pending write inside it, and takes the lock beside the
+  link as well, for pi 1.2 and older. The separate `.keyshroud.lock` and its notes are gone.
+- `run` piped through the stream redactor could let the last characters of a secret through when
+  the output repeated a secret that overlaps itself (`ABCDEFABCDEF…`) for more than 4096
+  characters. The stream now remembers what it let go for the length of a secret and masks one
+  that began there to its end.
+- Two different values that would get one label (an item named like a wired variable, say) are
+  both masked now (`<redacted:NAME>`, `<redacted:NAME (2)>`); the second used to stay in the clear.
+  A key written into `auth.json` as plain text is masked like a vault value, by `run`,
+  `secrets_run`, pi and the hook index.
+- Commands started by `run` and `secrets_run`: `BW_SESSION`, `BW_PASSWORD`, `BW_CLIENTID`,
+  `BW_CLIENTSECRET` and `BITWARDENCLI_APPDATA_DIR` can no longer be wired or set by an env file
+  (wiring could put back what keyshroud strips); with `--only`, the other wired names are removed
+  from what the command inherits; `KEYSHROUD_PASSPHRASE` (the CI recipe) is not passed on and its
+  value is masked.
+- pi: the details and structured data of a tool result are masked like its text, and the output of
+  a `!command` is masked in what is sent to the model. A value from Vaultwarden that keyshroud put
+  into pi's environment is read again after a rotation.
+- The Vaultwarden master password and the local vault's passphrase are refused as a secret in
+  either vault (each was only refused in its own), also when the passphrase vault is closed.
+  `migrate` skips an item holding the personal master password when that password was typed, not
+  only when it came from the keychain.
+- Error messages no longer quote what they were given: a failed `bw` call (the item being stored),
+  unparseable hook input or settings, a command that cannot be started, a value with a NUL.
+- `migrate --to local`: two references that would get one name in the local vault (a field `dsn`
+  of `Sentry` and an item called `Sentry (field dsn)`) are both left where they are, and a name is
+  rewired only if it still holds the reference the plan was made from.
+- `claude-setup` works when there is no `settings.json` yet, keeps its backup private (`0600`,
+  never over an existing file) and replaces the settings in one step.
+- `rekey` no longer deletes the new keychain key when something fails after the vault was sealed
+  with it.
+- A first `wire` creates the configuration directory `0700` (it was the default, `0755`).
+- `unwire` refuses a name that is not a variable name, so it cannot remove a provider's login from
+  `auth.json`.
+- MCP: `only` must be a list of names (anything else used to mean "everything"), malformed
+  messages get an error instead of ending the server, and a command that ignores its timeout is
+  killed after 5 more seconds.
+- Calls to `bw` that reach the server: the lock between processes has an owner, is kept alive while
+  held, and a waiter gives up after a minute instead of taking it over.
+- CI: actions are pinned to commits, `mcp-publisher` is checked against its release digest before
+  it runs, dependencies install without their scripts, a tag is published only if its commit is on
+  `main` with CI green, and the check for AI attribution covers more names.
+
+### Changed
+- `wire` adds the value to the hook index at once (when the vault is open); a command says so when
+  it cannot update that index.
+- `scan` finds a value that spans lines.
+- `audit.jsonl` also records `api-key` and what pi's commands add, wire and rotate.
+- README: what is and is not masked in `auth.json`, what `--only` removes, the pi lock, Windows
+  limits, and what "nothing is written" means for an `import` dry run.
+
+
 ## [0.10.5] - 2026-11-13
 
 The last finding of the independent review (round 3, of 0.10.4).

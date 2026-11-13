@@ -3,16 +3,24 @@ on:
   push: { tags: ["v*"] }
 permissions:
   contents: write
+  actions: read     # the CI result of the tagged commit
   id-token: write   # npm provenance / trusted publishing
 jobs:
   publish:
     runs-on: ubuntu-latest
     environment: npm
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with: { fetch-depth: 0 }
+      # A tag alone releases nothing: the commit must be on main, and CI (every OS and Node) green for it.
+      - name: Verify the tagged commit is on main and passed CI
+        run: |
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          test "$(gh run list --workflow CI --commit "$GITHUB_SHA" --status success --json databaseId --jq length)" -ge 1
+        env: { GH_TOKEN: "${{ github.token }}" }
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with: { node-version: "24", registry-url: "https://registry.npmjs.org", cache: npm }
-      - run: npm ci
+      - run: npm ci --ignore-scripts
       - run: npm run check
       - name: Verify tag matches package version
         run: test "v$(node -p 'require("./package.json").version')" = "$GITHUB_REF_NAME"

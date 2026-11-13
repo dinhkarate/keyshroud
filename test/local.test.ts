@@ -414,10 +414,10 @@ for (const stage of ["writeFile", "rename"]) test(`a writer of env.json paused p
   const out = await runScript(box, `${PATCH_FS}
     let stalled = false;
     patch(${JSON.stringify(stage)}, async (real, file, ...rest) => {
-      if (!stalled && String(file).includes(${JSON.stringify(stage === "rename" ? "env.json.lock" : "env.json.tmp.")})) {
+      if (!stalled && String(file).includes("env.json.lock/pending.")) {
         stalled = true;
         const old = new Date(Date.now() - 40000);
-        for (const lock of ${JSON.stringify([`${envJson}.lock`, `${envJson}.keyshroud.lock`])}) await fsp.utimes(lock, old, old);
+        await fsp.utimes(${JSON.stringify(`${envJson}.lock`)}, old, old);
         require("node:child_process").execFileSync(${JSON.stringify(NODE)}, [${JSON.stringify(CLI)}, "wire", "--env", "B_TOKEN", "--item", "Item A"], { stdio: "ignore" });
       }
       return real(file, ...rest);
@@ -437,10 +437,10 @@ test("a writer of the hook index paused past 30 s never replaces what its succes
   const out = await runScript(box, `${PATCH_FS}
     let stalled = true;
     patch("writeFile", async (real, file, ...rest) => {
-      if (!stalled && String(file).includes("redact-index.json.tmp.")) {
+      if (!stalled && String(file).includes("redact-index.json.lock/pending.")) {
         stalled = true;
         const old = new Date(Date.now() - 40000);
-        for (const lock of ${JSON.stringify([`${index}.lock`, `${index}.keyshroud.lock`])}) await fsp.utimes(lock, old, old);
+        await fsp.utimes(${JSON.stringify(`${index}.lock`)}, old, old);
         require("node:child_process").execFileSync(process.execPath, ["--input-type=module", "-e", ${JSON.stringify(successor)}], { stdio: "ignore" });
       }
       return real(file, ...rest);
@@ -476,92 +476,102 @@ test("two links to one auth file share a lock: writers through either keep each 
   for (const dir of [box.dir, ...links.map((link) => dirname(link))]) assert.deepEqual((await readdir(dir)).filter((name) => /\.lock$|\.tmp\./.test(name)), []);
 });
 
-test("a writer paused before its rename is voided by the next writer through another link; a link across filesystems still writes", async () => {
+// The two ways pi locks auth.json (proper-lockfile, which removes a stale lock with rmdir): pi 1.5
+// beside the file the path leads to, pi 1.2 and older beside the path as it is spelled.
+const PI_BACKEND = new URL("../node_modules/@earendil-works/pi-coding-agent/dist/core/auth-storage.js", import.meta.url).href;
+const PROPER_LOCKFILE = new URL("../node_modules/proper-lockfile/index.js", import.meta.url).href;
+const piWrites = (auth: string) => `
+  const { FileAuthStorageBackend } = await import(${JSON.stringify(PI_BACKEND)});
+  const add = async (current) => ({ result: null, next: JSON.stringify({ ...JSON.parse(current || "{}"), anthropic: { type: "api_key", key: "from-pi" } }) });
+  await new FileAuthStorageBackend(${JSON.stringify(auth)}).withLockAsync(add).then(() => console.log("pi wrote"), (error) => console.log("pi failed: " + error.code));
+`;
+const oldPiWrites = (auth: string) => `
+  const fs = await import("node:fs");
+  const lockfile = (await import(${JSON.stringify(PROPER_LOCKFILE)})).default;
+  const auth = ${JSON.stringify(auth)};
+  const release = await lockfile.lock(auth, { realpath: false, retries: 0, stale: 30000 }).catch((error) => { console.log("old pi failed: " + error.code); });
+  if (release) {
+    fs.writeFileSync(auth, JSON.stringify({ ...JSON.parse(fs.readFileSync(auth, "utf8") || "{}"), openai: { type: "api_key", key: "from-old-pi" } }));
+    await release();
+    console.log("old pi wrote");
+  }
+`;
+
+test("a writer paused before its rename is voided by the next writer through another link, and by then an old pi through the first", async () => {
   const box = await blank();
   const real = join(box.dir, "real-auth.json");
   await writeFile(real, "{}");
   const links = [join(box.dir, "a", "auth.json"), join(box.dir, "b", "auth.json")];
   for (const link of links) { await mkdir(dirname(link)); await symlink(real, link); }
-  const next = `const core = await import(${CORE}); await core.writeAuthEntry(${JSON.stringify(links[1])}, "B_TOKEN", core.referenceFor("Item A", "local"));`;
+  const ref = `core.referenceFor("Item A", "local")`;
+  const next = (link: string, name: string) => `const core = await import(${CORE}); await core.writeAuthEntry(${JSON.stringify(link)}, ${JSON.stringify(name)}, ${ref});`;
   const out = await runScript(box, `${PATCH_FS}
+    const run = (script) => process.stdout.write(require("node:child_process").execFileSync(process.execPath, ["--input-type=module", "-e", script], { cwd: "/" }));
     let stalled = false;
     patch("rename", async (real, from, to) => {
-      if (!stalled && String(from).includes("auth.json.lock")) {
+      if (!stalled && String(from).includes("real-auth.json.lock/pending.")) {
         stalled = true;
         const old = new Date(Date.now() - 40000);
-        await fsp.utimes(${JSON.stringify(`${real}.keyshroud.lock`)}, old, old);
-        require("node:child_process").execFileSync(process.execPath, ["--input-type=module", "-e", ${JSON.stringify(next)}], { stdio: "ignore", cwd: "/" });
+        for (const lock of ${JSON.stringify([`${real}.lock`, `${links[0]}.lock`])}) await fsp.utimes(lock, old, old);
+        // An old pi through the same link meets the lock beside it and cannot break it...
+        run(${JSON.stringify(oldPiWrites(links[0]))});
+        run(${JSON.stringify(next(links[1], "B_TOKEN"))});
+        // ...nor after a writer through the other link, which leaves that lock alone; one through
+        // this link takes it over, and by then nothing waits to be renamed.
+        run(${JSON.stringify(oldPiWrites(links[0]))});
+        run(${JSON.stringify(next(links[0], "D_TOKEN"))});
+        run(${JSON.stringify(oldPiWrites(links[0]))});
       }
       return real(from, to);
     });
     const core = await import(${CORE});
-    // A relative path, and a next writer started in another directory: it still finds what waits.
+    // A relative path, and next writers started in another directory.
     process.chdir(${JSON.stringify(box.dir)});
-    await core.writeAuthEntry("a/auth.json", "A_TOKEN", core.referenceFor("Item A", "local")).then(() => console.log("written"), (error) => console.log(error.message));
+    await core.writeAuthEntry("a/auth.json", "A_TOKEN", ${ref}).then(() => console.log("written"), (error) => console.log(error.message));
   `);
-  assert.match(out, /lost the lock of .*auth\.json .*nothing was written/);
-  assert.deepEqual(Object.keys(JSON.parse(await readFile(real, "utf8"))), ["B_TOKEN"]);
-  // A note that names no pending write is the only record of one: nothing is written past it.
-  await writeFile(`${real}.tmp.0123456789ab.ref`, "pending.0123456789ab");
-  const noted = await runScript(box, `const core = await import(${CORE}); await core.writeAuthEntry(${JSON.stringify(links[1])}, "D_TOKEN", "x").then(() => console.log("written"), (error) => console.log(error.message));`);
-  assert.match(noted, /real-auth\.json\.tmp\.0123456789ab\.ref does not name a pending write/);
-  await unlink(`${real}.tmp.0123456789ab.ref`);
-  assert.deepEqual(Object.keys(JSON.parse(await readFile(real, "utf8"))), ["B_TOKEN"]);
-  // The rename from inside the lock is refused across filesystems: the text goes by a temp file beside the target.
-  const crossed = await runScript(box, `${PATCH_FS}
-    patch("rename", async (real, from, to) => {
-      if (String(from).includes("auth.json.lock")) throw Object.assign(new Error("cross-device link not permitted"), { code: "EXDEV" });
-      return real(from, to);
-    });
-    const core = await import(${CORE});
-    console.log((await core.writeAuthEntry(${JSON.stringify(links[0])}, "C_TOKEN", core.referenceFor("Item A", "local"))).ok);
-  `);
-  assert.equal(crossed, "true\n");
-  assert.deepEqual(Object.keys(JSON.parse(await readFile(real, "utf8"))), ["B_TOKEN", "C_TOKEN"]);
+  assert.match(out, /^old pi failed: ENOTEMPTY\nold pi failed: ENOTEMPTY\nold pi wrote\nThis process lost the lock of .*auth\.json .*nothing was written\n$/);
+  assert.deepEqual(Object.keys(JSON.parse(await readFile(real, "utf8"))), ["B_TOKEN", "D_TOKEN", "openai"]);
   for (const link of links) assert.ok((await lstat(link)).isSymbolicLink());
   for (const dir of [box.dir, ...links.map((link) => dirname(link))]) assert.deepEqual((await readdir(dir)).filter((name) => /\.lock$|\.tmp\./.test(name)), []);
 });
 
-// pi's own writer (proper-lockfile) as the successor: it removes a stale lock with rmdir.
-test("pi's auth writer cannot break the lock of a paused keyshroud writer; a lock left by a killed one is cleared", async () => {
+for (const linked of [false, true]) test(`pi's auth writer cannot break the lock of a paused keyshroud writer${linked ? " through a link" : ""}; a lock left by a killed one is cleared`, async () => {
   const box = await blank();
   assert.equal((await add(box, "A_TOKEN", "Item A", "first-value-123")).code, 0);
   const auth = join(box.env.HOME, ".pi", "agent", "auth.json");
+  const real = linked ? join(box.dir, "real-auth.json") : auth;
   await mkdir(dirname(auth), { recursive: true });
-  await writeFile(auth, "{}");
-  const backend = new URL("../node_modules/@earendil-works/pi-coding-agent/dist/core/auth-storage.js", import.meta.url).href;
-  const pi = `
-    const { FileAuthStorageBackend } = await import(${JSON.stringify(backend)});
-    const add = async (current) => ({ result: null, next: JSON.stringify({ ...JSON.parse(current || "{}"), anthropic: { type: "api_key", key: "from-pi" } }) });
-    await new FileAuthStorageBackend(${JSON.stringify(auth)}).withLockAsync(add).then(() => console.log("pi wrote"), (error) => console.log("pi failed: " + error.code));
-  `;
+  await writeFile(real, "{}");
+  if (linked) await symlink(real, auth);
+  const pi = piWrites(auth);
   const out = await runScript(box, `${PATCH_FS}
     let stalled = false;
     patch("rename", async (real, from, to) => {
-      if (!stalled && String(from).includes("auth.json.lock")) {
+      if (!stalled && String(from).includes("auth.json.lock/pending.")) {
         stalled = true;
         const old = new Date(Date.now() - 40000);
-        for (const lock of ${JSON.stringify([`${auth}.lock`, `${auth}.keyshroud.lock`])}) await fsp.utimes(lock, old, old);
-        process.stdout.write(require("node:child_process").execFileSync(process.execPath, ["--input-type=module", "-e", ${JSON.stringify(pi)}]));
+        for (const lock of ${JSON.stringify([...new Set([`${real}.lock`, `${auth}.lock`])])}) await fsp.utimes(lock, old, old);
+        for (const script of ${JSON.stringify([pi, oldPiWrites(auth)])}) process.stdout.write(require("node:child_process").execFileSync(process.execPath, ["--input-type=module", "-e", script]));
       }
       return real(from, to);
     });
     const core = await import(${CORE});
     await core.writeAuthEntry(${JSON.stringify(auth)}, "C_TOKEN", core.referenceFor("Item A", "local")).then(() => console.log("written"), (error) => console.log(error.message));
   `);
-  assert.equal(out, "pi failed: ENOTEMPTY\nwritten\n");
-  assert.deepEqual(Object.keys(JSON.parse(await readFile(auth, "utf8"))), ["C_TOKEN"]);
+  assert.equal(out, "pi failed: ENOTEMPTY\nold pi failed: ENOTEMPTY\nwritten\n");
+  assert.deepEqual(Object.keys(JSON.parse(await readFile(real, "utf8"))), ["C_TOKEN"]);
 
-  await mkdir(`${auth}.lock`);
-  await writeFile(join(`${auth}.lock`, "owner"), "a-killed-writer");
+  await mkdir(`${real}.lock`);
+  await writeFile(join(`${real}.lock`, "owner"), "a-killed-writer");
   const old = new Date(Date.now() - 40000);
-  await utimes(join(`${auth}.lock`, "owner"), old, old);
-  await utimes(`${auth}.lock`, old, old);
+  await utimes(join(`${real}.lock`, "owner"), old, old);
+  await utimes(`${real}.lock`, old, old);
   assert.equal(await runScript(box, pi), "pi failed: ENOTEMPTY\n");
   assert.equal((await runCli(box, ["env"])).code, 0);
   assert.equal(await runScript(box, pi), "pi wrote\n");
-  assert.deepEqual(Object.keys(JSON.parse(await readFile(auth, "utf8"))), ["C_TOKEN", "anthropic"]);
-  assert.deepEqual((await readdir(dirname(auth))).filter((name) => /\.lock$|\.tmp\./.test(name)), []);
+  assert.deepEqual(Object.keys(JSON.parse(await readFile(real, "utf8"))), ["C_TOKEN", "anthropic"]);
+  assert.equal((await lstat(auth)).isSymbolicLink(), linked);
+  for (const dir of new Set([dirname(auth), dirname(real)])) assert.deepEqual((await readdir(dir)).filter((name) => /\.lock$|\.tmp\./.test(name)), []);
 });
 
 // However the lock beside auth.json went (a command acting on an old reading of it, say), pi can
@@ -572,19 +582,13 @@ test("once the lock beside auth.json is gone, a writer paused before its rename 
   const auth = join(box.env.HOME, ".pi", "agent", "auth.json");
   await mkdir(dirname(auth), { recursive: true });
   await writeFile(auth, "{}");
-  const backend = new URL("../node_modules/@earendil-works/pi-coding-agent/dist/core/auth-storage.js", import.meta.url).href;
-  const pi = `
-    const { FileAuthStorageBackend } = await import(${JSON.stringify(backend)});
-    const add = async (current) => ({ result: null, next: JSON.stringify({ ...JSON.parse(current || "{}"), anthropic: { type: "api_key", key: "from-pi" } }) });
-    await new FileAuthStorageBackend(${JSON.stringify(auth)}).withLockAsync(add).then(() => console.log("pi wrote"), (error) => console.log("pi failed: " + error.code));
-  `;
   const out = await runScript(box, `${PATCH_FS}
     let stalled = false;
     patch("rename", async (real, from, to) => {
-      if (!stalled && String(from).includes("auth.json.lock")) {
+      if (!stalled && String(from).includes("auth.json.lock/pending.")) {
         stalled = true;
         fs.rmSync(${JSON.stringify(`${auth}.lock`)}, { recursive: true });
-        process.stdout.write(require("node:child_process").execFileSync(process.execPath, ["--input-type=module", "-e", ${JSON.stringify(pi)}]));
+        process.stdout.write(require("node:child_process").execFileSync(process.execPath, ["--input-type=module", "-e", ${JSON.stringify(piWrites(auth))}]));
       }
       return real(from, to);
     });
@@ -1025,4 +1029,89 @@ test("list shows names and wiring; rm is a dry run until --yes, then deletes and
   for (const path of [join(box.configDir, "env.json"), join(box.env.HOME, ".pi", "agent", "auth.json"), join(box.env.PI_CODING_AGENT_DIR, "auth.json")]) {
     assert.deepEqual(Object.keys(JSON.parse(await readFile(path, "utf8"))), ["B_TOKEN"]);
   }
+});
+
+test("two different values under one label are both masked; the first wire makes a private config directory; a value with a NUL is not injected", async () => {
+  const box = await blank();
+  const wire = await runCli(box, ["wire", "--env", "A_TOKEN", "--item", "keyshroud://Item A"]);
+  assert.equal(wire.code, 0, wire.stderr);
+  assert.equal((await stat(box.configDir)).mode & 0o777, 0o700);
+  assert.equal((await add(box, "X_TOKEN", "Item A", "value-aaaa-1111")).code, 0);
+  // An item named like a wired variable, holding something else.
+  assert.equal((await add(box, "B_TOKEN", "A_TOKEN", "value-bbbb-2222")).code, 0);
+  assert.equal((await runCli(box, ["unwire", "--env", "B_TOKEN"])).code, 0);
+  const run = await runCli(box, ["run", "--", "echo", "value-aaaa-1111", "value-bbbb-2222"]);
+  assert.match(run.stdout, /^<redacted:[A-Z_]+> <redacted:A_TOKEN( \(2\))?>\n$/);
+  await runCli(box, ["hook", "claude", "session-start"]);
+  const post = await runCli(box, ["hook", "claude", "post-tool-use"], JSON.stringify({ tool_response: { stdout: "value-aaaa-1111 value-bbbb-2222" } }));
+  assert.doesNotMatch(JSON.parse(post.stdout).hookSpecificOutput.updatedToolOutput.stdout, /value-/);
+
+  assert.equal((await add(box, "N_TOKEN", "Nul", "abc\0def-0123456789")).code, 0);
+  const nul = await runCli(box, ["run", "--only", "N_TOKEN", "--", "sh", "-c", "echo \"[${N_TOKEN:-none}]\""]);
+  assert.equal(nul.stdout, "[none]\n");
+  assert.match(nul.stderr, /unresolved \(names only\): N_TOKEN/);
+  assert.ok(!nul.stderr.includes("def-0123456789"));
+});
+
+test("neither vault's own password is stored as a secret in the other", { skip: process.platform === "win32" }, async () => {
+  const box = await sandbox([]);
+  const local = { KEYSHROUD_BACKEND: "local", KEYSHROUD_VAULT_KEY: "passphrase" };
+  const created = await runCliTtySteps(box, ["unlock"], [["New passphrase", PASS], ["Repeat it", PASS]], local);
+  assert.equal(created.code, 0, created.stdout);
+  const master = await runCli(box, ["add", "--env", "P_TOKEN", "--item", "Phished", "--stdin"], "master", local);
+  assert.notEqual(master.code, 0);
+  assert.match(master.stderr, /Refusing to store the vault master password/);
+  const passphrase = await runCli(box, ["add", "--env", "Q_TOKEN", "--item", "Phished too", "--stdin"], PASS);
+  assert.notEqual(passphrase.code, 0);
+  assert.match(passphrase.stderr, /passphrase of the local vault/);
+  assert.equal((await box.vault()).items.length, 0);
+});
+
+test("migrate --to local leaves alone two references that would get one name, and a name rewired meanwhile", async () => {
+  const box = await sandbox([
+    item("id-1", "Sentry", "sentry-pass-02", { fields: [{ type: 0, name: "dsn", value: "https://dsn-value-03" }] }),
+    item("id-2", "Sentry (field dsn)", "other-value-0005"),
+    item("id-3", "Plain", "plain-value-0006"),
+  ]);
+  await writeAuth(box, {
+    S1: { type: "api_key", key: "bw://Sentry/fields/dsn" },
+    S2: { type: "api_key", key: "bw://Sentry (field dsn)" },
+    P_TOKEN: { type: "api_key", key: "bw://Plain" },
+  });
+  const dry = await runCli(box, ["migrate", "--to", "local"]);
+  assert.equal(dry.stdout.match(/Sentry \(field dsn\)\s+refused: two different references would get this name\s+<- S[12]$/gm)?.length, 2, dry.stdout);
+  const moved = await runCli(box, ["migrate", "--to", "local", "--yes"]);
+  assert.equal(moved.code, 4, moved.stderr);
+  assert.match(moved.stderr, /two references would get this name/);
+  const auth = join(box.env.HOME, ".pi", "agent", "auth.json");
+  const entries = JSON.parse(await readFile(auth, "utf8"));
+  assert.deepEqual([entries.S1.key, entries.S2.key], ["bw://Sentry/fields/dsn", "bw://Sentry (field dsn)"]);
+  assert.match(entries.P_TOKEN.key, /keyshroud:\/\/Plain/);
+
+  const out = await runScript(box, `
+    const core = await import(${CORE});
+    const stale = await core.writeAuthEntry(${JSON.stringify(auth)}, "S1", "keyshroud://Sentry", { replaces: "bw://Something else" });
+    const fresh = await core.writeAuthEntry(${JSON.stringify(auth)}, "S1", "keyshroud://Sentry", { replaces: "bw://Sentry/fields/dsn" });
+    console.log(stale.ok, fresh.ok);
+  `);
+  assert.equal(out, "false true\n");
+});
+
+test("rekey keeps the new key once the vault is sealed with it, whatever fails afterwards", { skip: process.platform === "win32" }, async () => {
+  const box = await blank();
+  assert.equal((await add(box, "A_TOKEN", "A", "value-aaaa-1111", { KEYSHROUD_VAULT_KEY: "keychain" })).code, 0);
+  const firstId = JSON.parse(await readFile(vaultPath(box), "utf8")).id;
+  const out = await runScript(box, `${PATCH_FS}
+    process.stdin.isTTY = process.stderr.isTTY = true;
+    let renamed = false;
+    patch("rename", async (real, from, to) => { const done = await real(from, to); if (String(to).endsWith("vault.json")) renamed = true; return done; });
+    patch("rm", async (real, path, ...rest) => { if (renamed && String(path).endsWith("vault.json.lock")) { renamed = false; throw Object.assign(new Error("EIO: i/o error"), { code: "EIO" }); } return real(path, ...rest); });
+    const core = await import(${CORE});
+    await core.rekeyLocal().then(() => console.log("rekeyed"), (error) => console.log("failed: " + error.code));
+  `);
+  assert.equal(out, "failed: EIO\n");
+  const id = JSON.parse(await readFile(vaultPath(box), "utf8")).id;
+  assert.notEqual(id, firstId);
+  assert.ok((await keyEntries(box)).includes(`keyshroud-vault-${id}`), "the key of the vault on disk is gone");
+  assert.equal((await runCli(box, ["get", "A_TOKEN"])).stdout, "value-aaaa-1111");
 });

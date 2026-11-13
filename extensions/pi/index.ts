@@ -2,7 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import type { TSchema } from "typebox";
 import { BRAND } from "../../src/brand.ts";
 import * as core from "../../src/core.ts";
-import { createRedactor, type Redactor } from "../../src/redact.ts";
+import { createRedactor, redactDeep, type Redactor } from "../../src/redact.ts";
 import { ENV_NAME_RE, isLoaderEnvName } from "../../src/refs.ts";
 import { confirmInBorderedPopup, inputInBorderedPopup, selectInBorderedPopup } from "./ui/bordered-popups.ts";
 
@@ -108,6 +108,8 @@ async function writeBoth(name: string, itemName: string, overwrite = false): Pro
   const results = await Promise.all(core.wiringTargets(["omp", "pi"]).map((path) => core.writeAuthEntry(path, name, ref, { overwrite })));
   const failed = results.find((result) => !result.ok);
   if (failed) throw new Error(failed.message);
+  // A Claude Code session on this machine reads the hook index, not this process.
+  await core.refreshRedactIndex().catch(() => {});
 }
 
 async function addFlow(ctx: UiContext, envName: string, itemName: string, purpose: string): Promise<string> {
@@ -117,6 +119,7 @@ async function addFlow(ctx: UiContext, envName: string, itemName: string, purpos
     const secret = await inputInBorderedPopup(ctx, { title: `Paste secret for ${envName}`, prompt: "Value is not shown", mask: true });
     if (!secret) return "Cancelled.";
     const { created } = await core.createSecretItem({ itemName, secret, envName, notes: purpose });
+    await core.audit("add", [envName], "pi");
     await writeBoth(envName, itemName);
     await refreshEnv();
     const verified = (await core.resolveShellValue(core.referenceFor(itemName, await core.defaultBackend()))) !== null;
@@ -210,6 +213,7 @@ async function secretFlow(ctx: UiContext, rawDescription: string): Promise<void>
     if (!secret) return;
     await core.ensureSession();
     const { created } = await core.createSecretItem({ itemName: plan.itemName, secret, envName: plan.envName, notes: plan.purpose });
+    await core.audit("add", [plan.envName], "pi");
     await writeBoth(plan.envName, plan.itemName);
     await refreshEnv();
     ctx.ui.notify(`${created ? `${created}\n` : ""}Configured item=${plan.itemName} env=${plan.envName} for omp and pi.\n${secretUsage(plan)}`, "info");
@@ -230,7 +234,8 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   pi.on("tool_call", recheckSession);
   pi.on("user_bash", recheckSession);
   // The model never sees vault values: every tool result is scrubbed before it
-  // enters the context, whatever the tool printed.
+  // enters the context, whatever the tool printed. Its details and structured data (kept in the
+  // session file, read by scripts) are scrubbed the same way.
   pi.on("tool_result", (event) => {
     if (redactor.size === 0) return undefined;
     let changed = false;
@@ -241,7 +246,32 @@ export default async function (pi: ExtensionAPI): Promise<void> {
       changed = true;
       return { ...part, text };
     });
-    return changed ? { content } : undefined;
+    const scrub = (value: unknown) => {
+      if (value === undefined) return undefined;
+      const scrubbed = redactDeep(value, (text) => redactor.redact(text));
+      return JSON.stringify(scrubbed) === JSON.stringify(value) ? undefined : scrubbed;
+    };
+    const { details: rawDetails, structuredContent: rawStructured } = event as { details?: unknown; structuredContent?: unknown };
+    const details = scrub(rawDetails), structuredContent = scrub(rawStructured);
+    if (!changed && details === undefined && structuredContent === undefined) return undefined;
+    return {
+      ...(changed ? { content } : {}),
+      ...(details !== undefined ? { details } : {}),
+      // Replacing the content drops the structured data unless it is returned with it.
+      ...(structuredContent !== undefined ? { structuredContent } : changed && rawStructured !== undefined ? { structuredContent: rawStructured } : {}),
+    } as never;
+  });
+  // The output of the user's own `!command` reaches the model as a message, not as a tool
+  // result: it is scrubbed in what is sent (the screen and the session file keep what was printed).
+  pi.on("context", (event) => {
+    if (redactor.size === 0) return undefined;
+    let changed = false;
+    for (const message of event.messages as Array<{ role?: string; output?: unknown }>) {
+      if (message.role !== "bashExecution" || typeof message.output !== "string") continue;
+      const output = redactor.redact(message.output);
+      if (output !== message.output) { message.output = output; changed = true; }
+    }
+    return changed ? { messages: event.messages } : undefined;
   });
 
   pi.registerTool({
@@ -266,7 +296,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     if (!envNameOk(envName)) { ctx.ui.notify("Invalid env var name; use UPPER_SNAKE_CASE.", "error"); return; }
     const backend = await core.defaultBackend();
     if (!await confirmInBorderedPopup(ctx, { title: "Create and wire secret?", message: `"${envName}": "${core.referenceFor(itemName, backend)}"` })) return;
-    try { await core.ensureSession(); const { created } = await core.createSecretItem({ itemName, secret, envName, notes: purpose }); await writeBoth(envName, itemName); await refreshEnv(); const verified = (await core.resolveShellValue(core.referenceFor(itemName, backend))) !== null; ctx.ui.notify(`${created ? `${created}\n` : ""}Created item=${itemName} env=${envName} verified=${verified ? "yes" : "no"}`, verified ? "info" : "warning"); } catch (error) { ctx.ui.notify(mappedError(error), "error"); }
+    try { await core.ensureSession(); const { created } = await core.createSecretItem({ itemName, secret, envName, notes: purpose }); await core.audit("add", [envName], "pi"); await writeBoth(envName, itemName); await refreshEnv(); const verified = (await core.resolveShellValue(core.referenceFor(itemName, backend))) !== null; ctx.ui.notify(`${created ? `${created}\n` : ""}Created item=${itemName} env=${envName} verified=${verified ? "yes" : "no"}`, verified ? "info" : "warning"); } catch (error) { ctx.ui.notify(mappedError(error), "error"); }
   } });
   pi.registerCommand("vault_wire", { description: "Wire an existing vault item to both agent auth stores.", handler: async (_args, ctx) => {
     try {
@@ -275,11 +305,11 @@ export default async function (pi: ExtensionAPI): Promise<void> {
       const existing = (await core.wiredEntries())[envName] !== undefined;
       let overwrite = false; if (existing) { const choice = await selectInBorderedPopup(ctx, { title: `${envName} already exists`, items: [{ value: "replace", label: "Replace" }, { value: "keep", label: "Keep" }] }); if (choice !== "replace") return; overwrite = true; }
       if (!await confirmInBorderedPopup(ctx, { title: "Save reference?", message: `"${envName}": "${core.referenceFor(item.name, await core.defaultBackend())}"` })) return;
-      await writeBoth(envName, item.name, overwrite); await refreshEnv(); ctx.ui.notify("Saved; reload to apply", "info");
+      await writeBoth(envName, item.name, overwrite); await core.audit("wire", [envName], "pi"); await refreshEnv(); ctx.ui.notify("Saved; reload to apply", "info");
     } catch (error) { ctx.ui.notify(mappedError(error), "error"); }
   } });
   pi.registerCommand("vault_rotate", { description: "Rotate a vault item's password.", handler: async (_args, ctx) => {
-    try { await core.ensureSession(); const item = await chooseItem(ctx, "Choose item to rotate"); if (!item) return; const secret = await inputInBorderedPopup(ctx, { title: `Rotate ${item.name}`, prompt: "Value is not shown", mask: true }); if (!secret) return; if (!await confirmInBorderedPopup(ctx, { title: "Rotate secret?", message: `Item: ${item.name}` })) return; await core.rotateSecretItem({ itemName: item.name, secret }); await refreshEnv(); ctx.ui.notify(`Rotated item=${item.name}; injected environment refreshed.`, "info"); } catch (error) { ctx.ui.notify(mappedError(error), "error"); }
+    try { await core.ensureSession(); const item = await chooseItem(ctx, "Choose item to rotate"); if (!item) return; const secret = await inputInBorderedPopup(ctx, { title: `Rotate ${item.name}`, prompt: "Value is not shown", mask: true }); if (!secret) return; if (!await confirmInBorderedPopup(ctx, { title: "Rotate secret?", message: `Item: ${item.name}` })) return; await core.rotateSecretItem({ itemName: item.name, secret }); await core.audit("rotate", [item.name], "pi"); await refreshEnv(); ctx.ui.notify(`Rotated item=${item.name}; injected environment refreshed.`, "info"); } catch (error) { ctx.ui.notify(mappedError(error), "error"); }
   } });
 }
 

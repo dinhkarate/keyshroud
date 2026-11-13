@@ -3,9 +3,9 @@
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomBytes, randomUUID, scrypt, timingSafeEqual, type ScryptOptions } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { appendFile, chmod, mkdir, mkdtemp, open, readdir, readFile, realpath, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { appendFile, chmod, mkdir, mkdtemp, open, readdir, readFile, realpath, rename, rm, stat, unlink, utimes, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, delimiter, join, dirname, isAbsolute, resolve as absolutePath } from "node:path";
+import { basename, delimiter, join, dirname, resolve as absolutePath } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -137,20 +137,27 @@ const BW_MIGRATION_RE = /Encrypted Migrator|KeyIdBackfillError/;
 
 async function withBwLock<T>(fn: () => Promise<T>): Promise<T> {
   await mkdir(CONFIG_DIR, { recursive: true, mode: 0o700 });
-  // bw calls time out after 20 s, so a lock older than a minute was left by a
-  // process that died; past the wait, run anyway rather than hang an agent.
+  // A holder keeps its lock fresh while it works (a login can wait minutes for a two-step code), so
+  // one older than a minute was left by a process that died. A caller that waited a minute for a
+  // live holder gives up: two bw processes at the server at once is what the lock is there to prevent.
+  const owner = join(BW_LOCK, "owner");
+  const token = randomBytes(8).toString("hex");
   const deadline = Date.now() + 60_000;
-  let held = false;
-  while (!held) {
-    try { await mkdir(BW_LOCK); held = true; } catch (error) {
+  for (;;) {
+    try { await mkdir(BW_LOCK, { mode: 0o700 }); await writeFile(owner, token, { mode: 0o600 }); break; } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       const age = await stat(BW_LOCK).then((info) => Date.now() - info.mtimeMs, () => 0);
       if (age > 60_000) { await rm(BW_LOCK, { recursive: true, force: true }); continue; }
-      if (Date.now() > deadline) break;
+      if (Date.now() > deadline) throw new Error(`Another ${BRAND.bin} command has been talking to the vault server for over a minute (a login waiting for its code?); try again when it is done`);
       await new Promise((resolve) => setTimeout(resolve, 100 + Math.random() * 100));
     }
   }
-  try { return await fn(); } finally { if (held) await rm(BW_LOCK, { recursive: true, force: true }).catch(() => {}); }
+  const held = async () => (await readFile(owner, "utf8").catch(() => "")) === token;
+  const fresh = setInterval(() => { const now = new Date(); void held().then((mine) => mine ? utimes(BW_LOCK, now, now) : undefined).catch(() => {}); }, 15_000);
+  try { return await fn(); } finally {
+    clearInterval(fresh);
+    if (await held()) await rm(BW_LOCK, { recursive: true, force: true }).catch(() => {});
+  }
 }
 
 function runFile(command: string, args: string[], options: Record<string, unknown> = {}, input?: string): Promise<ExecResult> {
@@ -169,11 +176,18 @@ function execBw(args: string[], options: Record<string, unknown>, input?: string
   return execRun(command, args, { ...options, env, windowsVerbatimArguments: verbatim }, input);
 }
 
-function execRun(command: string, args: string[], options: Record<string, unknown>, input?: string): Promise<ExecResult> {
+// What a command was given on stdin or as a password never comes back in its error.
+function withoutSecrets(message: string, secrets: Array<string | undefined>): string {
+  for (const secret of secrets) if (secret && secret.length >= 4) message = message.split(secret).join("<redacted>");
+  return message;
+}
+
+function execRun(command: string, args: string[], { secrets, ...options }: Record<string, unknown>, input?: string): Promise<ExecResult> {
   return new Promise((resolve, reject) => {
     const child = execFile(command, args, options as never, (error, stdout, stderr) => {
       if (error) {
-        const message = String(stderr || error.message || "Command failed").trim();
+        const env = options.env as NodeJS.ProcessEnv | undefined;
+        const message = withoutSecrets(String(stderr || error.message || "Command failed").trim(), [input, ...(secrets as string[] | undefined ?? []), env?.BW_PASSWORD, env?.BW_CLIENTSECRET, env?.BW_SESSION]);
         reject(new Error(message));
         return;
       }
@@ -208,17 +222,24 @@ export function referenceFor(itemName: string, backend: BackendName = "bw"): str
 // session token a child could dump the whole vault, defeating `--only`.
 export const VAULT_ENV_KEYS: readonly string[] = ["BW_SESSION", "BW_PASSWORD", "BW_CLIENTID", "BW_CLIENTSECRET", "BITWARDENCLI_APPDATA_DIR"];
 
-export function childEnv(extra: Record<string, string> = {}): Record<string, string> {
+// The passphrase a CI job pipes to `unlock --stdin` is usually exported under this name: it stays
+// out of the commands keyshroud runs, and is masked.
+const PASSPHRASE_ENV = `${P}_PASSPHRASE`;
+
+// `drop`: wired names the caller did not select (`--only`): a value the agent itself was started
+// with does not reach the command either.
+export function childEnv(extra: Record<string, string> = {}, drop: string[] = []): Record<string, string> {
   const env: Record<string, string> = {};
-  for (const [name, value] of Object.entries(process.env)) if (value !== undefined && !VAULT_ENV_KEYS.includes(name)) env[name] = value;
+  for (const [name, value] of Object.entries(process.env)) if (value !== undefined && !VAULT_ENV_KEYS.includes(name) && name !== PASSPHRASE_ENV && !drop.includes(name)) env[name] = value;
   for (const [name, value] of Object.entries(extra)) if (!isLoaderEnvName(name)) env[name] = value;
   return env;
 }
 
-export async function bw(args: string[], opts: { input?: string; session?: string } = {}): Promise<string> {
+// `secrets`: values inside `input` (which bw gets encoded), kept out of an error as well.
+export async function bw(args: string[], opts: { input?: string; session?: string; secrets?: string[] } = {}): Promise<string> {
   const session = opts.session ?? process.env.BW_SESSION;
   const env = { ...process.env, ...(session ? { BW_SESSION: session } : {}) };
-  const result = await runFile("bw", args, { env, timeout: 20000, maxBuffer: 16 * 1024 * 1024 }, opts.input);
+  const result = await runFile("bw", args, { env, timeout: 20000, maxBuffer: 16 * 1024 * 1024, secrets: opts.secrets }, opts.input);
   return result.stdout;
 }
 
@@ -534,14 +555,11 @@ export function ownProcessEnv(): NodeJS.ProcessEnv {
   return env;
 }
 
-// `held` is the writer's lock: asked once the new text is on disk, as for the vault.
-async function writePrivateFile(path: string, content: string, held?: () => Promise<boolean>): Promise<void> {
+async function writePrivateFile(path: string, content: string): Promise<void> {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   const tmp = `${path}.tmp.${randomBytes(6).toString("hex")}`;
   await writeFile(tmp, content, { encoding: "utf8", mode: 0o600, flag: "wx" });
   await chmod(tmp, 0o600);
-  // Lock lost: the error a rename gives once the next holder has removed the temp file.
-  if (held && !(await held())) { await rm(tmp, { force: true }); throw Object.assign(new Error(`${path}: lock lost`), { code: "ENOENT" }); }
   await rename(tmp, path);
   await chmod(path, 0o600);
 }
@@ -825,8 +843,11 @@ export async function loginOwnAccount(email: string, master: string, unattended 
 
 // `migrate`: read the items of the bw login the user had before setup (the
 // default bw data dir), then lock it again. The values stay in memory.
-export async function readPersonalItems(): Promise<Array<Record<string, unknown>>> {
+// `holdsMaster`: the ids of items with that vault's master password in them (wherever it was read
+// from), which would hand the agent account the whole personal vault. `stored`: it came from the keychain.
+export async function readPersonalItems(): Promise<{ items: Array<Record<string, unknown>>; holdsMaster: Set<unknown>; stored: boolean }> {
   let master = await readKeychain(PERSONAL_KEYCHAIN_MASTER_SERVICE);
+  const stored = Boolean(master);
   if (!master && process.stdin.isTTY && process.stderr.isTTY) master = await readMasked("Master password of your personal vault: ") || null;
   if (!master) throw new Error(`Run \`${BRAND.bin} migrate\` in a terminal: it asks for your personal master password (or reads the keychain entry ${PERSONAL_KEYCHAIN_MASTER_SERVICE})`);
   const env = (extra: Record<string, string>) => {
@@ -840,7 +861,10 @@ export async function readPersonalItems(): Promise<Array<Record<string, unknown>
     const output = (await runFile("bw", ["list", "items"], { env: env({ BW_SESSION: token }), timeout: 120000, maxBuffer: 256 * 1024 * 1024 })).stdout;
     let parsed: unknown;
     try { parsed = JSON.parse(output); } catch { throw new Error("bw list items returned output that is not JSON"); }
-    return Array.isArray(parsed) ? parsed as Array<Record<string, unknown>> : [];
+    const items = Array.isArray(parsed) ? parsed as Array<Record<string, unknown>> : [];
+    const password = master;
+    const strings = (node: unknown): string[] => typeof node === "string" ? [node] : node && typeof node === "object" ? Object.values(node).flatMap(strings) : [];
+    return { items, holdsMaster: new Set(items.filter((item) => strings(item).some((text) => text.includes(password))).map((item) => item.id)), stored };
   } finally {
     try { await runFile("bw", ["lock"], { env: env({}), timeout: 20000, maxBuffer: 1024 * 1024 }); } catch {}
   }
@@ -946,7 +970,7 @@ async function acquireLock(dir: string): Promise<{ held: () => Promise<boolean>;
   const token = randomBytes(8).toString("hex");
   const start = Date.now();
   for (;;) {
-    try { await mkdir(dir); await writeFile(owner, token, { mode: 0o600 }); break; } catch (error) {
+    try { await mkdir(dir, { mode: 0o700 }); await writeFile(owner, token, { mode: 0o600 }); break; } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       const lockedAt = await stat(dir).then((info) => info.mtimeMs, () => 0);
       if (Date.now() - lockedAt > 30000) { await rm(dir, { recursive: true, force: true }); continue; }
@@ -959,35 +983,36 @@ async function acquireLock(dir: string): Promise<{ held: () => Promise<boolean>;
 }
 
 // The lock of one file. Temp files found on taking it were left by a holder that lost it:
-// removing them makes its late rename fail rather than replace the file (see writeVaultFile and
-// writePrivateFile). A `.ref` among them names where such a holder's new text waits instead
-// (updateFile): that goes too, and a note that cannot be followed stops the writer, since it is
-// the only record of a write that may still land.
+// removing them makes its late rename fail rather than replace the file (see writeVaultFile).
 async function withFileLock<T>(file: string, dir: string, fn: (held: () => Promise<boolean>) => Promise<T>): Promise<T> {
   const lock = await acquireLock(dir);
   try {
     const temp = `${basename(file)}.tmp.`;
-    for (const name of await readdir(dirname(file)).catch(() => [])) {
-      if (!name.startsWith(temp)) continue;
-      const left = join(dirname(file), name);
-      // Gone already: its writer finished meanwhile.
-      const staged = name.endsWith(".ref") ? await readFile(left, "utf8").catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return null; throw error; }) : null;
-      if (staged !== null) {
-        if (!(isAbsolute(staged) && /^pending\.[0-9a-f]+$/.test(basename(staged)) && dirname(staged).endsWith(".lock"))) throw new Error(`${left} does not name a pending write; remove it once no ${BRAND.bin} command is running`);
-        await rm(staged, { force: true });
-      }
-      await rm(left, { force: true }).catch(() => {});
-    }
+    for (const name of await readdir(dirname(file)).catch(() => [])) if (name.startsWith(temp)) await rm(join(dirname(file), name), { force: true }).catch(() => {});
     return await fn(lock.held);
   } finally { await lock.release(); }
 }
 
+// A path with the links of its directory followed, its last name kept.
+async function spelledPath(path: string): Promise<string> {
+  return join(await realpath(dirname(path)).catch(() => dirname(path)), basename(path));
+}
+
+// The file a path names once every link in it is followed (the path itself while the file does not exist yet).
+async function resolvedPath(path: string): Promise<string> {
+  return realpath(path).catch(() => spelledPath(path));
+}
+
 // A lock left by a keyshroud that was killed while it wrote: pi and omp cannot remove it (it is
 // not empty), so it is taken over, which voids what that writer had pending, and let go.
-async function clearAbandonedLock(path: string): Promise<void> {
-  const dir = `${path}.lock`;
-  const lockedAt = await stat(dir).then((info) => info.mtimeMs, () => null);
-  if (lockedAt !== null && Date.now() - lockedAt > 30000 && (await readdir(dir).catch(() => [])).length) await updateFile(path, async () => {}).catch(() => {});
+async function clearAbandonedLock(given: string): Promise<void> {
+  const path = absolutePath(given);
+  for (const dir of new Set([`${await resolvedPath(path)}.lock`, `${await spelledPath(path)}.lock`])) {
+    const lockedAt = await stat(dir).then((info) => info.mtimeMs, () => null);
+    if (lockedAt === null || Date.now() - lockedAt <= 30000 || !(await readdir(dir).catch(() => [])).length) continue;
+    await updateFile(path, async () => {}).catch(() => {});
+    return;
+  }
 }
 
 // Unlike readAuthEntries, a write must never start from an empty object just
@@ -1005,48 +1030,42 @@ async function readAuthForUpdate(path: string): Promise<Record<string, unknown>>
 }
 
 // One writer at a time for `path`: `fn` gets the file to read (a symlink's target, so the link is
-// written through, not replaced) and a `write` that replaces it. Two locks are held: the one
-// beside `path`, which pi and omp know, and the one of the target, which two links to one file
-// share. A writer paused past their 30 s replaces nothing, whoever comes next and however its
-// locks went, because of where its new text waits for the rename: inside the lock beside `path`.
-// - pi's next writer takes only that lock, and can once the directory is gone, for whatever
-//   reason; a directory goes only once it is empty, so the text went first.
-// - keyshroud's next writer takes the target's lock, and finds beside the target a note of where
-//   the text waits (it may have come by another link): it removes both before it reads.
-// A link to a file on another filesystem cannot be renamed into from here: its text waits beside
-// the target, as a temp file the next keyshroud writer removes (see README, Known limits).
+// written through, not replaced) and a `write` that replaces it. The lock is the one beside that
+// target, `<target>.lock`: every link to the file leads to it, and it is the directory pi and omp
+// lock (pi up to 1.2 locks beside the path as it is spelled instead, so when the path's last name
+// is itself a link, the lock beside it is taken as well, after the target's).
+// A writer paused past the 30 s replaces nothing, whoever comes next and however its lock went,
+// because of where its new text waits for the rename: inside the target's lock. Anyone's next
+// write needs that directory gone first (keyshroud removes it whole, pi can only once it is
+// empty), so the text went before the next writer read the file.
 async function updateFile<T>(given: string, fn: (target: string, write: (content: string) => Promise<void>) => Promise<T>): Promise<T> {
-  // Absolute, since the note of where a write waits is read by commands started elsewhere.
   const path = absolutePath(given);
-  await mkdir(dirname(path), { recursive: true });
-  const outer = await acquireLock(`${path}.lock`);
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  const target = await resolvedPath(path);
+  const lock = await acquireLock(`${target}.lock`);
   try {
-    const target = await realpath(path).catch(async () => join(await realpath(dirname(path)), basename(path)));
-    return await withFileLock(target, `${target}.${BRAND.bin}.lock`, (inner) => {
-      const held = async () => (await inner()) && (await outer.held());
+    const spelled = await spelledPath(path);
+    const beside = spelled === target ? null : await acquireLock(`${spelled}.lock`);
+    try {
+      const held = async () => (await lock.held()) && (!beside || await beside.held());
       const lost = new Error(`This process lost the lock of ${path} (it was paused for over 30 seconds); nothing was written`);
-      return fn(target, async (content) => {
-        const id = randomBytes(6).toString("hex");
-        const staged = join(`${path}.lock`, `pending.${id}`);
-        const note = `${target}.tmp.${id}.ref`;
+      return await fn(target, async (content) => {
+        const staged = join(`${target}.lock`, `pending.${randomBytes(6).toString("hex")}`);
         // Nothing is put into a directory that has become someone else's lock.
         if (!(await held())) throw lost;
         try {
-          // Whole or not there: a note is never found half written.
-          await writePrivateFile(note, staged);
           await writeFile(staged, content, { encoding: "utf8", mode: 0o600, flag: "wx" });
           if (!(await held())) throw lost;
           await rename(staged, target);
         } catch (error) {
           await rm(staged, { force: true }).catch(() => {});
-          const code = (error as NodeJS.ErrnoException).code;
-          if (code !== "EXDEV") throw code === "ENOENT" ? lost : error;
-          await writePrivateFile(target, content, held).catch((failed: NodeJS.ErrnoException) => { throw failed.code === "ENOENT" ? lost : failed; });
-        } finally { await rm(note, { force: true }).catch(() => {}); }
-        await chmod(target, 0o600);
+          throw (error as NodeJS.ErrnoException).code === "ENOENT" ? lost : error;
+        }
+        // The staged file was 0600 already; a filesystem without modes must not undo a finished write.
+        await chmod(target, 0o600).catch(() => {});
       });
-    });
-  } finally { await outer.release(); }
+    } finally { await beside?.release(); }
+  } finally { await lock.release(); }
 }
 
 async function updateAuthFile(path: string, update: (current: Record<string, unknown>) => Record<string, unknown> | null): Promise<boolean> {
@@ -1058,11 +1077,14 @@ async function updateAuthFile(path: string, update: (current: Record<string, unk
   });
 }
 
-export async function writeAuthEntry(path: string, name: string, key: string, opts: { overwrite?: boolean } = {}): Promise<{ ok: boolean; message: string }> {
+// `replaces`: the entry is written only over this one (what the caller read before): one changed since stays.
+export async function writeAuthEntry(path: string, name: string, key: string, opts: { overwrite?: boolean; replaces?: string } = {}): Promise<{ ok: boolean; message: string }> {
   // Two of the files can be links to one: the entry the first write made is the second one's too.
   let same = false;
   const ok = await updateAuthFile(path, (current) => {
-    if (Object.hasOwn(current, name) && opts.overwrite !== true) { same = authEntryRaw(current[name]) === key; return null; }
+    const now = Object.hasOwn(current, name) ? authEntryRaw(current[name]) : undefined;
+    const allowed = opts.replaces !== undefined ? now === opts.replaces : opts.overwrite === true || !Object.hasOwn(current, name);
+    if (!allowed) { same = now === key; return null; }
     return { ...current, [name]: { type: "api_key", key } };
   });
   return ok || same ? { ok: true, message: "Entry saved." } : { ok: false, message: `${name} already exists in ${path}` };
@@ -1091,15 +1113,22 @@ export async function resolveEntries(entries: Array<{ name: string; raw: string 
   // Resolvers share the session and the batched vault snapshot, so the whole
   // pass costs one `bw list items` however many entries there are.
   const resolved = await Promise.all(entries.map(async ({ name, raw }) => {
-    const own = opts.injected?.[name] !== undefined && opts.injected[name] === process.env[name] && backendOf(raw) === "local";
+    // A value this process put into its own environment is resolved again, so a rotation reaches
+    // it. From bw, the old value stays while the vault cannot be read (a session that ended);
+    // from the local vault it goes, so `lock` and the end of a session reach it.
+    const own = opts.injected?.[name] !== undefined && opts.injected[name] === process.env[name] ? backendOf(raw) : null;
     const inherited = opts.preferProcessEnv && !own ? process.env[name] : undefined;
     if (inherited) return { name, value: inherited, secret: isSecretSource(raw) };
     if (!raw.trim()) return { name, value: "", secret: false };
-    try { return { name, value: await resolveShellValue(raw), secret: isSecretSource(raw) }; } catch { return { name, value: null, secret: true }; }
+    let value: string | null = null;
+    try { value = await resolveShellValue(raw); } catch { return { name, value: own === "bw" ? process.env[name] ?? null : null, secret: true }; }
+    if (!value && own === "bw") value = process.env[name] ?? null;
+    return { name, value, secret: isSecretSource(raw) };
   }));
   for (const { name, value, secret } of resolved) {
-    // An empty literal (`NAME=`) is a value; only an empty secret is unresolved.
-    if (value === null || (value === "" && secret)) { result.missing.push(name); continue; }
+    // An empty literal (`NAME=`) is a value; only an empty secret is unresolved. A NUL cannot be
+    // in a process environment, and the error for one would quote the value.
+    if (value === null || (value === "" && secret) || value.includes("\0")) { result.missing.push(name); continue; }
     result.values[name] = value;
     if (secret) result.secrets[name] = value;
   }
@@ -1160,15 +1189,42 @@ export async function buildEnvMap(injected: Record<string, string> = {}): Promis
 export async function redactionValues(wired: Record<string, string> = {}): Promise<Record<string, string>> {
   let local: LocalVault | null = null;
   try { local = await openLocal(); } catch {}
-  const values = indexValues(wired);
-  try { const master = (await readFile(MASTER_PASSWORD_FILE, "utf8")).trim(); if (master) values.MASTER_PASSWORD = master; } catch {}
+  const values = indexValues({ ...await authLiterals(), ...wired });
+  try { const master = (await readFile(MASTER_PASSWORD_FILE, "utf8")).trim(); if (master) addValue(values, "MASTER_PASSWORD", master); } catch {}
   if (await usesBw()) {
     try {
-      for (const item of (await vaultIndex()).byId.values()) if (item.password && !Object.hasOwn(values, item.name)) values[item.name] = item.password;
+      for (const item of (await vaultIndex()).byId.values()) if (item.password) addValue(values, item.name, item.password);
     } catch {}
   }
-  for (const item of local?.data.items ?? []) if (item.value && !Object.hasOwn(values, item.name)) values[item.name] = item.value;
+  for (const item of local?.data.items ?? []) if (item.value) addValue(values, item.name, item.value);
   return values;
+}
+
+// A label names one value: when another value has the name already (two items of one name, an
+// item named like a variable), this one gets a number, so that neither is left out.
+function addValue(values: Record<string, string>, name: string, value: string): void {
+  let label = name;
+  for (let n = 2; Object.hasOwn(values, label) && values[label] !== value; n++) label = `${name} (${n})`;
+  values[label] = value;
+}
+
+// Keys written out in a wiring file (an API key pasted into pi's auth.json): credentials like
+// the ones the vault holds, so they are masked too.
+export async function authLiterals(): Promise<Record<string, string>> {
+  const values: Record<string, string> = {};
+  for (const path of wiringFiles()) for (const [name, entry] of Object.entries(await readAuthEntries(path))) {
+    const raw = authEntryRaw(entry)?.trim();
+    if (!raw || isSecretSource(raw)) continue;
+    // pi also reads a key that is a variable's name from the environment: that value is the key.
+    const value = ENV_NAME_RE.test(raw) ? process.env[raw] : raw;
+    if (value) addValue(values, name, value);
+  }
+  return values;
+}
+
+// What the hook index holds: wired values, keys written out in a wiring file, and the session tokens.
+export async function indexedValues(wired: Record<string, string> = {}): Promise<Record<string, string>> {
+  return indexValues({ ...await authLiterals(), ...wired });
 }
 
 // The on-disk index (for out-of-process hooks) covers only wired secrets and
@@ -1176,9 +1232,11 @@ export async function redactionValues(wired: Record<string, string> = {}): Promi
 export function indexValues(wired: Record<string, string> = {}): Record<string, string> {
   const values: Record<string, string> = { ...wired };
   const session = process.env.BW_SESSION?.trim();
-  if (session) values.BW_SESSION = session;
-  if (localOpen) values.LOCAL_VAULT_KEY = localOpen.key.toString("hex");
-  if (localSessionSecret) values.LOCAL_VAULT_SESSION = localSessionSecret;
+  if (session) addValue(values, "BW_SESSION", session);
+  if (localOpen) addValue(values, "LOCAL_VAULT_KEY", localOpen.key.toString("hex"));
+  if (localSessionSecret) addValue(values, "LOCAL_VAULT_SESSION", localSessionSecret);
+  const passphrase = process.env[PASSPHRASE_ENV];
+  if (passphrase) addValue(values, PASSPHRASE_ENV, passphrase);
   return values;
 }
 
@@ -1211,7 +1269,7 @@ async function mergeRedactIndex(values: Record<string, string>, write: (content:
 // Re-index after the wired set changes so hooks mask a new value right away.
 export async function refreshRedactIndex(): Promise<void> {
   const env = await resolveEntries(await authEnvEntries());
-  await writeRedactIndex(indexValues(env.secrets));
+  await writeRedactIndex(await indexedValues(env.secrets));
 }
 
 export async function readRedactIndex(): Promise<RedactIndex | null> {
@@ -1250,13 +1308,22 @@ export async function getSecret(itemName: string, backend?: BackendName): Promis
   try { return await bw(["get", "password", itemName]); } catch (error) { throw mapItemError(error, itemName); }
 }
 
-// An agent can start add/rotate, so a dialog could be used to phish the master
-// password into an item it can then read; refuse it outright.
-async function refuseMasterPassword(secret: string): Promise<void> {
+// An agent can start add/rotate, so a dialog could be used to phish a vault's own password into
+// an item it can then read. Whichever vault the item goes to, the bw master password and the
+// local vault's passphrase are both refused outright.
+async function refuseVaultPasswords(secret: string): Promise<void> {
   if (!secret) return;
-  // The stored value and the verifier only short-cut a match: an agent can replace either.
-  const stored = await readMasterPassword();
-  if (secret === stored || await matchesMasterVerifier(secret) || await unlocksVault(secret)) throw new Error("Refusing to store the vault master password as a secret");
+  if (await usesBw() || OWN_BW_LOGIN || [SESSION_FILE, MASTER_PASSWORD_FILE, MASTER_VERIFIER_FILE].some((path) => existsSync(path)) || await keychainHas(KEYCHAIN_MASTER_SERVICE)) {
+    // The stored value and the verifier only short-cut a match: an agent can replace either.
+    const stored = await readMasterPassword();
+    if (secret === stored || await matchesMasterVerifier(secret) || await unlocksVault(secret)) throw new Error("Refusing to store the vault master password as a secret");
+  }
+  // Tried against the vault file itself (or the vault about to be created), open or not.
+  const file = (await readVaultFile().catch(() => null))?.file;
+  let opens = false;
+  if (file?.key.type === "passphrase") { try { opens = openVault(file, await derivePassphraseKey(secret, file.key)) !== null; } catch {} }
+  else if (!file && localPending?.header.key.type === "passphrase") opens = timingSafeEqual(await derivePassphraseKey(secret, localPending.header.key), localPending.key);
+  if (opens) throw new Error("Refusing to store the passphrase of the local vault as a secret");
 }
 
 // `created`: the notice to show when this item created the local vault.
@@ -1264,7 +1331,7 @@ export async function createSecretItem(opts: { itemName: string; secret: string;
   const problem = itemNameProblem(opts.itemName);
   if (problem) throw new Error(`Vault item name ${problem}`);
   if ((opts.backend ?? await defaultBackend()) === "local") return createLocalItem(opts);
-  await refuseMasterPassword(opts.secret);
+  await refuseVaultPasswords(opts.secret);
   const existing = await findItems(opts.itemName);
   if (existing.some((item) => item.name.toLowerCase() === opts.itemName.toLowerCase())) throw new Error(`Vault item already exists: ${opts.itemName}`);
   const item: Record<string, unknown> = {
@@ -1272,7 +1339,7 @@ export async function createSecretItem(opts: { itemName: string; secret: string;
     login: { uris: [], username: "agent", password: opts.secret, totp: null },
   };
   if (opts.envName) item.fields = [{ type: 0, name: "env", value: opts.envName }];
-  const output = await bw(["create", "item"], { input: Buffer.from(JSON.stringify(item), "utf8").toString("base64") });
+  const output = await bw(["create", "item"], { input: Buffer.from(JSON.stringify(item), "utf8").toString("base64"), secrets: [opts.secret] });
   let created: { id?: unknown };
   try { created = JSON.parse(output) as { id?: unknown }; } catch { throw new Error("Vaultwarden create returned invalid JSON"); }
   if (!created.id) throw new Error("Vaultwarden create returned no item id");
@@ -1282,14 +1349,14 @@ export async function createSecretItem(opts: { itemName: string; secret: string;
 
 export async function rotateSecretItem(opts: { itemName: string; secret: string; backend?: BackendName }): Promise<{ id: string }> {
   if ((opts.backend ?? await defaultBackend()) === "local") return rotateLocalItem(opts);
-  await refuseMasterPassword(opts.secret);
+  await refuseVaultPasswords(opts.secret);
   let parsed: Record<string, unknown>;
   try { parsed = await bwJson(["get", "item", opts.itemName]) as Record<string, unknown>; } catch (error) { throw mapItemError(error, opts.itemName); }
   const login = parsed.login && typeof parsed.login === "object" ? parsed.login as Record<string, unknown> : {};
   parsed.login = { ...login, password: opts.secret };
   const id = String(parsed.id ?? "");
   if (!id) throw new Error(`Vault item not found: ${opts.itemName}`);
-  await bw(["edit", "item", id], { input: Buffer.from(JSON.stringify(parsed), "utf8").toString("base64") });
+  await bw(["edit", "item", id], { input: Buffer.from(JSON.stringify(parsed), "utf8").toString("base64"), secrets: [opts.secret] });
   await bw(["sync", "--quiet"]); invalidateSecretCache();
   return { id };
 }
@@ -1949,7 +2016,8 @@ async function writeVaultFile(text: string, held: () => Promise<boolean>): Promi
       await new Promise((resolve) => setTimeout(resolve, 50 * attempt));
     }
   }
-  await chmod(VAULT_FILE, 0o600);
+  // The file was 0600 before the rename: from here on the new vault is the vault, and nothing fails.
+  await chmod(VAULT_FILE, 0o600).catch(() => {});
   // The rename itself reaches the disk with its directory (not on Windows, which cannot open one).
   if (process.platform !== "win32") {
     const dir = await open(CONFIG_DIR, "r").catch(() => null);
@@ -2072,8 +2140,12 @@ async function writeLocalSession(vaultId: string, key: Buffer, unattended: boole
   const secret = randomBytes(32);
   const expires = unattended ? null : Date.now() + SESSION_TTL_MS;
   const wrap = sealSession(vaultId, expires, secret, key);
-  await writePrivateFile(VAULT_SESSION_FILE, `${JSON.stringify(wrap)}\n`);
-  await writePrivateFile(VAULT_TOKEN_FILE, `${wrap.id} ${secret.toString("hex")}\n`);
+  // The two files are one session: two unlocks at once must not leave half of each.
+  const lock = await acquireLock(`${VAULT_SESSION_FILE}.lock`);
+  try {
+    await writePrivateFile(VAULT_SESSION_FILE, `${JSON.stringify(wrap)}\n`);
+    await writePrivateFile(VAULT_TOKEN_FILE, `${wrap.id} ${secret.toString("hex")}\n`);
+  } finally { await lock.release(); }
   localSessionSecret = secret.toString("hex");
   if (expires !== null) armLocalLockTimer(wrap.id, expires);
 }
@@ -2167,19 +2239,8 @@ async function resolveLocalRef(ref: SecretRef): Promise<string | null> {
   }
 }
 
-// An agent can start add/rotate, so a dialog could be used to phish the
-// passphrase into an item it can then read; refuse it outright.
-async function refuseLocalSecrets(secret: string): Promise<void> {
-  if (!secret) return;
-  if (await usesBw()) await refuseMasterPassword(secret);
-  const read = await readVaultFile().catch(() => null);
-  const target = read ? (read.file.key.type === "passphrase" && localOpen?.file.id === read.file.id ? { spec: read.file.key, key: localOpen.key } : null)
-    : localPending?.header.key.type === "passphrase" ? { spec: localPending.header.key, key: localPending.key } : null;
-  if (target && timingSafeEqual(await derivePassphraseKey(secret, target.spec), target.key)) throw new Error("Refusing to store the passphrase of the local vault as a secret");
-}
-
 async function createLocalItem(opts: { itemName: string; secret: string; envName?: string; notes?: string }): Promise<{ id: string; created?: string }> {
-  await refuseLocalSecrets(opts.secret);
+  await refuseVaultPasswords(opts.secret);
   const id = randomUUID();
   const now = new Date().toISOString();
   const { created } = await updateLocal((data) => {
@@ -2191,7 +2252,7 @@ async function createLocalItem(opts: { itemName: string; secret: string; envName
 
 async function rotateLocalItem(opts: { itemName: string; secret: string }): Promise<{ id: string }> {
   if (!(await readVaultFile())) throw new Error(`Vault item not found: ${opts.itemName}`);
-  await refuseLocalSecrets(opts.secret);
+  await refuseVaultPasswords(opts.secret);
   let id = "";
   await updateLocal((data) => {
     const item = findLocalItem(data, opts.itemName);
@@ -2240,7 +2301,8 @@ export async function rekeyLocal(to?: VaultKeyType): Promise<{ from: VaultKeyTyp
       items = data.items.length;
     });
   } catch (error) {
-    if (fresh.header.key.type === "keychain") await forgetVaultKey(fresh.header.key.service);
+    // The new key goes only while the vault on disk is not the one sealed with it.
+    if (fresh.header.key.type === "keychain" && (await readVaultFile().catch(() => null))?.file.id !== fresh.header.id) await forgetVaultKey(fresh.header.key.service);
     throw error;
   }
   localOpen = null;
