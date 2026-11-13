@@ -1088,6 +1088,47 @@ test("neither vault's own password is stored as a secret in the other", { skip: 
   assert.match(shared.stderr, /Refusing to store the vault master password/);
   assert.equal(((await other.vault()) as { status?: string }).status, "locked");
   assert.ok(!existsSync(join(other.configDir, "session")));
+
+  // A vault that is there but cannot be asked is no leave to store the value: a bw that fails
+  // for another reason than the password, a local vault file that cannot be read.
+  const silent = await add(other, "S_TOKEN", "Unchecked", "some-value-123456", { ...env, FAKE_BW_UNLOCK_ERROR: "1" });
+  assert.notEqual(silent.code, 0);
+  assert.match(silent.stderr, /Could not check this value against the master password of the bw vault/);
+  assert.ok(!silent.stderr.includes("some-value"));
+  assert.equal((await runCli(other, ["run", "--", "sh", "-c", "echo ${S_TOKEN:-none}"], undefined, env)).stdout, "none\n");
+  await writeFile(vaultPath(box), "{ not a vault");
+  const unread = await runCli(box, ["add", "--env", "R_TOKEN", "--item", "Unchecked too", "--stdin"], "some-value-123456");
+  assert.notEqual(unread.code, 0);
+  assert.match(unread.stderr, /Could not check this value against the passphrase of the local vault/);
+  assert.equal((await box.vault()).items.length, 0);
+});
+
+// Claude Code's settings have no lock of their own: keyshroud's writers share one, and what a
+// writer has waiting is inside it, private, so a writer that lost the lock replaces nothing.
+test("claude-setup paused past its lock replaces nothing a later run wrote; what waits is private", { skip: process.platform === "win32" }, async () => {
+  const box = await blank();
+  assert.equal((await add(box, "A_TOKEN", "Item A", "value-aaaa-1111")).code, 0);
+  const settings = join(box.env.HOME, ".claude", "settings.json");
+  await mkdir(dirname(settings), { recursive: true });
+  await writeFile(settings, JSON.stringify({ model: "x" }));
+  await chmod(settings, 0o644);
+  const out = await runScript(box, `${PATCH_FS}
+    let stalled = false;
+    patch("rename", async (real, from, to) => {
+      if (!stalled && /settings\\.json\\.lock\\/pending\\./.test(String(from))) {
+        stalled = true;
+        console.log("waits as " + (fs.statSync(String(from)).mode & 0o777).toString(8));
+        fs.rmSync(${JSON.stringify(`${settings}.lock`)}, { recursive: true });
+        fs.writeFileSync(${JSON.stringify(settings)}, JSON.stringify({ apiKeyHelper: "another run's" }));
+      }
+      return real(from, to);
+    });
+    process.argv = [process.argv[0], "cli", "claude-setup", "--item", "Item A"];
+    await import(${JSON.stringify(new URL("../src/cli.ts", import.meta.url).href)});
+  `);
+  assert.equal(out, "waits as 600\n");
+  assert.deepEqual(JSON.parse(await readFile(settings, "utf8")), { apiKeyHelper: "another run's" });
+  assert.deepEqual((await readdir(dirname(settings))).filter((name) => /\.lock$|\.tmp\.|pending/.test(name)), []);
 });
 
 test("migrate --to local leaves alone two references that would get one name, and a name rewired meanwhile", async () => {

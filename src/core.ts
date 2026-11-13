@@ -176,11 +176,23 @@ function execBw(args: string[], options: Record<string, unknown>, input?: string
   return execRun(command, args, { ...options, env, windowsVerbatimArguments: verbatim }, input);
 }
 
-// What a command was given on stdin or as a password never comes back in its error.
-function withoutSecrets(message: string, secrets: Array<string | undefined>): string {
-  const known = secrets.filter((secret): secret is string => Boolean(secret) && secret!.length >= 4).sort((a, b) => b.length - a.length);
-  for (const secret of known) message = message.split(secret).join("<redacted>");
-  return message;
+// What a command was given on stdin or as a password never comes back in its error. Every place
+// a value stands in the message as it came is found first, places that overlap included (one
+// value twice, or two values), and each run of them is replaced whole.
+export function withoutSecrets(message: string, secrets: Array<string | undefined>): string {
+  const spans: Array<[number, number]> = [];
+  for (const secret of new Set(secrets)) {
+    if (!secret || secret.length < 4) continue;
+    for (let at = message.indexOf(secret); at !== -1; at = message.indexOf(secret, at + 1)) spans.push([at, at + secret.length]);
+  }
+  spans.sort((a, b) => a[0] - b[0]);
+  let out = "", cursor = 0;
+  for (const [start, end] of spans) {
+    if (end <= cursor) continue;
+    if (start >= cursor) out += `${message.slice(cursor, start)}<redacted>`;
+    cursor = end;
+  }
+  return out + message.slice(cursor);
 }
 
 // Every string in an item as bw is given one (base64 of its JSON): bw's error could quote any of them.
@@ -790,19 +802,27 @@ async function matchesMasterVerifier(secret: string): Promise<boolean | null> {
 
 // Without a verifier (an agent can delete the file) try the value itself: bw
 // unlock is local, and a match replaces the session token, so keep the new one.
-async function unlocksVault(secret: string, keep = true): Promise<boolean> {
+// "no" only when bw said so (a wrong password, no login) or there is no bw to ask; a bw that
+// failed some other way has not answered: "unknown".
+async function unlocksVault(secret: string, keep = true): Promise<"yes" | "no" | "unknown"> {
   const before = await readSession();
   let token: string;
   try {
     token = (await runFile("bw", ["unlock", "--passwordenv", "BW_PASSWORD", "--raw"], { env: { ...process.env, BW_PASSWORD: secret }, timeout: 20000, maxBuffer: 4 * 1024 * 1024 })).stdout.trim();
-  } catch { return false; }
-  if (!token) return false;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    return /Invalid master password|decryption operation failed|ENOENT|not found on PATH/i.test(message) || DEAD_LOGIN_RE.test(message) ? "no" : "unknown";
+  }
+  if (!token) return "unknown";
   // A login keyshroud does not use is locked again: the try must not leave it open.
-  if (!keep) { await runFile("bw", ["lock"], { env: process.env, timeout: 20000, maxBuffer: 1024 * 1024 }).catch(() => {}); return true; }
+  if (!keep) {
+    if (!await runFile("bw", ["lock"], { env: process.env, timeout: 20000, maxBuffer: 1024 * 1024 }).then(() => true, () => false)) throw new Error("Refusing to store the vault master password as a secret (and bw could not be locked again: run `bw lock`)");
+    return "yes";
+  }
   // The session keeps its end, at most one session length away: the file is the agent's to write.
   await writeSession(token, false, Math.min(before?.expiresAt ?? Infinity, Date.now() + SESSION_TTL_MS));
   await writeMasterVerifier(secret);
-  return true;
+  return "yes";
 }
 
 // Store a keychain entry by letting the OS tool prompt for the value on the
@@ -1050,7 +1070,8 @@ async function readAuthForUpdate(path: string): Promise<Record<string, unknown>>
 // is a lock beside a link, named through a link inside that one (`<link>.lock/via/pending.x`).
 // Anyone's next write needs one of the two directories gone first (keyshroud removes them whole,
 // pi can only once they are empty), and with either gone the rename has nothing to move.
-async function updateFile<T>(given: string, fn: (target: string, write: (content: string) => Promise<void>) => Promise<T>): Promise<T> {
+// `write` takes the mode the file gets once it is in place (what waits is 0600 whatever that is).
+export async function updateFile<T>(given: string, fn: (target: string, write: (content: string, mode?: number) => Promise<void>) => Promise<T>): Promise<T> {
   const path = absolutePath(given);
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   const target = await resolvedPath(path);
@@ -1063,7 +1084,7 @@ async function updateFile<T>(given: string, fn: (target: string, write: (content
       const lost = new Error(`This process lost the lock of ${path} (it was paused for over 30 seconds); nothing was written`);
       const through = beside ? join(`${spelled}.lock`, "via") : `${target}.lock`;
       if (beside) await symlink(`${target}.lock`, through, "junction").catch(() => { throw lost; });
-      return await fn(target, async (content) => {
+      return await fn(target, async (content, mode = 0o600) => {
         const name = `pending.${randomBytes(6).toString("hex")}`;
         // Nothing is put into a directory that has become someone else's lock.
         if (!(await held())) throw lost;
@@ -1076,17 +1097,10 @@ async function updateFile<T>(given: string, fn: (target: string, write: (content
           throw (error as NodeJS.ErrnoException).code === "ENOENT" ? lost : error;
         }
         // The staged file was 0600 already; a filesystem without modes must not undo a finished write.
-        await chmod(target, 0o600).catch(() => {});
+        await chmod(target, mode).catch(() => {});
       });
     } finally { await beside?.release(); }
   } finally { await lock.release(); }
-}
-
-// One keyshroud command at a time around `fn`, for a file other programs write without a lock of
-// theirs to share (Claude Code's settings).
-export async function withPathLock<T>(path: string, fn: () => Promise<T>): Promise<T> {
-  const lock = await acquireLock(`${await resolvedPath(absolutePath(path))}.lock`);
-  try { return await fn(); } finally { await lock.release(); }
 }
 
 async function updateAuthFile(path: string, update: (current: Record<string, unknown>) => Record<string, unknown> | null): Promise<boolean> {
@@ -1237,26 +1251,44 @@ export function withEarlierValues(values: Record<string, string>, earlier: Recor
   return values;
 }
 
-// What the wiring files hold beside the entries `run` injects, masked like those:
-// - a key written out in a file (an API key pasted into pi's auth.json);
-// - a reference that another file overrides under the same name (pi still uses its own).
+// A key as pi 1.5 reads it: `$NAME` and `${NAME}` stand for variables, `$$` and `$!` for the
+// characters. null when a variable it names is not set.
+function filledTemplate(raw: string): string | null {
+  let unset = false;
+  const text = raw.replace(/\$(?:([$!])|\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))/g, (_all, char: string | undefined, braced: string | undefined, bare: string | undefined) => {
+    if (char) return char;
+    const value = process.env[(braced ?? bare)!];
+    if (!value) unset = true;
+    return value ?? "";
+  });
+  return unset ? null : text;
+}
+
+// What the wiring files hold, whatever a command injects of it, masked like the injected entries:
+// - every reference in every file, also one that another file or an env file overrides under
+//   the same name, and one under a provider's name that pi alone uses. It is read from a vault
+//   that is open: bw is not unlocked, logged in to or asked about for a value nobody asked for
+//   (that can take seconds, or a Touch ID sheet), and another program's `!command` is not run;
+// - a key written out in a file (an API key pasted into pi's auth.json).
 async function wiringFileValues(): Promise<Array<[string, string]>> {
-  const merged = await wiredEntries();
   const found: Array<[string, string]> = [];
   for (const path of wiringFiles()) for (const [name, entry] of Object.entries(await readAuthEntries(path))) {
     const raw = authEntryRaw(entry)?.trim();
     if (!raw) continue;
     if (isSecretSource(raw)) {
-      if (raw === authEntryRaw(merged[name])?.trim()) continue;
-      const value = await resolveShellValue(raw).catch(() => null);
+      const ref = parseRef(raw);
+      const open = ref && (ref.scheme === "local" || (sessionVerifiedAt > 0 && Boolean(process.env.BW_SESSION)));
+      const value = open ? await resolveRef(ref).catch(() => null) : null;
       if (value) found.push([name, value]);
       continue;
     }
-    // pi takes a key that names a variable (`NAME`; `$NAME` or `${NAME}` since 1.5) from the
-    // environment: then that value is the key. With no such variable, the text itself is.
+    // A key that is nothing but a variable's name (`NAME`, and `$NAME` or `${NAME}` since pi 1.5)
+    // is that variable's value; the name is not masked. A bare name with no such variable is
+    // the key itself. Any other text is the key as older pi reads it, and with its variables
+    // filled in as pi 1.5 does.
     const named = /^(?:\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)|([A-Za-z_][A-Za-z0-9_]*))$/.exec(raw);
-    const value = named ? process.env[named[1] ?? named[2] ?? named[3]] || (named[3] ? raw : "") : raw;
-    if (value) found.push([name, value]);
+    const values = named ? [process.env[named[1] ?? named[2] ?? named[3]] || (named[3] ? raw : "")] : [raw, filledTemplate(raw)];
+    for (const value of new Set(values)) if (value) found.push([name, value]);
   }
   return found;
 }
@@ -1357,14 +1389,19 @@ export async function getSecret(itemName: string, backend?: BackendName): Promis
 async function refuseVaultPasswords(secret: string): Promise<void> {
   if (!secret) return;
   const refused = new Error("Refusing to store the vault master password as a secret");
-  if (await usesBw() || OWN_BW_LOGIN || [SESSION_FILE, MASTER_PASSWORD_FILE, MASTER_VERIFIER_FILE].some((path) => existsSync(path)) || await keychainHas(KEYCHAIN_MASTER_SERVICE)) {
-    // The stored value and the verifier only short-cut a match: an agent can replace either.
-    const stored = await readMasterPassword();
-    if (secret === stored || await matchesMasterVerifier(secret) || await unlocksVault(secret)) throw refused;
+  // A vault that is there but cannot be asked is no leave to store the value: nothing is stored.
+  const unchecked = (what: string) => new Error(`Could not check this value against ${what}, so it was not stored; try again`);
+  const own = await usesBw() || OWN_BW_LOGIN || [SESSION_FILE, MASTER_PASSWORD_FILE, MASTER_VERIFIER_FILE].some((path) => existsSync(path)) || await keychainHas(KEYCHAIN_MASTER_SERVICE);
   // A bw login on this machine that keyshroud has not used (the local vault was chosen) is tried as well.
-  } else if (await sharedBwLoggedIn() && await unlocksVault(secret, false)) throw refused;
+  if (own || await sharedBwLoggedIn()) {
+    // The stored value and the verifier only short-cut a match: an agent can replace either.
+    if (own && (secret === await readMasterPassword() || await matchesMasterVerifier(secret))) throw refused;
+    const answer = await unlocksVault(secret, own);
+    if (answer === "yes") throw refused;
+    if (answer === "unknown") throw unchecked("the master password of the bw vault (bw did not answer)");
+  }
   // Tried against the vault file itself (or the vault about to be created), open or not.
-  const file = (await readVaultFile().catch(() => null))?.file;
+  const file = (await readVaultFile().catch(() => { throw unchecked(`the passphrase of the local vault (${shownPath(VAULT_FILE)} cannot be read)`); }))?.file;
   let opens = false;
   if (file?.key.type === "passphrase") { try { opens = openVault(file, await derivePassphraseKey(secret, file.key)) !== null; } catch {} }
   else if (!file && localPending?.header.key.type === "passphrase") opens = timingSafeEqual(await derivePassphraseKey(secret, localPending.header.key), localPending.key);

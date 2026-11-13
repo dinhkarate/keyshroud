@@ -58,10 +58,12 @@ function refreshEnv(): Promise<void> {
   if (!refreshPromise) {
     refreshPromise = (async () => {
       try { await core.ensureSession(); } catch { scheduleRetry(); }
-      applyEnv(await core.buildEnvMap(own));
+      const next = await core.buildEnvMap(own);
       // A value masked once stays masked: a tool started before a rotation can still print the old one.
-      masked = core.withEarlierValues(await core.redactionValues(currentEnv), masked);
+      // And a value is masked before the environment holds it, for a command that starts meanwhile.
+      masked = core.withEarlierValues(await core.redactionValues(next), masked);
       redactor = createRedactor(masked);
+      applyEnv(next);
       const local = await core.localStatus();
       sessionState = core.keyHasSessions(local.key) ? local.status : null;
     })().finally(() => { refreshPromise = null; });
@@ -267,17 +269,30 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   // A `!command` the user types: its output is masked as it arrives, so what pi shows, saves and
   // later summarizes is the masked text. (An agent host without pi's local shell falls back to
   // the `context` handler below, which masks what is sent to the model with a turn.)
-  pi.on("user_bash", async () => {
+  pi.on("user_bash", async (event) => {
     await recheckSession();
-    if (redactor.size === 0) return undefined;
-    const host = await import("@earendil-works/pi-coding-agent").catch(() => null) as { createLocalBashOperations?: () => { exec: (command: string, cwd: string, options: { onData: (data: Buffer) => void }) => Promise<{ exitCode: number | null }> } } | null;
+    const host = await import("@earendil-works/pi-coding-agent").catch(() => null) as {
+      createLocalBashOperations?: (options?: { shellPath?: string }) => { exec: (command: string, cwd: string, options: { onData: (data: Buffer) => void }) => Promise<{ exitCode: number | null }> };
+      SettingsManager?: { create(cwd: string, agentDir?: string, options?: { projectTrusted?: boolean }): { getShellPath(): string | undefined } };
+    } | null;
     if (!host?.createLocalBashOperations) return undefined;
-    const local = host.createLocalBashOperations();
-    const current = redactor;
+    // The shell the user set for pi in their own settings, as pi would pick it for this command
+    // (one set by the project's settings is not taken: whether pi trusts that project is not known here).
+    let shellPath: string | undefined;
+    try { shellPath = host.SettingsManager?.create((event as { cwd: string }).cwd, undefined, { projectTrusted: false }).getShellPath(); } catch {}
+    const local = host.createLocalBashOperations({ shellPath });
+    // The values known when a piece of output arrives, not when the command was typed: the
+    // shell may start after a refresh that came in between.
+    const live: Redactor = {
+      get size() { return redactor.size; },
+      get lookBehind() { return redactor.lookBehind; },
+      redact: (text, before, after) => redactor.redact(text, before, after),
+      safeCut: (text) => redactor.safeCut(text),
+    };
     return {
       operations: {
         exec: async (command, cwd, options) => {
-          const decoder = new StringDecoder("utf8"), feed = createRedactFeed(current);
+          const decoder = new StringDecoder("utf8"), feed = createRedactFeed(live);
           const pass = (text: string) => { if (text) options.onData(Buffer.from(text, "utf8")); };
           try { return await local.exec(command, cwd, { ...options, onData: (data: Buffer) => pass(feed.push(decoder.write(data))) }); }
           finally { pass(feed.push(decoder.end()) + feed.end()); }

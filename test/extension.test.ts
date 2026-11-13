@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { item, sandbox, writeAuth } from "./helpers.ts";
 
 const GH = "ghp_FAKE0123456789abcdef";
@@ -47,8 +49,32 @@ test("pi extension hydrates env, registers tools, and redacts tool results", asy
   // The second one arrived in two halves.
   assert.equal(shown, "a <redacted:GH_TOKEN>\n<redacted:GH_TOKEN>\n");
 
+  // The shell the user set for pi runs a `!command`, as without the extension.
+  const shell = join(box.dir, "my-shell");
+  await writeFile(shell, "#!/bin/sh\nVIA_MY_SHELL=yes exec /bin/sh \"$@\"\n", { mode: 0o755 });
+  await writeFile(join(box.env.PI_CODING_AGENT_DIR, "settings.json"), JSON.stringify({ shellPath: shell }));
+  const own = await handlers.get("user_bash")!({ type: "user_bash", command: "true", excludeFromContext: false, cwd: box.dir }) as typeof bash;
+  shown = "";
+  await own.operations.exec(`printf '%s' "$VIA_MY_SHELL"`, box.dir, { onData: (data) => { shown += data; } });
+  assert.equal(shown, "yes");
+
+  // A value is masked before the environment holds it, also for a `!command` typed before the
+  // refresh that brought it: the moment the variable is there, a result with it is masked, and
+  // the operations handed out earlier mask it too.
+  const LATE = "late-literal-FAKE-777888";
+  await writeAuth(box, { GH_TOKEN: { type: "api_key", key: "!bw get password 'GitHub CLI token'" }, LATE_TOKEN: { type: "api_key", key: LATE } });
+  handlers.get("session_start")!({});
+  while (!process.env.LATE_TOKEN) await new Promise((resolve) => setImmediate(resolve));
+  const late = handlers.get("tool_result")!({ content: [{ type: "text", text: LATE }] }) as { content: Array<{ text: string }> } | undefined;
+  assert.equal(late?.content[0].text, "<redacted:LATE_TOKEN>");
+  shown = "";
+  await bash.operations.exec(`printf '%s' "$LATE_TOKEN"`, box.dir, { onData: (data) => { shown += data; } });
+  assert.equal(shown, "<redacted:LATE_TOKEN>");
+
   // A value masked once stays masked after its name gets a new one.
   const core = await import("../src/core.ts");
+  // An error from bw never quotes what bw was given, however the values overlap in it.
+  assert.equal(core.withoutSecrets("x ABCDEFABCDEFABCDEF y abcd", ["ABCDEFABCDEF", "DEFA", undefined, "abc"]), "x <redacted> y abcd");
   assert.deepEqual({ ...core.withEarlierValues({ GH_TOKEN: "new-value-1", Item: "new-value-1" }, { GH_TOKEN: "old-value-0", Item: "old-value-0", "Other (2)": "kept-value-9" }) },
     { GH_TOKEN: "new-value-1", Item: "new-value-1", "GH_TOKEN (2)": "old-value-0", Other: "kept-value-9" });
 

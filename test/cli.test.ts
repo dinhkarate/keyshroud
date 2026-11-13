@@ -519,6 +519,17 @@ test("MCP secrets_run never leaks a partial secret when output hits the collecti
   const { raw } = await mcpCall(box, "secrets_run", { command: "yes \"$LONG_KEY\" | tr -d '\\n' | head -c 1500000" });
   assert.match(raw, /redacted:LONG_KEY/);
   for (let at = 0; at + 12 <= long.length; at++) assert.ok(!raw.includes(long.slice(at, at + 12)), `leaked a fragment at ${at}`);
+
+  // Collection that stops inside a character (the first byte of the é) must not show the start of
+  // the secret it was in: what came before masks down to little, so the end of it is in the answer.
+  assert.equal((await runCli(box, ["add", "--env", "UTF_KEY", "--item", "Utf key", "--stdin"], "FAKE-PREFIX-\u00e9-TAIL-0123")).code, 0);
+  const script = `const a = Buffer.from(process.env.LONG_KEY.repeat(1747)), k = Buffer.from(process.env.UTF_KEY), at = k.indexOf(0xc3) + 1;
+    process.stdout.write(Buffer.concat([a, Buffer.alloc(524288 - a.length - at, 120), k.subarray(0, at)]));
+    setTimeout(() => process.stdout.write(Buffer.concat([k.subarray(at), Buffer.from("-and-more")])), 500);`;
+  const cut = await mcpCall(box, "secrets_run", { command: `${JSON.stringify(NODE)} -e '${script}'` });
+  assert.match(cut.raw, /redacted:LONG_KEY/);
+  assert.match(cut.raw, /xxxx/);
+  assert.ok(!cut.raw.includes("FAKE-PREFIX"), "the start of a secret cut inside a character was shown");
 });
 
 test("MCP server lists tools and runs commands with masked output", async () => {
@@ -977,6 +988,14 @@ test("a key written into auth.json itself is masked like a vault value, by run a
   await writeFile(join(box.dir, ".env.refs"), "API_TOKEN=bw://npm publish\n");
   const both = await runCli(box, ["run", "--env-file", ".env.refs", "--", "echo", "FAKE_TOKEN_123456", "mistral-value-0123", "MISTRAL_ENV_KEY", "literal-api-FAKE-000111", NPM], "", { MISTRAL_ENV_KEY: "mistral-value-0123" });
   assert.equal(both.stdout, "<redacted:groq> <redacted:mistral> MISTRAL_ENV_KEY <redacted:API_TOKEN (2)> <redacted:API_TOKEN>\n", both.stderr);
+
+  // A key with a variable inside it is masked as older pi reads it (the text) and as pi 1.5 does
+  // (the variable filled in). A reference is masked whatever is injected of it: one an env file
+  // overrides under its name, and one under a provider's name, which only pi uses.
+  await writeAuth(box, { together: { type: "api_key", key: "tpl-FAKE-$PART_ENV-end" }, ORG: "bw://GitHub CLI token/fields/org", xai: { type: "api_key", key: "!keyshroud get 'bw://npm publish/fields/scope'" } });
+  await writeFile(join(box.dir, ".env.refs"), "ORG=bw://npm publish\n");
+  const more = await runCli(box, ["run", "--env-file", ".env.refs", "--", "echo", "tpl-FAKE-$PART_ENV-end", "tpl-FAKE-middle0123-end", "acme-org", "scope-fake-0123"], "", { PART_ENV: "middle0123" });
+  assert.equal(more.stdout, "<redacted:together> <redacted:together (2)> <redacted:ORG (2)> <redacted:xai>\n", more.stderr);
 });
 
 test("wire puts the value into the hook index at once; unwire leaves a provider's login alone", async () => {

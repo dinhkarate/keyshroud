@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
+import { StringDecoder } from "node:string_decoder";
 import process from "node:process";
 import { BRAND } from "./brand.ts";
 import * as core from "./core.ts";
@@ -134,9 +135,13 @@ async function runTool(args: Json): Promise<Json> {
   if (timedOut && !windows) { try { process.kill(-child.pid!, "SIGKILL"); } catch {} }
   let truncated = false;
   const out = (stream: "stdout" | "stderr") => {
-    let raw = Buffer.concat(chunks[stream]).toString("utf8");
+    const short = sizes[stream] >= OUTPUT_LIMIT * 2;
+    // Collection that stopped early can end inside a character: its bytes are left out. Made
+    // into U+FFFD they would no longer look like the start of a secret to the cut below.
+    const decoder = new StringDecoder("utf8");
+    let raw = decoder.write(Buffer.concat(chunks[stream])) + (short ? "" : decoder.end());
     let rest = "";
-    if (sizes[stream] >= OUTPUT_LIMIT * 2) { truncated = true; const cut = redactor.safeCut(raw); rest = raw.slice(cut); raw = raw.slice(0, cut); }
+    if (short) { truncated = true; const cut = redactor.safeCut(raw); rest = raw.slice(cut); raw = raw.slice(0, cut); }
     const masked = redactor.redact(raw, "", rest);
     if (masked.length <= OUTPUT_LIMIT / 2) return masked;
     truncated = true;

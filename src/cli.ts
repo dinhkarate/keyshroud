@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { existsSync } from "node:fs";
-import { chmod, mkdir, lstat, readdir, readFile, readlink, rename, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, lstat, readdir, readFile, readlink, rename, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import { constants, homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { basename, dirname, join, relative, resolve } from "node:path";
@@ -833,23 +833,18 @@ async function main(): Promise<void> {
       const itemName = valueAfter(args, "--item"); if (!itemName) fail(usage, 2);
       const settingsPath = resolve(valueAfter(args, "--settings") ?? join(homedir(), ".claude", "settings.json"));
       const ttl = valueAfter(args, "--ttl-ms"); if (ttl && !/^\d+$/.test(ttl)) fail(usage, 2);
-      await mkdir(dirname(settingsPath), { recursive: true });
-      // One keyshroud at a time reads, checks and replaces the file (Claude Code has no lock to share).
-      const taken = await core.withPathLock(settingsPath, async () => {
-        const settings = await readSettings(settingsPath);
+      // Read, checked and replaced under the lock keyshroud's own writers share, as a write that
+      // cannot land once that lock is gone (Claude Code has no lock to share). The backup and the
+      // text that waits are private (settings can hold keys); the file gets its old mode back
+      // once the new text is in place.
+      const taken = await core.updateFile(settingsPath, async (target, write) => {
+        const settings = await readSettings(target);
         if (settings.apiKeyHelper && !args.includes("--force")) return true;
-        // The backup and the new text are private from their first byte (settings can hold keys);
-        // the new file gets the old one's mode just before it replaces it whole.
-        const existing = await stat(settingsPath).catch(() => null);
-        if (existing) await writeFile(`${settingsPath}.bak-${timestamp()}-${randomBytes(3).toString("hex")}`, await readFile(settingsPath), { mode: 0o600, flag: "wx" });
+        const existing = await stat(target).catch(() => null);
+        if (existing) await writeFile(`${settingsPath}.bak-${timestamp()}-${randomBytes(3).toString("hex")}`, await readFile(target), { mode: 0o600, flag: "wx" });
         const cliPath = fileURLToPath(import.meta.url); settings.apiKeyHelper = `${shellQuote(process.execPath)} ${shellQuote(cliPath)} api-key --item ${shellQuote(itemName)}`;
         if (ttl) settings.env = { ...(settings.env as Record<string, unknown> ?? {}), CLAUDE_CODE_API_KEY_HELPER_TTL_MS: ttl };
-        const tmp = `${settingsPath}.tmp.${randomBytes(6).toString("hex")}`;
-        try {
-          await writeFile(tmp, `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600, flag: "wx" });
-          if (existing) await chmod(tmp, existing.mode & 0o777);
-          await rename(tmp, settingsPath);
-        } catch (error) { await rm(tmp, { force: true }).catch(() => {}); throw error; }
+        await write(`${JSON.stringify(settings, null, 2)}\n`, existing ? existing.mode & 0o777 : 0o600);
         return false;
       });
       if (taken) fail("apiKeyHelper already set; use --force to replace it", 5);

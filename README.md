@@ -267,7 +267,9 @@ keyshroud migrate --yes                          # copy them; references keep wo
    (`--target pi|omp|both` writes there in any case). keyshroud writes only names and references to
    these files, so what it wrote is safe to read. A key that you or pi put into `auth.json` as plain
    text is still there: keyshroud masks it in output like a vault value, but cannot take it out of
-   the file.
+   the file. Every reference in these files is masked as well, whatever a command injects of it
+   (a `bw://` one when the command has the bw vault open already: keyshroud does not unlock bw for
+   a value nobody asked for).
 2. **Unlock.** The local vault's key comes from the OS keychain, or from a passphrase session that
    ends after 30 minutes. Vaultwarden: keyshroud asks for the master password (or reads one you
    stored in the OS keychain); the session token is cached in `~/.config/keyshroud/session`
@@ -346,8 +348,9 @@ The extension:
   and the details and structured data a tool returns beside it. What a tool streams while it is
   still running is shown as it is; its result is masked;
 - masks the output of a `!command` you type as it arrives, so the masked text is what pi shows,
-  saves and later summarizes (through pi's own shell; in a host without it, or when another
-  extension runs your `!commands`, only what is sent to the model with a turn is masked);
+  saves and later summarizes (through pi's own shell, the one your pi settings name; in a host
+  without it, or when another extension runs your `!commands`, only what is sent to the model with
+  a turn is masked). A value is masked before pi's environment holds it;
 - with a passphrase vault, takes its values out of the agent's environment once the
   session ends or you run `keyshroud lock`, checked before every tool and `!command`;
 - adds `/secret` (describe → confirm name → masked paste), `/vault_add`,
@@ -614,8 +617,8 @@ its key is not.
 
 Guarantees we test for:
 
-- secret values never appear in argv, logs, diagnostics, MCP results, hook
-  output, or `audit.jsonl`;
+- secret values never appear in argv, logs, keyshroud's own diagnostics, MCP results, hook
+  output, or `audit.jsonl`; an error from `bw` is shown without anything keyshroud gave it;
 - new secrets are read from a masked prompt, `--stdin`, or a native dialog, never flags;
 - the dialog an agent can open says it was requested by a program, warns against the
   master password, refuses names that are not one printable line, refuses the master
@@ -625,7 +628,8 @@ Guarantees we test for:
   part of it fail its integrity check (within the known limits below), and a vault that fails it is
   never overwritten;
 - a local vault's passphrase is set only in a terminal and never stored; it and the Vaultwarden
-  master password are refused as a secret, whichever vault the secret is going to;
+  master password are refused as a secret, whichever vault the secret is going to; when a vault
+  that is there cannot be asked (`bw` fails, the vault file cannot be read), nothing is stored;
 - env.json, auth.json and hook index writes are locked and atomic, a writer that lost its lock writes
   nothing, and a wired name is never overwritten without `--force`. The lock is the directory pi
   and omp use themselves (`<file>.lock`, beside the file a link leads to, and beside the link too),
@@ -657,10 +661,14 @@ it is written; keyshroud takes the first, and the second for the path it was its
 write that waits there cannot land once either lock is gone. What that leaves out: an older pi that
 reaches `auth.json` through a different link than keyshroud does (they then share no lock at all),
 so point both at the same path. The locks around calls to `bw`, the unlock dialog and the local
-vault's session files are simpler: one is taken over when its holder shows no sign of life for 30
-to 60 seconds, so a holder that was only stalled can overlap with the next one. That can mean a
-second dialog, a `bw` call that fails, or a session you have to open again; it does not put a value
-anywhere. A `.env.refs` can reference **any** item in your vault, not only the
+vault's session files are simpler: one is taken over when its holder shows no sign of life (30 s
+for the session files, 60 s for `bw`, whose holder renews it while it works; a dialog counts as
+open for 5 minutes and 30 s, the time it may stay on screen), so a holder that was only stalled can
+overlap with the next one. That can mean a second dialog, a `bw` call that fails, or a session you
+have to open again; it does not put a value anywhere. Claude Code's `settings.json` has no lock of
+its own: `claude-setup` is safe against another `claude-setup`, not against Claude Code writing the
+file at the same moment. The check that refuses a vault's own password as a secret asks `bw`: where
+`bw` is not installed there is nothing to ask, and the value is stored. A `.env.refs` can reference **any** item in your vault, not only the
 ones you wired, so read a cloned repo's `.env.refs` before running `--env-file`
 with it. `import` decides what is secret by heuristics and keeps everything else
 as a literal; check its plan before committing `.env.refs`. The Claude Code
@@ -686,8 +694,14 @@ also masked without its leading and trailing spaces or line breaks, and a value 
 JSON document (a PEM key, a service account file) is also masked run by run (20 or more letters, digits
 and `+/=_-`), so a key shown with line numbers or as a diff stays masked; values
 shorter than 6 characters are not redacted (to avoid noise), so don't wire short
-PINs. pi's `/secret`, `/vault_add` and `/vault_rotate` popups store a pasted value without the spaces or line breaks
-around it; for a value where those matter, use `keyshroud add --stdin`.
+PINs. Of the keys written into `auth.json` as plain text, one that is nothing but the name of a
+variable (`OPENAI_API_KEY`, `$OPENAI_API_KEY`) stands for that variable when it is set: its value is
+masked, the name is not (masking it would change every file that mentions the variable). And a
+`!command` there that is not a keyshroud reference is another program's: keyshroud does not run it
+to learn what it prints, so its output is masked only when the entry has a variable's name and is
+injected. pi's `/secret`, `/vault_add` and `/vault_rotate` popups store a pasted value without the spaces or line breaks
+around it; for a value where those matter, use `keyshroud add --stdin`, which keeps everything
+but one line break at the very end (end the input with two if the value ends with one).
 
 Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 

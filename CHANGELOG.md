@@ -5,6 +5,43 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.10.8] - 2026-11-13
+
+What the second reader found left over in 0.10.7 (review round 11).
+
+### Security
+- pi: a value is now masked before pi's environment holds it, and the masking of a `!command`
+  follows refreshes that come while it runs. In 0.10.7 a command started during a refresh could
+  get a new value in its environment with the old masking.
+- `secrets_run`: output collected up to the limit could end inside a character; the broken
+  character hid the start of a secret from the cut, so that start could be shown. The incomplete
+  bytes are now left out.
+- Masked values that were still left out: a reference in a wiring file that an env file
+  overrides under the same name; a reference under a provider's name in `auth.json`; a key with a
+  variable inside it (`prefix-$NAME`), now masked both as text and with the variable filled in.
+  References are read from a vault that is open (bw is not unlocked for them), and another
+  program's `!command` in `auth.json` is no longer run just to learn its output.
+- A value is not stored when it cannot be checked against a vault's own password: `bw` failing
+  for another reason than a wrong password, or a local vault file that cannot be read, now stops
+  `add` and `rotate`. A `bw lock` that fails after such a check is reported. (0.10.7 said the
+  shared login "is left locked"; it was locked again only if `bw lock` worked.)
+- An error from `bw` is cleaned of every place a submitted value stands in it, places that
+  overlap included (replacing one value could leave the tail of the next).
+- `claude-setup` writes through the same kind of lock as `auth.json`: a run that was stalled past
+  its lock replaces nothing, and the new text stays `0600` until it is in place (0.10.7 gave it
+  the old file's mode just before).
+
+### Fixed
+- pi: a `!command` runs in the shell set in your pi settings again (0.10.7 used pi's default).
+
+### Changed
+- README: which keys in `auth.json` are not masked (a bare variable name, another program's
+  `!command`); the real times after which the simpler locks are taken over; what `--stdin` does
+  with a final line break; where the password check has nothing to ask.
+- The 0.10.6 note about the hook index named a warning every command gives; only `get`, `inject`
+  and `api-key` give it. The 0.10.7 note about a command that cannot be started: it is reported
+  with the command's name and the error code.
+
 ## [0.10.7] - 2026-11-13
 
 What the second reader found left over in 0.10.6 (review round 10).
@@ -102,8 +139,8 @@ A review of the whole code base (own reading and an independent one, round 9).
   `main` with CI green, and the check for AI attribution covers more names.
 
 ### Changed
-- `wire` adds the value to the hook index at once (when the vault is open); a command says so when
-  it cannot update that index.
+- `wire` adds the value to the hook index at once (when the vault is open); `get`, `inject` and
+  `api-key` say so when they cannot update that index (other commands do not).
 - `scan` finds a value that spans lines.
 - `audit.jsonl` also records `api-key` and what pi's commands add, wire and rotate.
 - README: what is and is not masked in `auth.json`, what `--only` removes, the pi lock, Windows

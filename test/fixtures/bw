@@ -31,6 +31,7 @@ if (cmd === "--version") out("2026.1.0\n");
 else if (cmd === "status") out({ serverUrl: state.server ?? "https://vault.example.test", ...(state.email ? { userEmail: state.email } : {}), status: unlocked() ? "unlocked" : state.status === "unauthenticated" ? "unauthenticated" : "locked" });
 else if (cmd === "config" && sub === "server") { fs.mkdirSync(appdata, { recursive: true }); fs.writeFileSync(`${appdata}/data.json`, "{}"); state.server = key; save(); out("Saved setting `config`."); }
 else if (cmd === "unlock") {
+  if (process.env.FAKE_BW_UNLOCK_ERROR) die("An unexpected error occurred.");
   if (process.env.BW_PASSWORD !== (state.password ?? "master")) die("Invalid master password.");
   // A newer bw's first unlock of an older bw's data runs a migration that can fail.
   if (process.env.FAKE_BW_MIGRATION_ERROR && !state.migrated) { state.migrated = true; save(); die("[Encrypted Migrator] Error running migrations for user: u1 Error [KeyIdBackfillError]: API call failed during user key id backfill"); }
