@@ -124,6 +124,32 @@ keyshroud unlock
 Máy đã dùng keyshroud 0.7 (có `bw` đăng nhập, file của keyshroud, hoặc master password trong keychain)
 vẫn giữ Vaultwarden làm mặc định; không cần làm gì. Tham chiếu `keyshroud://…` và `bw://…` dùng song song được.
 
+### Secret manager của team: Vault, OpenBao, Infisical, 1Password, AWS, Google Cloud, Azure
+
+Công ty đã có sẵn secret manager? keyshroud đọc thẳng từ đó và không bao giờ ghi vào đó: secret vẫn
+nằm ở chỗ cũ, lệnh nhận giá trị thật, còn model chỉ thấy tên.
+
+```bash
+keyshroud source add vault --addr https://vault.example.com    # dùng token của `vault login`
+keyshroud wire --env DB_PASSWORD --item 'vault://secret/myapp/db#password'
+keyshroud run --only DB_PASSWORD -- ./migrate.sh
+```
+
+```dotenv
+# .env.refs
+DB_PASSWORD=vault://secret/myapp/db#password
+STRIPE_KEY=awssecrets://prod/stripe#api_key
+SENTRY_DSN=op://Engineering/Sentry/dsn
+```
+
+Tham chiếu: `vault://<mount>/<path>#<field>` (HashiCorp Vault, OpenBao; KV v1 và v2),
+`infisical://<project id>/<env>/NAME`, `op://…` (1Password), `awssecrets://…`, `awsssm://…`,
+`gcpsecrets://<project>/<secret>`, `azurekeyvault://<vault>/<secret>`. Vault/OpenBao đăng nhập bằng token
+của `vault login`, `--token` hoặc AppRole (`--role-id`); Infisical bằng machine identity
+(`keyshroud source add infisical --client-id ID`); các hệ còn lại dùng CLI của hãng (`op`, `aws`, `gcloud`,
+`az`) với phiên đăng nhập sẵn có. Tham chiếu không bao giờ chứa địa chỉ server, nên `.env.refs` của một
+repo lạ không thể gửi token của bạn đi nơi khác. Chi tiết (tiếng Anh): [Team secret managers](../README.md#team-secret-managers-vault-openbao-infisical-1password-aws-google-cloud-azure).
+
 ### Claude Code
 
 ```bash

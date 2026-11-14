@@ -5,6 +5,51 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-15
+
+keyshroud reads the secret managers teams already run. Nothing is copied: a reference names the
+secret, the command gets the value, the model sees the name.
+
+### Added
+- **Sources**, read-only references into other systems, usable wherever a reference is
+  (`.env.refs`, `wire --item`, `inject` templates, `get`):
+  - `vault://<mount>/<path>#<field>`: HashiCorp Vault and OpenBao, KV v1 and v2, namespaces,
+    a private CA. Signs in with the token of `vault login` (`~/.vault-token`), a token
+    (`--token`) or AppRole (`--role-id`).
+  - `infisical://<project id>/<environment>/[<folder>/]<NAME>`: Infisical, cloud or self-hosted,
+    with a machine identity (Universal Auth).
+  - `op://…` (1Password), `awssecrets://…` and `awsssm://…` (AWS Secrets Manager and SSM
+    Parameter Store), `gcpsecrets://…` (Google Cloud Secret Manager), `azurekeyvault://…`
+    (Azure Key Vault): through the vendor's own CLI and its sign-in; `#key` picks a key of a
+    JSON secret.
+- `keyshroud source`, `source add vault|infisical`, `source rm`: which server a source is and how
+  to sign in. The credential (token, AppRole secret id, client secret) is asked for like any
+  secret and kept as an item in keyshroud's vault; `sources.json` holds the address and a
+  reference to that item.
+- `test/live.test.ts` and CI's `sources` job run the sources against real servers: HashiCorp
+  Vault 2.2.2, OpenBao 2.7.2, Infisical 0.167.10, and the `aws` CLI against the moto emulator.
+  1Password, Google Cloud and Azure are tested with stand-in CLIs only.
+
+### Security
+- A source is never written to; `add`, `rotate` and `rm` refuse a source reference.
+- A reference cannot name a server (`?address=` is refused): the address comes from
+  `source add`, so a `.env.refs` from a cloned repository cannot send a token elsewhere. It must
+  be https (http on localhost only), is checked again before every request, redirects are not
+  followed, and the certificate is always checked (no option to skip it; `NODE_TLS_REJECT_UNAUTHORIZED=0`
+  does not reach it).
+- Source credentials, login tokens and the token in `~/.vault-token` are masked in output like
+  any other value (`<redacted:VAULT_SOURCE_TOKEN>`, `<redacted:INFISICAL_SOURCE_TOKEN>`).
+- A vendor CLI is started with a list of arguments (a Windows `.cmd` launcher through `cmd.exe`,
+  every argument escaped) and without keyshroud's vault credentials; no part of a reference can
+  become one of its options.
+- What a server or a vendor CLI says when it fails is never passed on (it could repeat a token
+  or a secret): an error gives the HTTP status or the kind of failure, in keyshroud's own words.
+- Before release, a second reader (GPT Sol 6.1) went through the change in four rounds. What it
+  found and this version fixes: Node's `NODE_TLS_REJECT_UNAUTHORIZED=0` reaching source requests,
+  a rotated source credential missing from the hook index, a cache without bounds, a late refusal
+  ending a newer login, a line break dropped from Google Cloud values, and three rounds on error
+  text taken from a server, which ended with not passing that text on at all.
+
 ## [0.10.11] - 2026-11-13
 
 What the second reader found left over in 0.10.10 (review round 14), both on Windows.

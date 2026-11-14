@@ -11,7 +11,8 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { BRAND } from "./brand.ts";
 import { buildRedactIndex, type RedactIndex } from "./redact.ts";
-import { ENV_NAME_RE, PASSPHRASE_ENV, isLoaderEnvName, isRef, isSelfCommand, itemNameProblem, legacyRefFor, localRefFor, parseEnvFile, parseRef, refFor, type SecretRef } from "./refs.ts";
+import { ENV_NAME_RE, PASSPHRASE_ENV, formatRef, isLoaderEnvName, isRef, isSelfCommand, isSourceRef, itemNameProblem, legacyRefFor, localRefFor, parseEnvFile, parseRef, refFor, refStore, type SecretRef } from "./refs.ts";
+import { cliFailure, fieldOf, infisicalLogin, infisicalRead, jsonField, sourceCommand, vaultCheck, vaultLogin, vaultRead, type Sources, type VaultSource } from "./sources.ts";
 import {
   derivePassphraseKey, findLocalItem, formatVersion, keychainService, newPassphraseKey, newVaultId, openSession, openVault, parseVaultFile, passphraseProblem,
   sealSession, sealVault, serializeVault, unwrapFromEnclave, VAULT_KIND, VaultFormatError, VaultVersionError, wrapForEnclave,
@@ -38,6 +39,9 @@ export const VAULT_FILE = join(CONFIG_DIR, "vault.json");
 // The default backend keyshroud picked on a machine with no bw setup ("local"),
 // or "bw" after `setup`; write either to switch.
 export const BACKEND_FILE = join(CONFIG_DIR, "backend");
+// The read-only sources `source add` set up: a server's address and the references its
+// credentials are kept under in keyshroud's own vault (no value).
+export const SOURCES_FILE = join(CONFIG_DIR, "sources.json");
 const VAULT_TOKEN_FILE = join(CONFIG_DIR, "vault.token");
 const VAULT_SESSION_FILE = join(CONFIG_DIR, "vault.session");
 
@@ -382,7 +386,7 @@ function vaultIndex(): Promise<VaultIndex> {
 let lastVaultError: string | null = null;
 // " (reason)" for an unresolved-names message: the unlock error, else why the vault could not be read.
 export function unresolvedReason(sessionError: string): string {
-  const reason = sessionError || [lastVaultError, lastLocalError].filter(Boolean).join("; ");
+  const reason = sessionError || [lastVaultError, lastLocalError, ...new Set([...sourceErrors.values()].map((said) => said.text))].filter(Boolean).join("; ");
   return reason ? ` (${reason})` : "";
 }
 function vaultErrorText(error: unknown): string {
@@ -417,6 +421,7 @@ async function lookupItem(itemName: string): Promise<VaultItem | null> {
 // `open: false` reads with the session this process has and never opens, renews or asks for one.
 export async function resolveRef(ref: SecretRef, opts: { open?: boolean } = {}): Promise<string | null> {
   if (ref.scheme === "local") return resolveLocalRef(ref);
+  if (refStore(ref) === null) return resolveSourceRef(ref, opts);
   if (opts.open !== false) {
     bwInUse = true;
     try { await ensureBwSession(); } catch {}
@@ -562,9 +567,16 @@ export async function ensureUnlocked(raws: string[], opts: SessionOptions = {}):
   if (errors.length) throw new Error(errors.join("; "));
 }
 
-function backendOf(raw: string): BackendName | null {
-  try { const ref = parseRef(raw); if (ref) return ref.scheme === "local" ? "local" : "bw"; } catch { return null; }
+// What a wired value is read from: one of keyshroud's vaults, a source, or neither (a literal,
+// another program's command).
+function originOf(raw: string): BackendName | "source" | null {
+  try { const ref = parseRef(raw); if (ref) return refStore(ref) ?? "source"; } catch { return null; }
   return isBwSource(raw) ? "bw" : null;
+}
+
+function backendOf(raw: string): BackendName | null {
+  const origin = originOf(raw);
+  return origin === "source" ? null : origin;
 }
 
 export function ensureBwSession(opts: SessionOptions = {}): Promise<string> {
@@ -1194,15 +1206,16 @@ export async function resolveEntries(entries: Array<{ name: string; raw: string 
   // pass costs one `bw list items` however many entries there are.
   const resolved = await Promise.all(entries.map(async ({ name, raw }) => {
     // A value this process put into its own environment is resolved again, so a rotation reaches
-    // it. From bw, the old value stays while the vault cannot be read (a session that ended);
-    // from the local vault it goes, so `lock` and the end of a session reach it.
-    const own = opts.injected?.[name] !== undefined && opts.injected[name] === process.env[name] ? backendOf(raw) : null;
+    // it. From bw or a source, the old value stays while it cannot be read (a session that ended,
+    // a server that is away); from the local vault it goes, so `lock` and the end of a session reach it.
+    const own = opts.injected?.[name] !== undefined && opts.injected[name] === process.env[name] ? originOf(raw) : null;
+    const kept = own !== null && own !== "local";
     const inherited = opts.preferProcessEnv && !own ? process.env[name] : undefined;
     if (inherited) return { name, value: inherited, secret: isSecretSource(raw) };
     if (!raw.trim()) return { name, value: "", secret: false };
     let value: string | null = null;
-    try { value = await resolveShellValue(raw); } catch { return { name, value: own === "bw" ? process.env[name] ?? null : null, secret: true }; }
-    if (!value && own === "bw") value = process.env[name] ?? null;
+    try { value = await resolveShellValue(raw); } catch { return { name, value: kept ? process.env[name] ?? null : null, secret: true }; }
+    if (!value && kept) value = process.env[name] ?? null;
     return { name, value, secret: isSecretSource(raw) };
   }));
   for (const { name, value, secret } of resolved) {
@@ -1219,7 +1232,7 @@ export async function resolveEntries(entries: Array<{ name: string; raw: string 
 // references and literals are allowed; `!command` values would be code execution.
 export async function envFileEntries(path: string): Promise<Array<{ name: string; raw: string }>> {
   return parseEnvFile(await readFile(path, "utf8")).map(({ name, value }) => {
-    if (value.trim().startsWith("!")) throw new Error(`${path}: ${name} uses a shell command; env files accept only bw:// references, ${BRAND.refScheme}:// references and literals`);
+    if (value.trim().startsWith("!")) throw new Error(`${path}: ${name} uses a shell command; env files accept only bw:// references, ${BRAND.refScheme}:// references, source references (vault://, …) and literals`);
     if (isLoaderEnvName(name)) throw new Error(`${path}: ${name} changes what programs load or run; env files cannot set it`);
     return { name, raw: value };
   });
@@ -1331,10 +1344,16 @@ function filledTemplate(raw: string, variable: (name: string) => string | undefi
 //   the same name, and one under a provider's name that pi alone uses. It is read from a vault
 //   that is open: a bw reference only with a session this process opened that has not run out,
 //   and without opening, renewing or asking for one (that can take seconds, or a Touch ID sheet,
-//   for a value nobody asked for); another program's `!command` is not run;
+//   for a value nobody asked for), a source's only when this process has read it already (no
+//   request, no CLI and its sign-in); another program's `!command` is not run;
 // - a key written out in a file (an API key pasted into pi's auth.json).
 // An entry that cannot be read (a reference that is not one, an item that is gone) is left out
 // by itself: the rest is still masked.
+async function heldValue(ref: SecretRef): Promise<string | null> {
+  const live = sessionVerifiedAt > 0 && Boolean(process.env.BW_SESSION) && (sessionExpiresAt === null || Date.now() < sessionExpiresAt);
+  return refStore(ref) !== "bw" || live ? resolveRef(ref, { open: false }) : null;
+}
+
 async function wiringFileValues(): Promise<Array<[string, string]>> {
   const found: Array<[string, string]> = [];
   for (const path of wiringFiles()) for (const [name, entry] of Object.entries(await readAuthEntries(path))) {
@@ -1343,8 +1362,7 @@ async function wiringFileValues(): Promise<Array<[string, string]>> {
     if (isSecretSource(raw)) {
       try {
         const ref = parseRef(raw);
-        const live = sessionVerifiedAt > 0 && Boolean(process.env.BW_SESSION) && (sessionExpiresAt === null || Date.now() < sessionExpiresAt);
-        const value = ref && (ref.scheme === "local" || live) ? await resolveRef(ref, { open: false }) : null;
+        const value = ref ? await heldValue(ref) : null;
         if (value) found.push([name, value]);
       } catch {}
       continue;
@@ -1370,6 +1388,18 @@ async function wiringFileValues(): Promise<Array<[string, string]>> {
 export async function indexedValues(wired: Record<string, string> = {}): Promise<Record<string, string>> {
   const values = indexValues(wired);
   for (const [name, value] of await wiringFileValues().catch(() => [])) addValue(values, name, value);
+  const helper = await helperToken().catch(() => null);
+  if (helper) addValue(values, SOURCE_TOKEN_LABEL.vault, helper);
+  // The sources' credentials, read from the vault they are kept in as the wiring's references
+  // are (no sign-in to a source): one that was rotated is masked before it is next used.
+  const { vault, infisical } = await readSources().catch(() => ({} as Sources));
+  for (const reference of [vault?.token, vault?.secretId, infisical?.clientSecret]) {
+    try {
+      const ref = reference ? parseRef(reference) : null;
+      const value = ref && refStore(ref) ? await heldValue(ref) : null;
+      if (ref && value) addValue(values, ref.item, value);
+    } catch {}
+  }
   return values;
 }
 
@@ -1385,6 +1415,8 @@ export function indexValues(wired: Record<string, string> = {}): Record<string, 
   if (localSessionSecret) addValue(values, "LOCAL_VAULT_SESSION", localSessionSecret);
   const passphrase = process.env[PASSPHRASE_ENV];
   if (passphrase) addValue(values, PASSPHRASE_ENV, passphrase);
+  // The newest under the label itself, the ones before it as `label (2)`, …
+  for (const [name, held] of sourceSecrets) for (const value of [...held].reverse()) addValue(values, name, value);
   return values;
 }
 
@@ -1392,7 +1424,7 @@ export function indexValues(wired: Record<string, string> = {}): Record<string, 
 // an env file passed to `run`) stay covered for later hook invocations. Every
 // unlock brings a new session token, so only the newest few of those are kept
 // (entries are newest first).
-const SESSION_INDEX_NAMES = new Set(["BW_SESSION", "LOCAL_VAULT_KEY", "LOCAL_VAULT_SESSION"]);
+const SESSION_INDEX_NAMES = new Set(["BW_SESSION", "LOCAL_VAULT_KEY", "LOCAL_VAULT_SESSION", "VAULT_SOURCE_TOKEN", "INFISICAL_SOURCE_TOKEN"]);
 export async function writeRedactIndex(values: Record<string, string>): Promise<RedactIndex> {
   await mkdir(CONFIG_DIR, { recursive: true, mode: 0o700 });
   // Read, merge and write as one step, so two commands at once each keep the other's entries.
@@ -1404,9 +1436,11 @@ async function mergeRedactIndex(values: Record<string, string>, write: (content:
   const index = buildRedactIndex(values, previous ?? undefined);
   const kept = new Map<string, number>();
   index.entries = index.entries.filter(({ name }) => {
-    if (!SESSION_INDEX_NAMES.has(name)) return true;
-    kept.set(name, (kept.get(name) ?? 0) + 1);
-    return kept.get(name)! <= 4;
+    // `NAME (2)` is an earlier value of NAME.
+    const base = name.replace(/ \(\d+\)$/, "");
+    if (!SESSION_INDEX_NAMES.has(base)) return true;
+    kept.set(base, (kept.get(base) ?? 0) + 1);
+    return kept.get(base)! <= 4;
   });
   // Nothing new (the usual case for `get` and `api-key`): the file is left alone.
   if (previous && previous.entries.length === index.entries.length && index.entries.every((entry) => previous.entries.some((old) => old.mac === entry.mac))) return previous;
@@ -1807,6 +1841,7 @@ async function usesBw(): Promise<boolean> {
 
 // `keyshroud://Name` (or `local://Name`) or `bw://Name` picks the backend; a plain name uses the default one.
 export async function parseItemArg(arg: string): Promise<{ backend: BackendName; name: string }> {
+  if (isSourceRef(arg)) throw new Error(`${arg} is a secret in another system: ${BRAND.name} reads it (${BRAND.bin} wire --env NAME --item '${arg}') and never stores or changes it there`);
   for (const [prefix, backend] of [[`${BRAND.refScheme}://`, "local"], ["local://", "local"], ["bw://", "bw"]] as const) {
     if (!arg.startsWith(prefix)) continue;
     const ref = parseRef(arg);
@@ -2483,6 +2518,202 @@ export async function rekeyLocal(to?: VaultKeyType): Promise<{ from: VaultKeyTyp
   return { from, to: target, items, notice };
 }
 
+// ---------------------------------------------------------------------------
+// Sources (sources.ts): the secret managers keyshroud reads and never writes. `source add`
+// writes which server it is and under which reference its credential is kept in keyshroud's own
+// vault. A secret reference never names a server, so one in a file from a cloned repo cannot
+// send a credential anywhere else.
+
+// Where `vault login` and `bao login` leave the token they got.
+const VAULT_TOKEN_HELPER = join(homedir(), ".vault-token");
+const SOURCE_TOKEN_LABEL = { vault: "VAULT_SOURCE_TOKEN", infisical: "INFISICAL_SOURCE_TOKEN" } as const;
+// A login's token, used until shortly before it ends; one login at a time for each source.
+interface SourceLogin { token: Promise<string>; until: number }
+const sourceLogins = new Map<string, SourceLogin>();
+// The credentials and tokens of the sources this process holds, by the label each is masked
+// under: a credential's item, and a source's login tokens. A label keeps its last few values
+// (a rotation; a new login while a read still uses the token before it).
+const sourceSecrets = new Map<string, string[]>();
+// What was read, by reference without its #key: a KV secret's fields, or a value's text. Kept
+// as long as the other vault's items are, a failed read for half a minute from when it failed;
+// a timer takes out what is past that, and the oldest goes when there are too many.
+interface SourceRead { at: number; failed?: boolean; timer?: NodeJS.Timeout; read: Promise<Record<string, unknown> | string> }
+const sourceCache = new Map<string, SourceRead>();
+function forgetSourceRead(key: string): void {
+  clearTimeout(sourceCache.get(key)?.timer);
+  sourceCache.delete(key);
+}
+const SOURCE_CACHE_MAX = 256;
+const SOURCE_CACHE_MAX_CHARS = 256 * 1024;
+const sourceReadOver = (entry: SourceRead) => Date.now() - entry.at >= (entry.failed ? 30000 : SECRET_CACHE_TTL_MS);
+// Why a read failed, for "unresolved" messages: by reference, for as long as a failed read is
+// kept, the last few. keyshroud's own words (sourceFailure), never a source's.
+const sourceErrors = new Map<string, { text: string; timer: NodeJS.Timeout }>();
+function sourceError(ref: string, text: string | null): void {
+  clearTimeout(sourceErrors.get(ref)?.timer);
+  sourceErrors.delete(ref);
+  if (text === null) return;
+  while (sourceErrors.size >= 64) sourceError(sourceErrors.keys().next().value!, null);
+  sourceErrors.set(ref, { text, timer: setTimeout(() => sourceError(ref, null), 30000).unref() });
+}
+
+export async function readSources(): Promise<Sources> { return await readAuthEntries(SOURCES_FILE) as Sources; }
+
+export async function writeSource<K extends keyof Sources>(name: K, source: Sources[K] | null): Promise<void> {
+  // Settled before this command leaves its first file: a config directory with files and no
+  // choice written down reads as a 0.7 (bw) setup.
+  await defaultBackend();
+  await updateFile(SOURCES_FILE, async (target, write) => {
+    const next = await readAuthForUpdate(target);
+    if (source) next[name] = source; else delete next[name];
+    await write(`${JSON.stringify(next, null, 2)}\n`);
+  });
+  sourceLogins.delete(name);
+  for (const key of [...sourceCache.keys()]) forgetSourceRead(key);
+  for (const key of [...sourceErrors.keys()]) sourceError(key, null);
+}
+
+function holdSourceSecret(label: string, value: string): string {
+  const earlier = (sourceSecrets.get(label) ?? []).filter((held) => held !== value);
+  sourceSecrets.delete(label);
+  sourceSecrets.set(label, [...earlier, value].slice(-4));
+  while (sourceSecrets.size > 16) sourceSecrets.delete(sourceSecrets.keys().next().value!);
+  return value;
+}
+
+// A source's credential, from the reference `source add` kept it under (masked under its item's name).
+async function sourceCredential(name: keyof typeof SOURCE_TOKEN_LABEL, reference: string, opts: { open?: boolean }): Promise<string> {
+  const ref = parseRef(reference);
+  const value = ref && refStore(ref) ? await resolveRef(ref, opts) : null;
+  if (!ref || !value) throw new Error(`the credential of the ${name} source (${reference}) could not be read: ${BRAND.bin} source add ${name} sets it again`);
+  return holdSourceSecret(ref.item, value);
+}
+
+// A login with the credential kept under `reference`.
+function sourceLogin(name: keyof typeof SOURCE_TOKEN_LABEL, reference: string, opts: { open?: boolean }, login: (credential: string) => Promise<{ token: string; ttl: number }>): SourceLogin {
+  const held = sourceLogins.get(name);
+  if (held && Date.now() < held.until) return held;
+  const entry: SourceLogin = { until: Infinity, token: sourceCredential(name, reference, opts).then(login).then(({ token, ttl }) => {
+    if (ttl) entry.until = Date.now() + Math.max(0, ttl - 30) * 1000;
+    return holdSourceSecret(SOURCE_TOKEN_LABEL[name], token);
+  }) };
+  entry.token.catch(() => { if (sourceLogins.get(name) === entry) sourceLogins.delete(name); });
+  sourceLogins.set(name, entry);
+  return entry;
+}
+
+// A read with a login's token. One the server no longer takes (revoked, or ended early) is not
+// used again; a later login is left alone.
+async function readWithLogin<T>(name: keyof typeof SOURCE_TOKEN_LABEL, login: SourceLogin, read: (token: string) => Promise<T>): Promise<T> {
+  try { return await read(await login.token); } catch (error) {
+    const status = (error as { status?: number }).status;
+    if ((status === 401 || status === 403) && sourceLogins.get(name) === login) sourceLogins.delete(name);
+    throw error;
+  }
+}
+
+// Why a source could not be read, on one line. The words are keyshroud's (sources.ts: a status,
+// a kind of failure); a reference's own path and a KV secret's field names are what else is in them.
+function sourceFailure(error: unknown): string {
+  return (error instanceof Error ? error.message : String(error)).replace(/\s+/g, " ").trim().slice(0, 300);
+}
+
+// The token `vault login` left, when that is what the Vault source is read with.
+async function helperToken(): Promise<string | null> {
+  const vault = (await readSources()).vault;
+  if (!vault || vault.token || vault.roleId) return null;
+  return (await readFile(VAULT_TOKEN_HELPER, "utf8").catch(() => "")).trim() || null;
+}
+
+async function vaultToken(source: VaultSource, opts: { open?: boolean }): Promise<string> {
+  if (source.token) return sourceCredential("vault", source.token, opts);
+  const token = await helperToken();
+  if (!token) throw new Error(`no token in ${shownPath(VAULT_TOKEN_HELPER)}: run \`vault login\` (or \`bao login\`) first`);
+  return holdSourceSecret(SOURCE_TOKEN_LABEL.vault, token);
+}
+
+// A vendor's CLI, with its own sign-in and without keyshroud's vault credentials.
+async function sourceCli(command: string, args: string[]): Promise<string> {
+  try {
+    const target = invocation(command, args);
+    return (await execRun(target.command, target.args, { env: childEnv(), timeout: 30000, maxBuffer: 4 * 1024 * 1024, windowsVerbatimArguments: target.verbatim })).stdout;
+  } catch (error) {
+    if ((error as { spawnCode?: string }).spawnCode === "ENOENT") throw new Error(`the ${command} command is not installed (or not on PATH)`);
+    throw new Error(cliFailure(command, error instanceof Error ? error.message : String(error)));
+  }
+}
+
+async function readSource(ref: SecretRef, opts: { open?: boolean }): Promise<Record<string, unknown> | string> {
+  if (ref.scheme !== "vault" && ref.scheme !== "infisical") {
+    const { command, args, value } = sourceCommand(ref);
+    return value(await sourceCli(command, args));
+  }
+  // The server is the one `source add` was given, never one a reference names (vals' ?address=).
+  if (ref.params && Object.keys(ref.params).length) throw new Error(`${ref.scheme}://${ref.item} takes no ?parameters`);
+  const sources = await readSources();
+  const source = sources[ref.scheme];
+  if (!source) throw new Error(`no ${ref.scheme} source is set up: ${BRAND.bin} source add ${ref.scheme}`);
+  const ca = source.caFile ? await readFile(source.caFile) : undefined;
+  if ("clientSecret" in source) return readWithLogin("infisical", sourceLogin("infisical", source.clientSecret, opts, (secret) => infisicalLogin(source, secret, ca)), (token) => infisicalRead(source, token, ref.item, ca));
+  if (source.roleId && source.secretId) return readWithLogin("vault", sourceLogin("vault", source.secretId, opts, (secret) => vaultLogin(source, secret, ca)), (token) => vaultRead(source, token, ref.item, ca));
+  return vaultRead(source, await vaultToken(source, opts), ref.item, ca);
+}
+
+// `open: false`: only what this process has read already (no request, no CLI).
+async function resolveSourceRef(ref: SecretRef, opts: { open?: boolean }): Promise<string | null> {
+  const what = formatRef({ ...ref, field: "password" });
+  const asked = formatRef(ref);
+  let entry = sourceCache.get(what);
+  if (entry && sourceReadOver(entry)) { forgetSourceRead(what); entry = undefined; }
+  if (!entry) {
+    if (opts.open === false) return null;
+    const fresh: SourceRead = { at: Date.now(), read: readSource(ref, opts) };
+    // Gone when its time is over, also from a process that reads nothing more (one that went
+    // before it was read needs no timer).
+    const until = (ms: number) => { if (sourceCache.get(what) === fresh) fresh.timer = setTimeout(() => { if (sourceCache.get(what) === fresh) sourceCache.delete(what); }, Math.min(ms, 2 ** 31 - 1)).unref(); };
+    // Not kept: anything with the cache off, and an answer of a size no secret has.
+    fresh.read.then((read) => until(SECRET_CACHE_TTL_MS && (typeof read === "string" ? read : JSON.stringify(read)).length <= SOURCE_CACHE_MAX_CHARS ? SECRET_CACHE_TTL_MS : 0),
+      () => { fresh.failed = true; fresh.at = Date.now(); until(30000); });
+    while (sourceCache.size >= SOURCE_CACHE_MAX) forgetSourceRead(sourceCache.keys().next().value!);
+    sourceCache.set(what, entry = fresh);
+  }
+  try {
+    const read = await entry.read;
+    const key = typeof ref.field === "object" ? ref.field.custom : null;
+    const value = typeof read !== "string" ? fieldOf(read, key, what) : key === null ? read : jsonField(read, key, what);
+    sourceError(asked, null);
+    return value;
+  } catch (error) {
+    sourceError(asked, sourceFailure(error));
+    return null;
+  }
+}
+
+// `source add`: whether the server takes what was just set up. Throws why not.
+export async function checkSource(name: "vault" | "infisical"): Promise<void> {
+  const sources = await readSources();
+  try {
+    if (name === "vault" && sources.vault) {
+      const ca = sources.vault.caFile ? await readFile(sources.vault.caFile) : undefined;
+      const source = sources.vault;
+      await vaultCheck(source, source.roleId && source.secretId ? await sourceLogin(name, source.secretId, {}, (secret) => vaultLogin(source, secret, ca)).token : await vaultToken(source, {}), ca);
+    } else if (name === "infisical" && sources.infisical) {
+      const source = sources.infisical;
+      const ca = source.caFile ? await readFile(source.caFile) : undefined;
+      await sourceLogin(name, source.clientSecret, {}, (secret) => infisicalLogin(source, secret, ca)).token;
+    }
+  } catch (error) {
+    throw new Error(sourceFailure(error));
+  }
+}
+
+// The wiring entry of a source reference (`vault://…`): read through keyshroud, as a local item's is.
+export function sourceReferenceFor(reference: string): string {
+  parseRef(reference);
+  if (reference.includes("'")) throw new Error("A reference wired to a name cannot contain a single quote");
+  return `!${BRAND.bin} get '${reference}'`;
+}
+
 // `list` and `rm`: names, ids and the auth.json entries wired to them; never a value.
 export interface ItemRow { backend: BackendName; id: string; name: string; ref: string; duplicate: boolean; wired: string[] }
 
@@ -2502,7 +2733,7 @@ async function authReferences(): Promise<Array<{ path: string; name: string; ref
 
 // By id, or by name when the name is unique (as lookups resolve). Any field of the item counts.
 function refersTo(ref: SecretRef, row: Pick<ItemRow, "backend" | "id" | "name" | "duplicate">): boolean {
-  if ((ref.scheme === "local" ? "local" : "bw") !== row.backend) return false;
+  if (refStore(ref) !== row.backend) return false;
   return ref.item === row.id || (!row.duplicate && normalizeItemName(ref.item) === normalizeItemName(row.name));
 }
 

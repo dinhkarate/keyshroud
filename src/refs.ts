@@ -7,14 +7,35 @@
 //                                  local://<item> is the older spelling and still reads the same
 //
 // Segments are percent-decoded, so an item named "a/b" is written bw://a%2Fb.
+//
+// Sources (sources.ts) are the secret managers keyshroud only reads from. All but op:// have
+// one shape, <scheme>://<path>[?<param>=<value>][#<key>], and none names a server:
+//
+//   vault://<mount>/<path>[#<field>]            HashiCorp Vault or OpenBao, KV v1 or v2
+//   infisical://<project id>/<env>/[<folder>/]<NAME>
+//   op://<vault>/<item>/[<section>/]<field>     1Password's own syntax, given to `op` as written
+//   awssecrets://<name or ARN>[?region=R][#<json key>]
+//   awsssm://<parameter>[?region=R]             awsssm:///prod/db names the parameter /prod/db
+//   gcpsecrets://<project>/<secret>[?version=N][#<json key>]
+//   azurekeyvault://<vault name>/<secret>[/<version>][#<json key>]
+//
+// Without a #key the reference is the whole value (for vault://, the secret's only field).
 // The legacy shell forms `!bw get <field> '<item>'` and `!…/bw-get '<item>'`
 // are recognized so existing auth.json entries keep resolving without a shell,
 // as is `!keyshroud get '<ref>'`, which auth.json holds for local items.
 import { BRAND } from "./brand.ts";
 
 export type RefField = "password" | "username" | "notes" | "totp" | "uri" | "id";
-// No scheme: bw.
-export interface SecretRef { item: string; field: RefField | { custom: string }; scheme?: "local" }
+export const SOURCE_SCHEMES = ["vault", "infisical", "op", "awssecrets", "awsssm", "gcpsecrets", "azurekeyvault"] as const;
+export type SourceScheme = (typeof SOURCE_SCHEMES)[number];
+// No scheme: bw. For a source, `item` is the path, `field` its #key ("password": none) and
+// `params` what follows a `?`.
+export interface SecretRef { item: string; field: RefField | { custom: string }; scheme?: "local" | SourceScheme; params?: Record<string, string> }
+
+// The vault an item reference reads; null for a source, which has no items of keyshroud's.
+export function refStore(ref: SecretRef): "bw" | "local" | null {
+  return ref.scheme === undefined ? "bw" : ref.scheme === "local" ? "local" : null;
+}
 
 const FIELDS: ReadonlySet<string> = new Set(["password", "username", "notes", "totp", "uri", "id"]);
 const LEGACY_RE = /^!\s*(?:bw\s+get\s+(password|username|notes|totp|uri)|(?:[^\s]*\/)?bw-get)\s+'([^']+)'\s*$/;
@@ -36,9 +57,15 @@ function localPrefix(value: string): string | null {
   return null;
 }
 function isLocalUrl(value: string): boolean { return localPrefix(value) !== null; }
+function sourceScheme(value: string): SourceScheme | null {
+  for (const scheme of SOURCE_SCHEMES) if (value.startsWith(`${scheme}://`)) return scheme;
+  return null;
+}
+
+export function isSourceRef(raw: string): boolean { return sourceScheme(raw) !== null; }
 
 export function isRef(raw: string): boolean {
-  return raw.startsWith("bw://") || isLocalUrl(raw) || LEGACY_RE.test(raw) || SELF_GET_RE.test(raw);
+  return raw.startsWith("bw://") || isLocalUrl(raw) || sourceScheme(raw) !== null || LEGACY_RE.test(raw) || SELF_GET_RE.test(raw);
 }
 
 // A `!keyshroud …` value: never run through a shell.
@@ -49,12 +76,31 @@ export function parseRef(raw: string): SecretRef | null {
   const legacy = LEGACY_RE.exec(value);
   if (legacy) return { item: legacy[2], field: (legacy[1] as RefField | undefined) ?? "password" };
   const self = SELF_GET_RE.exec(value);
-  // Only a bw:// or keyshroud:// reference inside: anything else (a variable name) would ask auth.json again.
+  // Only a reference inside: anything else (a variable name) would ask auth.json again.
   if (self) return parseUrlRef(self[1].trim());
   return parseUrlRef(value);
 }
 
+function parseSourceRef(scheme: SourceScheme, rest: string): SecretRef {
+  if (scheme === "op") {
+    if (!rest) throw new Error("Secret reference has no path");
+    return { scheme, item: rest, field: "password" };
+  }
+  const hash = rest.indexOf("#");
+  const [path, query] = (hash < 0 ? rest : rest.slice(0, hash)).split(/\?(.*)/s);
+  const item = decode(path);
+  if (!item) throw new Error("Secret reference has no path");
+  // vals writes the key as `#/key`.
+  const key = hash < 0 ? "" : decode(rest.slice(hash + 1)).replace(/^\//, "");
+  if (hash >= 0 && !key) throw new Error("Secret reference has an empty key after #");
+  const ref: SecretRef = { scheme, item, field: key ? { custom: key } : "password" };
+  if (query) ref.params = Object.fromEntries(new URLSearchParams(query));
+  return ref;
+}
+
 function parseUrlRef(value: string): SecretRef | null {
+  const source = sourceScheme(value);
+  if (source) return parseSourceRef(source, value.slice(source.length + 3));
   const local = localPrefix(value);
   const scheme = value.startsWith("bw://") ? "bw" : local ? "local" : null;
   if (!scheme) return null;
@@ -73,6 +119,12 @@ function parseUrlRef(value: string): SecretRef | null {
 }
 
 export function formatRef(ref: SecretRef): string {
+  if (ref.scheme === "op") return `op://${ref.item}`;
+  if (refStore(ref) === null) {
+    const written = (text: string) => text.replace(/[%#?'}\s]/g, (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0")}`);
+    const query = ref.params && Object.keys(ref.params).length ? `?${new URLSearchParams(ref.params)}` : "";
+    return `${ref.scheme}://${written(ref.item)}${query}${typeof ref.field === "object" ? `#${written(ref.field.custom)}` : ""}`;
+  }
   const base = `${ref.scheme ? BRAND.refScheme : "bw"}://${encodeURIComponent(ref.item)}`;
   if (typeof ref.field === "object") return `${base}/fields/${encodeURIComponent(ref.field.custom)}`;
   return ref.field === "password" ? base : `${base}/${ref.field}`;

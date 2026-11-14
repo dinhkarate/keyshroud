@@ -128,6 +128,32 @@ keyshroud 0.7 を使っていたマシン（`bw` がログイン済み、keyshro
 `vaultwarden-api-client-secret` もキーチェーンに入れておくと、`bw` のログインが切れたとき（logged out）に
 keyshroud が自動で再ログインします。セッションが終わったあとはマスターパスワードを聞かれます。
 
+### チームのシークレットマネージャー：Vault、OpenBao、Infisical、1Password、AWS、Google Cloud、Azure
+
+会社にすでにシークレットマネージャーがあるなら、keyshroud はそこから読み取るだけで、書き込みは一切しません。
+シークレットは元の場所に残り、コマンドは本物の値を受け取り、モデルに見えるのは名前だけです。
+
+```bash
+keyshroud source add vault --addr https://vault.example.com    # `vault login` のトークンで読む
+keyshroud wire --env DB_PASSWORD --item 'vault://secret/myapp/db#password'
+keyshroud run --only DB_PASSWORD -- ./migrate.sh
+```
+
+```dotenv
+# .env.refs
+DB_PASSWORD=vault://secret/myapp/db#password
+STRIPE_KEY=awssecrets://prod/stripe#api_key
+SENTRY_DSN=op://Engineering/Sentry/dsn
+```
+
+参照：`vault://<mount>/<path>#<field>`（HashiCorp Vault、OpenBao。KV v1 / v2）、
+`infisical://<project id>/<env>/NAME`、`op://…`（1Password）、`awssecrets://…`、`awsssm://…`、
+`gcpsecrets://<project>/<secret>`、`azurekeyvault://<vault>/<secret>`。Vault / OpenBao は `vault login` のトークン、
+`--token`、または AppRole（`--role-id`）、Infisical は machine identity
+（`keyshroud source add infisical --client-id ID`）、それ以外は各社の CLI（`op`、`aws`、`gcloud`、`az`）の
+ログインをそのまま使います。参照にサーバーのアドレスは書けないため、クローンしたリポジトリの `.env.refs` が
+あなたのトークンを別の場所へ送ることはできません。詳細（英語）：[Team secret managers](../README.md#team-secret-managers-vault-openbao-infisical-1password-aws-google-cloud-azure)。
+
 ### Claude Code
 
 CLI をインストールしてから、プラグイン（マスク用フック + スキル）を入れます。

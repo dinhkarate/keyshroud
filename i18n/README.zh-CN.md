@@ -126,6 +126,31 @@ keyshroud unlock
 *Settings → Security → Keys → API key* 中获取）也存进钥匙串，这样 `bw` 登录过期（logged out）时
 keyshroud 会自动重新登录；会话结束后仍需输入 master password。
 
+### 团队的密钥管理系统：Vault、OpenBao、Infisical、1Password、AWS、Google Cloud、Azure
+
+公司已经有密钥管理系统？keyshroud 直接从那里读取，并且从不写入：密钥留在原处，命令拿到真实的值，模型只看到名字。
+
+```bash
+keyshroud source add vault --addr https://vault.example.com    # 使用 `vault login` 的 token
+keyshroud wire --env DB_PASSWORD --item 'vault://secret/myapp/db#password'
+keyshroud run --only DB_PASSWORD -- ./migrate.sh
+```
+
+```dotenv
+# .env.refs
+DB_PASSWORD=vault://secret/myapp/db#password
+STRIPE_KEY=awssecrets://prod/stripe#api_key
+SENTRY_DSN=op://Engineering/Sentry/dsn
+```
+
+引用：`vault://<mount>/<path>#<field>`（HashiCorp Vault、OpenBao；KV v1 和 v2）、
+`infisical://<project id>/<env>/NAME`、`op://…`（1Password）、`awssecrets://…`、`awsssm://…`、
+`gcpsecrets://<project>/<secret>`、`azurekeyvault://<vault>/<secret>`。Vault / OpenBao 用 `vault login` 的 token、
+`--token` 或 AppRole（`--role-id`）登录；Infisical 用 machine identity
+（`keyshroud source add infisical --client-id ID`）；其余系统使用厂商 CLI（`op`、`aws`、`gcloud`、`az`）已有的登录。
+引用里不能写服务器地址，所以克隆来的仓库里的 `.env.refs` 无法把你的 token 发到别处。
+详细说明（英文）：[Team secret managers](../README.md#team-secret-managers-vault-openbao-infisical-1password-aws-google-cloud-azure)。
+
 ### Claude Code
 
 先安装 CLI，再安装插件（遮蔽 hook + skill）：

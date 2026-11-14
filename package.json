@@ -1,8 +1,8 @@
 {
   "name": "keyshroud",
-  "version": "0.10.11",
+  "version": "0.11.0",
   "mcpName": "io.github.dinhkarate/keyshroud",
-  "description": "Let AI coding agents use your secrets without ever seeing them. Encrypted local vault or self-hosted Vaultwarden/Bitwarden, masked output, MCP server, Claude Code + pi plugins.",
+  "description": "Let AI coding agents use your secrets without ever seeing them. Encrypted local vault, self-hosted Vaultwarden/Bitwarden, or your team's HashiCorp Vault, OpenBao, Infisical, 1Password, AWS, Google Cloud or Azure secrets; masked output, MCP server, Claude Code + pi plugins.",
   "keywords": [
     "secrets",
     "ai-agents",
@@ -26,7 +26,14 @@
     "gemini-cli",
     "api-keys",
     "secrets-management",
-    "mcp-server"
+    "mcp-server",
+    "hashicorp-vault",
+    "openbao",
+    "infisical",
+    "1password",
+    "aws-secrets-manager",
+    "azure-key-vault",
+    "gcp-secret-manager"
   ],
   "license": "MIT",
   "author": "dinhkarate (https://github.com/dinhkarate)",

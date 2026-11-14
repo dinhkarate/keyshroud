@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { buildRedactIndex, createRedactFeed, createRedactor, createRedactStream, redactWithIndex } from "../src/redact.ts";
-import { formatRef, isLoaderEnvName, itemNameProblem, legacyRefFor, looksSecret, parseEnvFile, parseRef } from "../src/refs.ts";
+import { formatRef, isLoaderEnvName, isRef, itemNameProblem, legacyRefFor, looksSecret, parseEnvFile, parseRef, refStore } from "../src/refs.ts";
 
 test("parseRef handles bw:// fields, custom fields, and encoding", () => {
   assert.deepEqual(parseRef("bw://GitHub CLI token"), { item: "GitHub CLI token", field: "password" });
@@ -29,6 +29,24 @@ test("keyshroud:// and local:// both name local vault items; local:// is written
   assert.equal(formatRef(parseRef("local://a%2Fb")!), "keyshroud://a%2Fb");
   assert.deepEqual(parseRef("!keyshroud get 'local://Item'"), { item: "Item", field: "password", scheme: "local" });
   for (const raw of ["keyshroud:///x", "local:///var/data"]) assert.equal(parseRef(raw), null);
+});
+
+test("source references: one shape, the key after #, parameters after ?, op:// as 1Password writes it", () => {
+  assert.deepEqual(parseRef("vault://secret/app/db#password"), { scheme: "vault", item: "secret/app/db", field: { custom: "password" } });
+  assert.deepEqual(parseRef("vault://secret/single"), { scheme: "vault", item: "secret/single", field: "password" });
+  assert.deepEqual(parseRef("vault://team/kv/with%20space#a%23b"), { scheme: "vault", item: "team/kv/with space", field: { custom: "a#b" } });
+  assert.deepEqual(parseRef("vault://secret/data/app#/key"), { scheme: "vault", item: "secret/data/app", field: { custom: "key" } });
+  assert.deepEqual(parseRef("awssecrets://prod/db?region=eu-west-1#password"), { scheme: "awssecrets", item: "prod/db", field: { custom: "password" }, params: { region: "eu-west-1" } });
+  assert.deepEqual(parseRef("awsssm:///prod/db"), { scheme: "awsssm", item: "/prod/db", field: "password" });
+  assert.deepEqual(parseRef("gcpsecrets://p/s?version=3"), { scheme: "gcpsecrets", item: "p/s", field: "password", params: { version: "3" } });
+  assert.deepEqual(parseRef("op://Private Vault/GitHub/one-time password?attribute=otp"), { scheme: "op", item: "Private Vault/GitHub/one-time password?attribute=otp", field: "password" });
+  assert.deepEqual(parseRef("!keyshroud get 'infisical://proj/dev/backend/API_KEY'"), { scheme: "infisical", item: "proj/dev/backend/API_KEY", field: "password" });
+  for (const raw of ["vault://", "vault://#key", "vault://secret/app#", "op://", "azurekeyvault://%zz"]) assert.throws(() => parseRef(raw), /Secret reference|percent-encoding/, raw);
+  for (const raw of ["vault://secret/app/db#password", "vault://team/kv/with%20space#a%23b", "awssecrets://prod/db?region=eu-west-1#password", "awsssm:///prod/db", "op://Private Vault/GitHub/token", "azurekeyvault://kv/name/abc"]) assert.equal(formatRef(parseRef(raw)!), raw);
+  for (const raw of ["vault://x/y", "op://a/b/c", "awssecrets://x", "awsssm://x", "gcpsecrets://p/s", "azurekeyvault://v/s", "infisical://p/e/N"]) { assert.ok(isRef(raw), raw); assert.equal(refStore(parseRef(raw)!), null); assert.equal(looksSecret("API_TOKEN", raw), false); }
+  assert.equal(refStore(parseRef("bw://Item")!), "bw");
+  assert.equal(refStore(parseRef("keyshroud://Item")!), "local");
+  for (const raw of ["vaults://x/y", "https://vault.example.net/v1/secret", "VAULT://x/y"]) assert.equal(parseRef(raw), null, raw);
 });
 
 test("legacyRefFor refuses quotes that would break the shell form", () => {

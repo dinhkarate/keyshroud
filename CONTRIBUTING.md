@@ -20,7 +20,8 @@ do not need a Vaultwarden account. Never use real secrets in tests or issues.
 |---|---|
 | `src/core.ts` | Runtime-neutral core: backends (local vault, bw session and snapshot), references, auth.json. Must not import agent APIs. |
 | `src/vault.ts` | Local vault file format: header checks, AES-256-GCM seal/open, scrypt, passphrase sessions. Pure, no I/O. |
-| `src/refs.ts` | `keyshroud://` and `bw://` reference grammar and env-file parser. |
+| `src/refs.ts` | `keyshroud://`, `bw://` and source (`vault://`, `awssecrets://`, …) reference grammar and env-file parser. |
+| `src/sources.ts` | The secret managers keyshroud only reads: the Vault/OpenBao and Infisical HTTP calls, and the command line for each vendor CLI. No core imports. |
 | `src/redact.ts` | Plaintext and fingerprint-index redaction, streaming redactor. |
 | `src/cli.ts` | CLI entry point. |
 | `src/mcp.ts` | MCP stdio server. |

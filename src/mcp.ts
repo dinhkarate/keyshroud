@@ -20,7 +20,7 @@ const TOOLS = [
   {
     name: "secrets_list",
     description: "List the names of secrets wired for this machine. Never returns values.",
-    inputSchema: { type: "object", properties: { env_file: { type: "string", description: `Optional dotenv file of ${BRAND.refScheme}:// or bw:// references to include` } } },
+    inputSchema: { type: "object", properties: { env_file: { type: "string", description: `Optional dotenv file of references (${BRAND.refScheme}://, bw://, vault://, awssecrets://, …) to include` } } },
   },
   {
     name: "secrets_run",
@@ -32,7 +32,7 @@ const TOOLS = [
         command: { type: "string", description: "Shell command run with /bin/sh -c" },
         cwd: { type: "string", description: "Working directory" },
         only: { type: "array", items: { type: "string" }, description: "Inject only these names" },
-        env_file: { type: "string", description: `Dotenv file of ${BRAND.refScheme}:// or bw:// references to add` },
+        env_file: { type: "string", description: `Dotenv file of references (${BRAND.refScheme}://, bw://, vault://, awssecrets://, …) to add` },
         timeout_ms: { type: "number", description: "Kill the command after this many milliseconds (default 120000)" },
       },
     },
@@ -84,6 +84,8 @@ async function runTool(args: Json): Promise<Json> {
   let vaultError = "";
   try { await core.ensureUnlocked(entries.map((entry) => entry.raw), { prompt: true }); } catch (error) { vaultError = error instanceof Error ? error.message : String(error); }
   const env = await core.resolveEntries(entries);
+  // Now: why a source did not answer is kept for half a minute.
+  const unresolved = env.missing.length ? `unresolved: ${env.missing.join(", ")}${core.unresolvedReason(vaultError)}` : null;
   await core.audit("run", Object.keys(env.secrets), "mcp");
   const redactor = createRedactor(await core.redactionValues(env.secrets));
   // So a Claude Code hook knows these values too, should another tool show one later.
@@ -151,7 +153,7 @@ async function runTool(args: Json): Promise<Json> {
   const stderr = out("stderr");
   const lines = [
     `exit: ${code}`,
-    env.missing.length ? `unresolved: ${env.missing.join(", ")}${core.unresolvedReason(vaultError)}` : null,
+    unresolved,
     `--- stdout ---\n${stdout}`,
     `--- stderr ---\n${stderr}`,
     truncated ? `[output truncated to ${OUTPUT_LIMIT / 2} characters per stream]` : null,

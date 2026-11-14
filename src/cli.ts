@@ -12,18 +12,19 @@ import * as core from "./core.ts";
 import { runClaudeHook } from "./hooks.ts";
 import { serveMcp } from "./mcp.ts";
 import { buildRedactIndex, compileIndexSearch, createRedactor, createRedactStream, type RedactIndex } from "./redact.ts";
-import { ENV_NAME_RE, formatRef, isLoaderEnvName, isRef, itemNameProblem, looksSecret, parseDotenvStrict, parseRef, refFor, type DotenvEntry, type SecretRef } from "./refs.ts";
+import { ENV_NAME_RE, SOURCE_SCHEMES, formatRef, isLoaderEnvName, isRef, isSourceRef, itemNameProblem, looksSecret, parseDotenvStrict, parseRef, refFor, type DotenvEntry, type SecretRef } from "./refs.ts";
+import { sourceAddress, type InfisicalSource, type VaultSource } from "./sources.ts";
 import type { VaultKeyType } from "./vault.ts";
 
 const usage = `Usage: ${BRAND.bin} <command> [options]
 
 Secrets
-  get <ENV_NAME | ${BRAND.refScheme}://ref | bw://ref>
+  get <ENV_NAME | ${BRAND.refScheme}://ref | bw://ref | source ref>
                                    Print one resolved value to stdout
   run [--env-file F]... [--only A,B] [--no-auth] [--mask|--no-mask] -- <cmd> [args]
                                    Run a command with secrets injected (alias: exec)
   inject [-i template] [-o out] [--force]
-                                   Render {{ ${BRAND.refScheme}://ref }} and {{ bw://ref }} placeholders
+                                   Render {{ ${BRAND.refScheme}://ref }}, {{ bw://ref }} and {{ source ref }} placeholders
   redact                           Copy stdin to stdout with vault secrets masked
   scan [paths...]                  Find vault secret values in files (exit 1 on leaks)
   env [--shell]                    List wired names (or print shell exports)
@@ -37,7 +38,25 @@ Secrets
   rm --item ITEM [--yes]           Delete an item and unwire its variables (dry run unless --yes;
                                    --yes needs a terminal or Touch ID; bw: own agent account only)
   wire --env NAME --item ITEM [--target pi|omp|both] [--force]
+                                   ITEM may be a source reference (vault://secret/app#password)
   unwire --env NAME [--target pi|omp|both]
+
+Sources (read-only: the secret managers a team runs)
+  vault://<mount>/<path>[#<field>]            HashiCorp Vault or OpenBao (KV v1 and v2)
+  infisical://<project id>/<env>/[<folder>/]<NAME>
+  op://<vault>/<item>/<field>                 1Password, through its \`op\` CLI
+  awssecrets://<name>[#<key>], awsssm://<parameter>            AWS, through \`aws\`
+  gcpsecrets://<project>/<secret>[#<key>]                      Google Cloud, through \`gcloud\`
+  azurekeyvault://<vault>/<secret>[#<key>]                     Azure, through \`az\`
+  source                           List the sources that are set up, and the CLIs found
+  source add vault [--addr URL] [--namespace NS] [--ca-file PEM] [--token | --role-id ID] [--stdin|--dialog]
+                                   Reads with the token of \`vault login\` (~/.vault-token), or asks
+                                   for a token (--token) or an AppRole secret id (--role-id) and
+                                   keeps it in the ${BRAND.name} vault. Without the flags: VAULT_ADDR,
+                                   VAULT_NAMESPACE and VAULT_CACERT (or BAO_…) as they are set now
+  source add infisical --client-id ID [--addr URL] [--ca-file PEM] [--stdin|--dialog]
+                                   A machine identity (Universal Auth); asks for its client secret
+  source rm vault|infisical
 
 Vault (the local vault by default; bw/Vaultwarden once set up)
   setup --email EMAIL [--server URL] [--confirm-unlock | --unattended] [--registered]
@@ -210,7 +229,7 @@ async function inject(args: string[]): Promise<void> {
   const input = valueAfter(args, "-i");
   const output = valueAfter(args, "-o");
   const template = input ? await readFile(input, "utf8") : await readStdin();
-  const pattern = new RegExp(`\\{\\{\\s*((?:bw|${BRAND.refScheme}|local)://[^\\s}]+(?:\\s+[^\\s}]+)*?)\\s*\\}\\}`, "g");
+  const pattern = new RegExp(`\\{\\{\\s*((?:${["bw", BRAND.refScheme, "local", ...SOURCE_SCHEMES].join("|")})://[^\\s}]+(?:\\s+[^\\s}]+)*?)\\s*\\}\\}`, "g");
   const refs = [...new Set([...template.matchAll(pattern)].map((match) => match[1]))];
   let vaultError = "";
   try { await core.ensureUnlocked(refs, { prompt: true }); } catch (error) { vaultError = error instanceof Error ? error.message : String(error); }
@@ -631,6 +650,70 @@ async function rmCommand(args: string[]): Promise<void> {
   for (const failed of result.failed) { console.error(`removed ${shown(row.ref)}, but could not unwire it from ${failed.path} (${failed.error}): remove the entries for it there by hand`); process.exitCode = 3; }
 }
 
+// A source's credential goes into the default vault as an item of its own (a second `source add`
+// replaces it), and the source keeps only the reference to it.
+async function keepCredential(args: string[], itemName: string): Promise<string> {
+  const backend = await core.defaultBackend();
+  await core.openBackend(backend, { prompt: true });
+  if (backend === "local") await core.prepareLocalVault({ prompt: true });
+  const secret = await readSecret(args, `Paste the ${itemName.toLowerCase()}: `, itemName);
+  if ((await core.findItems(itemName, backend)).some((item) => item.name.toLowerCase() === itemName.toLowerCase())) await core.rotateSecretItem({ itemName, secret, backend });
+  else { const { created } = await core.createSecretItem({ itemName, secret, backend }); if (created) console.error(created); }
+  return refFor(itemName, backend);
+}
+
+async function sourceCommand(args: string[]): Promise<void> {
+  const action = args.shift() ?? "list";
+  if (action === "list") {
+    requireKnownFlags(args, []);
+    const { vault, infisical } = await core.readSources();
+    if (vault) console.log(`vault addr=${vault.addr}${vault.namespace ? ` namespace=${vault.namespace}` : ""} auth=${vault.roleId ? `approle role-id=${vault.roleId} secret-id=${vault.secretId}` : vault.token ? `token ${vault.token}` : "token of `vault login` (~/.vault-token)"}${vault.caFile ? ` ca=${vault.caFile}` : ""}`);
+    if (infisical) console.log(`infisical addr=${infisical.addr} auth=universal client-id=${infisical.clientId} client-secret=${infisical.clientSecret}${infisical.caFile ? ` ca=${infisical.caFile}` : ""}`);
+    if (!vault && !infisical) console.log(`no source is set up (${BRAND.bin} source add vault --addr URL)`);
+    console.log(`CLIs: ${(["op", "aws", "gcloud", "az"] as const).map((name) => `${name}=${core.nowhereOnPath(name) ? "missing" : "found"}`).join(" ")}`);
+    return;
+  }
+  const name = args.shift();
+  if ((action !== "add" && action !== "rm") || (name !== "vault" && name !== "infisical")) fail(usage, 2);
+  if (action === "rm") {
+    requireKnownFlags(args, []);
+    await core.writeSource(name, null);
+    await core.audit("source", [name], "cli");
+    console.log(`removed source=${name} (its credential, if one was kept, is still in the vault: ${BRAND.bin} list)`);
+    return;
+  }
+  requireKnownFlags(args, name === "vault" ? ["--addr", "--namespace", "--ca-file", "--role-id"] : ["--addr", "--ca-file", "--client-id"], name === "vault" ? ["--token", "--stdin", "--dialog"] : ["--stdin", "--dialog"]);
+  // Without the flags, what the vault and bao commands themselves go by; the result line says which.
+  const fromEnv = (suffix: string) => name === "vault" ? process.env[`BAO_${suffix}`]?.trim() || process.env[`VAULT_${suffix}`]?.trim() || undefined : undefined;
+  const given = valueAfter(args, "--addr") ?? fromEnv("ADDR") ?? (name === "infisical" ? "https://app.infisical.com" : undefined);
+  if (!given) fail("source add vault needs --addr https://… (or VAULT_ADDR)", 2);
+  let addr: string;
+  try { addr = sourceAddress(given); } catch (error) { fail(error instanceof Error ? error.message : String(error), 2); }
+  const ca = valueAfter(args, "--ca-file") ?? fromEnv("CACERT");
+  const caFile = ca ? resolve(ca) : undefined;
+  if (caFile && !(await readFile(caFile, "utf8").catch(() => "")).includes("-----BEGIN CERTIFICATE-----")) fail(`${caFile} is not a PEM certificate file`, 2);
+  if (name === "vault") {
+    const roleId = valueAfter(args, "--role-id"); const namespace = valueAfter(args, "--namespace") ?? fromEnv("NAMESPACE");
+    if (roleId && args.includes("--token")) fail("--token and --role-id are two ways to sign in: pick one", 2);
+    const source: VaultSource = { addr, ...(namespace ? { namespace } : {}), ...(caFile ? { caFile } : {}) };
+    if (roleId) { source.roleId = roleId; source.secretId = await keepCredential(args, "Source vault secret id"); }
+    else if (args.includes("--token")) source.token = await keepCredential(args, "Source vault token");
+    await core.writeSource("vault", source);
+  } else {
+    const clientId = valueAfter(args, "--client-id");
+    if (!clientId) fail("source add infisical needs --client-id (a machine identity with Universal Auth)", 2);
+    const source: InfisicalSource = { addr, ...(caFile ? { caFile } : {}), clientId, clientSecret: await keepCredential(args, "Source infisical client secret") };
+    await core.writeSource("infisical", source);
+  }
+  await core.audit("source", [name], "cli");
+  const verified = await core.checkSource(name).then(() => "yes", (error: Error) => `no (${error.message})`);
+  // So a Claude Code hook masks the credential from now on.
+  try { await core.refreshRedactIndex(); } catch {}
+  const source = (await core.readSources())[name] as VaultSource | undefined;
+  console.log(`source=${name} addr=${addr}${source?.namespace ? ` namespace=${source.namespace}` : ""}${caFile ? ` ca=${caFile}` : ""} verified=${verified}`);
+  if (verified !== "yes") process.exitCode = 3;
+}
+
 const KEY_TYPES: readonly VaultKeyType[] = ["keychain", "secure-enclave", "passphrase", "dpapi"];
 async function rekeyCommand(args: string[]): Promise<void> {
   requireKnownFlags(args, ["--to"]);
@@ -785,6 +868,7 @@ async function main(): Promise<void> {
     if (command === "list") { await listCommand(args); return; }
     if (command === "rm") { await rmCommand(args); return; }
     if (command === "rekey") { await rekeyCommand(args); return; }
+    if (command === "source") { await sourceCommand(args); return; }
     if (command === "setup") { await setupCommand(args); return; }
     if (command === "migrate") { await migrateCommand(args); return; }
     if (command === "rotate") {
@@ -800,8 +884,12 @@ async function main(): Promise<void> {
       const envName = valueAfter(args, "--env"); const itemArg = valueAfter(args, "--item");
       if (!envName || !itemArg || !ENV_NAME_RE.test(envName)) fail(usage, 2);
       if (isLoaderEnvName(envName)) fail(`${envName} changes what programs load or run; it cannot be wired to a secret`, 2);
-      const { backend, name: itemName } = await parseItem(itemArg);
-      const reference = core.referenceFor(itemName, backend);
+      // A source reference is wired as it is written; an item by its name in one of the vaults.
+      const item = isSourceRef(itemArg) ? null : await parseItem(itemArg);
+      const itemName = item?.name ?? itemArg;
+      let reference: string;
+      if (item) reference = core.referenceFor(item.name, item.backend);
+      else { try { reference = core.sourceReferenceFor(itemArg); } catch (error) { fail(error instanceof Error ? error.message : String(error), 2); } }
       const targets = targetList(valueAfter(args, "--target"));
       for (const path of targets) { const result = await core.writeAuthEntry(path, envName, reference, { overwrite: args.includes("--force") }); if (!result.ok) fail(result.message, 5); }
       // So a Claude Code hook masks the value from now on (when the vault is open: wire itself never asks).

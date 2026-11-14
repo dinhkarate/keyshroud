@@ -12,7 +12,8 @@
 **Keep API keys out of Claude Code, Codex, Cursor, Cline, OpenCode, Gemini CLI, pi and omp** —
 secrets stay in an encrypted vault on your machine (or in your own
 [Vaultwarden](https://github.com/dani-garcia/vaultwarden) or Bitwarden, to share them between
-machines), and every value is masked before the model reads it.
+machines, or in the secret manager your team already runs: HashiCorp Vault, OpenBao, Infisical,
+1Password, AWS, Google Cloud, Azure), and every value is masked before the model reads it.
 
 [![npm](https://img.shields.io/npm/v/keyshroud.svg)](https://www.npmjs.com/package/keyshroud)
 [![Downloads](https://img.shields.io/npm/dm/keyshroud.svg)](https://www.npmjs.com/package/keyshroud)
@@ -20,7 +21,7 @@ machines), and every value is masked before the model reads it.
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/node/v/keyshroud.svg)](package.json)
 
-[🚀 Quickstart](#quickstart) · [🔐 Local vault](#the-local-vault) · [🔄 Sync with Vaultwarden](#sync-across-machines-vaultwarden-or-bitwarden) · [🔌 Supported agents](#supported-agents) · [⚙️ How it works](#how-it-works) · [❓ FAQ](#faq) · [🛡️ Security model](#security-model) · [🌐 Website](https://keyshroud.dev)
+[🚀 Quickstart](#quickstart) · [🔐 Local vault](#the-local-vault) · [🔄 Sync with Vaultwarden](#sync-across-machines-vaultwarden-or-bitwarden) · [🏢 Team secret managers](#team-secret-managers-vault-openbao-infisical-1password-aws-google-cloud-azure) · [🔌 Supported agents](#supported-agents) · [⚙️ How it works](#how-it-works) · [❓ FAQ](#faq) · [🛡️ Security model](#security-model) · [🌐 Website](https://keyshroud.dev)
 
 [🇻🇳 Tiếng Việt](i18n/README.vi.md) · [🇨🇳 简体中文](i18n/README.zh-CN.md) · [🇯🇵 日本語](i18n/README.ja-JP.md)
 
@@ -54,6 +55,7 @@ webhooks, databases. The usual options are bad:
 - ✅ **Masked output** — any value that reaches stdout/stderr becomes `<redacted:GH_TOKEN>`
 - ✅ **Nothing to set up** — an encrypted vault file with its key in your OS keychain; no account, no server
 - ✅ **Sync if you want it** — Vaultwarden on a $5 VPS or a Raspberry Pi, or Bitwarden, for several machines
+- ✅ **Works with what your team has** — reads HashiCorp Vault, OpenBao, Infisical, 1Password, AWS, Google Cloud and Azure, and never writes there
 - ✅ **Free** — MIT-licensed, no telemetry
 
 ## Features
@@ -70,6 +72,7 @@ webhooks, databases. The usual options are bad:
 | 🔎 **`scan`** | Find vault values that leaked into your working tree (pre-commit friendly): text files up to 2 MB, not `.git`, `node_modules`, `dist`, `.next`, `.venv` or links. |
 | ⚡ **Fast** | The local vault answers in milliseconds, offline. With Vaultwarden: one batched `bw list items` per session instead of one `bw get` (~3 s) per secret. |
 | 🔄 **Optional sync** | Vaultwarden on a $5 VPS or a Raspberry Pi, or Bitwarden, when the same secrets should reach several machines. `keyshroud://` and `bw://` references work side by side. |
+| 🏢 **Team secret managers** | `vault://secret/app#password`, `infisical://…`, `op://…`, `awssecrets://…`, `awsssm://…`, `gcpsecrets://…`, `azurekeyvault://…`: read-only [sources](#team-secret-managers-vault-openbao-infisical-1password-aws-google-cloud-azure), injected and masked like any other secret. |
 | 🧾 **Audit log** | `audit.jsonl` records which *names* were used, when, by which command. Never values. |
 
 ## Supported agents
@@ -94,6 +97,11 @@ the agent with `keyshroud run --env-file .env.refs -- claude`. The plugin's hook
 
 **"I already self-host Vaultwarden."** Log `bw` in to it and run `keyshroud doctor`: a machine with
 a `bw` login keeps Vaultwarden as the default, and keyshroud adds no server of its own.
+
+**"My company keeps its secrets in HashiCorp Vault."** `keyshroud source add vault --addr https://vault.example.com`
+once, then `DB_PASSWORD=vault://secret/myapp/db#password` in `.env.refs` (or `keyshroud wire`). The agent
+runs `keyshroud run -- …` and sees the name; the value is read from Vault and masked in the output.
+The same goes for [OpenBao, Infisical, 1Password, AWS, Google Cloud and Azure](#team-secret-managers-vault-openbao-infisical-1password-aws-google-cloud-azure).
 
 **"I like `op run` but don't want 1Password."** `keyshroud run` is the same idea —
 references in, masked output out — with the vault on your machine or on a server you host.
@@ -243,6 +251,94 @@ keyshroud migrate --yes                          # copy them; references keep wo
   end. Unlock it again with `keyshroud unlock --unattended`.
 - Self-hosted Vaultwarden with `SIGNUPS_ALLOWED=false`: invite the address from the admin page
   (`/admin`), or allow signups for a minute, then pass `--registered` once the account exists.
+
+### Team secret managers: Vault, OpenBao, Infisical, 1Password, AWS, Google Cloud, Azure
+
+A company usually has a secret manager already. keyshroud reads from it and never writes there, so a
+secret kept in HashiCorp Vault reaches a command the way a local one does: by name, with its value
+masked in the output. These are *sources*: a reference says which secret, and nothing is copied into
+keyshroud's vault.
+
+```bash
+# HashiCorp Vault or OpenBao: name the server once
+keyshroud source add vault --addr https://vault.example.com    # reads with the token of `vault login`
+
+# then wire a name to a secret there, or put the reference in .env.refs
+keyshroud wire --env DB_PASSWORD --item 'vault://secret/myapp/db#password'
+keyshroud run --only DB_PASSWORD -- ./migrate.sh
+```
+
+```dotenv
+# .env.refs: safe to commit, names only
+DB_PASSWORD=vault://secret/myapp/db#password
+STRIPE_KEY=awssecrets://prod/stripe#api_key
+SENTRY_DSN=op://Engineering/Sentry/dsn
+```
+
+| System | Reference | Signs in with | Tested against |
+|---|---|---|---|
+| HashiCorp Vault, OpenBao (KV v1 and v2) | `vault://<mount>/<path>#<field>` | `source add vault`: the token of `vault login`, a token, or AppRole | real servers in CI: Vault 2.2.2, OpenBao 2.7.2 (namespaces on OpenBao) |
+| Infisical (cloud or self-hosted) | `infisical://<project id>/<environment>/[<folder>/]<NAME>` | `source add infisical`: a machine identity (Universal Auth) | a real self-hosted server in CI (0.167.10) |
+| AWS Secrets Manager | `awssecrets://<name or ARN>[?region=R][#<json key>]` | your `aws` CLI | the real `aws` CLI against the moto emulator, in CI |
+| AWS SSM Parameter Store | `awsssm://<parameter>[?region=R]` (`awsssm:///prod/db` is `/prod/db`) | your `aws` CLI | same |
+| 1Password | `op://<vault>/<item>/[<section>/]<field>`, as 1Password writes it | your `op` CLI | a stand-in `op`: the command line from 1Password's documentation |
+| Google Cloud Secret Manager | `gcpsecrets://<project>/<secret>[?version=N][#<json key>]` | your `gcloud` CLI | a stand-in `gcloud`, likewise |
+| Azure Key Vault | `azurekeyvault://<vault name>/<secret>[/<version>][#<json key>]` | your `az` CLI | a stand-in `az`, likewise |
+
+The last three have no open-source server to test against, so only the command keyshroud runs is
+checked; tell us in an issue if one misbehaves on a real account.
+
+**Vault and OpenBao.** `source add vault` takes `--addr` (or `VAULT_ADDR` / `BAO_ADDR` as it is set when
+you run it), `--namespace` (`VAULT_NAMESPACE`) and `--ca-file` (`VAULT_CACERT`, a PEM file for a private
+CA), checks that the server accepts the sign-in, and writes them to `~/.config/keyshroud/sources.json`.
+Three ways to sign in:
+
+- nothing more: the token `vault login` (or `bao login`) left in `~/.vault-token`, so OIDC, LDAP or
+  whatever your team uses to log in keeps working and keyshroud stores no credential;
+- `--token`: asks for a token (masked prompt, dialog or `--stdin`) and keeps it in keyshroud's vault as the item `Source vault token`;
+- `--role-id ID`: AppRole, for machines and CI. Asks for the secret id, keeps it as the item
+  `Source vault secret id`, and logs in at `auth/approle` when a secret is needed.
+
+`#field` picks one field of the secret; without it, a secret with a single field gives that field, and
+one with several is an error that lists the field names. The mount may be several segments deep
+(`vault://team/kv/app#key`): keyshroud asks the server where the mount ends and whether it is KV v1 or v2,
+and reads only KV mounts.
+
+**Infisical.** `keyshroud source add infisical --client-id ID` (add `--addr` for a self-hosted server)
+asks for the machine identity's client secret and keeps it as the item `Source infisical client secret`.
+The project id is the one in the project's settings; `infisical://<id>/prod/STRIPE_KEY` is at the root
+folder, `infisical://<id>/prod/payments/STRIPE_KEY` in `/payments`.
+
+**1Password, AWS, Google Cloud, Azure.** Nothing to set up in keyshroud: it runs the vendor's CLI
+(`op read`, `aws secretsmanager get-secret-value`, `aws ssm get-parameter --with-decryption`,
+`gcloud secrets versions access`, `az keyvault secret show`) with the sign-in that CLI already has
+(profile, SSO, service account, `OP_SERVICE_ACCOUNT_TOKEN`). `#key` picks one key of a secret that is a
+JSON document. `keyshroud source` lists what is set up and which of these CLIs it found.
+
+What holds for all of them:
+
+- **Read-only.** `add`, `rotate` and `rm` refuse a source reference; keyshroud has no code that writes to a source.
+- **A reference never names a server.** For Vault, OpenBao and Infisical the address comes from
+  `source add`, so a `.env.refs` in a cloned repository cannot send your token somewhere else;
+  `?address=…` and other parameters a reference does not know are refused. A vendor's CLI goes by its
+  own configuration (profile, endpoint, proxy), of which a reference can pick only the AWS `?region=`.
+- **HTTPS only** for Vault, OpenBao and Infisical, except `http://` on localhost for a dev server.
+  The certificate is always checked (there is no option to skip it, and `NODE_TLS_REJECT_UNAUTHORIZED=0`
+  does not reach it), and redirects are not followed.
+- **Errors in keyshroud's own words.** What a server or a vendor's CLI says when it fails is not
+  passed on (it could repeat a token or a secret): you get the HTTP status (`HTTP 403 (not allowed)`),
+  or which kind of failure it was (`aws is not signed in`, `aws was refused access`,
+  `aws found no such secret`). For the full message, run the vendor's CLI yourself in a terminal.
+- **Credentials stay in keyshroud's vault** and are masked like any other value, as are the tokens a
+  login returns (`<redacted:VAULT_SOURCE_TOKEN>`, `<redacted:INFISICAL_SOURCE_TOKEN>`).
+- **Values are not stored**, only kept in memory by a long-running process (the pi extension, the MCP
+  server) for at most `KEYSHROUD_CACHE_TTL_MS` (`0`: not at all), 256 references at a time. Each
+  `keyshroud run` reads them again. A value is passed on as the source stores it, a line break at its
+  end included (store with `echo -n`, or `printf`).
+- `keyshroud source rm vault|infisical` forgets the server; the credential item stays until you `keyshroud rm` it.
+
+Not built in yet: Doppler, Bitwarden Secrets Manager, CyberArk Conjur, Akeyless, Vault auth methods
+other than token and AppRole, and Vault's dynamic secrets (database, AWS, PKI engines).
 
 ## How it works
 
@@ -416,7 +512,7 @@ OpenCode: `opencode mcp add keyshroud -- keyshroud mcp`.
 ## CLI reference
 
 ```text
-keyshroud get <ENV_NAME | keyshroud://ref | bw://ref>   print one value (for scripts; not for agents)
+keyshroud get <ENV_NAME | keyshroud://ref | bw://ref | source ref>   print one value (for scripts; not for agents)
 keyshroud run [--env-file F]... [--only A,B] [--no-auth] [--mask|--no-mask] -- <cmd>
 keyshroud inject [-i template] [-o out] [--force]
 keyshroud redact < log.txt
@@ -429,6 +525,10 @@ keyshroud wire --env NAME --item ITEM [--target pi|omp|both] [--force]
 keyshroud unwire --env NAME [--target pi|omp|both]
 keyshroud list                                     item references and the variables wired to them (names only)
 keyshroud rm --item ITEM [--yes]                   delete an item and unwire it (dry run unless --yes)
+keyshroud source                                   the sources that are set up, and the vendor CLIs found
+keyshroud source add vault [--addr URL] [--namespace NS] [--ca-file PEM] [--token | --role-id ID] [--stdin|--dialog]
+keyshroud source add infisical --client-id ID [--addr URL] [--ca-file PEM] [--stdin|--dialog]
+keyshroud source rm vault|infisical
 keyshroud setup --email EMAIL [--server URL] [--confirm-unlock | --unattended] [--registered]   (Vaultwarden)
 keyshroud migrate [--item NAME]... [--env-file F]... [--yes]                                    (Vaultwarden)
 keyshroud migrate --to local [--yes]                                                            (Vaultwarden -> local vault)
@@ -442,7 +542,8 @@ keyshroud api-key --item ITEM
 keyshroud link-cli [--dir DIR] [--force]
 ```
 
-`--item` takes a name (stored in the default vault), `keyshroud://Name` or `bw://Name`.
+`--item` takes a name (stored in the default vault), `keyshroud://Name` or `bw://Name`; for `wire` also a
+[source reference](#team-secret-managers-vault-openbao-infisical-1password-aws-google-cloud-azure) such as `vault://secret/app#password`.
 
 `rm` prints what it would do (delete a local item permanently, or move a bw item to the bw trash, and
 which variables it unwires) until you add `--yes`. With `--yes` it needs a terminal, or
@@ -476,8 +577,8 @@ keyshroud import --yes           # store them and write .env.refs
 keyshroud run --env-file .env.refs -- npm test
 ```
 
-**Exit codes:** `0` ok · `2` usage · `3` vault locked or unavailable · `4` secret
-missing or item name ambiguous · `5` refusing to overwrite existing state.
+**Exit codes:** `0` ok · `2` usage · `3` vault locked or unavailable, or a source that did not accept
+the sign-in · `4` secret missing or item name ambiguous · `5` refusing to overwrite existing state.
 `run` exits with the child's code.
 
 ### References
@@ -494,6 +595,17 @@ missing or item name ambiguous · `5` refusing to overwrite existing state.
 | `bw://a%2Fb` | item named `a/b` (`keyshroud://a%2Fb` alike) |
 | `!bw get password 'Item'` | legacy auth.json form, still supported |
 | `local://GitHub token` | the first spelling of `keyshroud://`, still read the same way |
+| `vault://secret/myapp/db#password` | field `password` of the KV secret `myapp/db` on the mount `secret/` (HashiCorp Vault, OpenBao) |
+| `infisical://<project id>/prod/STRIPE_KEY` | the secret `STRIPE_KEY` of environment `prod` (a folder goes before the name) |
+| `op://Engineering/Sentry/dsn` | what `op read` gives for it (1Password) |
+| `awssecrets://prod/stripe#api_key` | key `api_key` of a JSON secret in AWS Secrets Manager (`?region=eu-west-1` picks the region) |
+| `awsssm:///prod/db/password` | the parameter `/prod/db/password` in AWS SSM Parameter Store, decrypted |
+| `gcpsecrets://my-project/stripe-key` | the latest version in Google Cloud Secret Manager (`?version=3` for another) |
+| `azurekeyvault://my-vault/stripe-key` | the current version in Azure Key Vault (`/<version>` for another) |
+| `!keyshroud get 'vault://secret/app#key'` | the env.json / auth.json form `wire` writes for a source reference |
+
+Source references share one shape, `<scheme>://<path>[?param=value][#key]`, with `%23`, `%3F` and `%25`
+for a `#`, `?` or `%` in the path; `op://` is passed to `op` as it is written.
 
 Item lookup is case-insensitive by name or exact by id. Duplicate names fail
 closed (exit `4`) instead of guessing; the local vault refuses to create one.
@@ -504,10 +616,10 @@ closed (exit `4`) instead of guessing; the local vault refuses to create one.
 |---|---|---|
 | `KEYSHROUD_BACKEND` | the `backend` file | `local` or `bw`: where new items go and which vault opens by default |
 | `KEYSHROUD_VAULT_KEY` | per OS | key mode when the local vault is created: `keychain`, `dpapi`, `passphrase` or `secure-enclave` (Touch ID); anything else is an error |
-| `KEYSHROUD_CACHE_TTL_MS` | `3600000` | in-memory Vaultwarden snapshot + session check lifetime; `0` disables |
+| `KEYSHROUD_CACHE_TTL_MS` | `3600000` | in-memory Vaultwarden snapshot + session check lifetime, and how long a long-running process keeps a value read from a source; `0` disables |
 | `KEYSHROUD_SESSION_TTL_MS` | `1800000` | how long an unlocked session lasts (Vaultwarden, or a passphrase or Touch ID vault) |
 | `KEYSHROUD_LOCK_TIMER` | on | `0` skips the background timer (sessions then end on the next call) |
-| `KEYSHROUD_CONFIG_DIR` | `$XDG_CONFIG_HOME/keyshroud` | `vault.json`, `env.json` (wiring), `backend`, sessions, `bw/` (after `setup`), master-password hash, redact index, audit log |
+| `KEYSHROUD_CONFIG_DIR` | `$XDG_CONFIG_HOME/keyshroud` | `vault.json`, `env.json` (wiring), `sources.json` (servers of the sources), `backend`, sessions, `bw/` (after `setup`), master-password hash, redact index, audit log |
 | `KEYSHROUD_KEYCHAIN_MASTER` | `vaultwarden-master-password` | keychain service names (after `setup`: `keyshroud-…`) |
 | `KEYSHROUD_KEYCHAIN_CLIENT_ID` | `vaultwarden-api-client-id` | |
 | `KEYSHROUD_KEYCHAIN_CLIENT_SECRET` | `vaultwarden-api-client-secret` | |
@@ -521,7 +633,8 @@ Vaultwarden (or the official Bitwarden cloud) is optional: use it to have the sa
 machines, or a copy on a server.
 
 **Do secrets leave my machine?** Not with the local vault. With Vaultwarden or Bitwarden, only between
-`bw` and your server. keyshroud has no backend of its own and sends no telemetry; values go into the
+`bw` and your server; with a [source](#team-secret-managers-vault-openbao-infisical-1password-aws-google-cloud-azure),
+only from that server to your machine. keyshroud has no backend of its own and sends no telemetry; values go into the
 environment of the command you run.
 
 **I used keyshroud 0.7. What changes?** Nothing. A machine with a `bw` login, keyshroud's files, wired
@@ -539,6 +652,10 @@ them. Other machines that use the same Vaultwarden are not affected.
 **How do I back up the local vault?** `vault.json` is encrypted, so copy it anywhere; it opens only with
 its key, which stays in this machine's keychain (or your passphrase). If you lose the machine, you lose
 the key. For a real backup, or the same secrets on several machines, use Vaultwarden or Bitwarden.
+
+**We use HashiCorp Vault (or AWS, 1Password, …) at work. Do I have to move the secrets?** No.
+keyshroud reads them where they are: see [team secret managers](#team-secret-managers-vault-openbao-infisical-1password-aws-google-cloud-azure).
+It never writes to those systems, and what your account may read there is still decided by their policies.
 
 **Can I use it in CI or a Docker build?** Yes, with a passphrase vault. Create it once in a terminal
 (`KEYSHROUD_VAULT_KEY=passphrase keyshroud unlock`), add the secrets, and copy `vault.json` into the job
@@ -649,7 +766,18 @@ Guarantees we test for:
   `NODE_OPTIONS`, `LD_*`, `DYLD_*`, `BASH_ENV`, `GIT_SSH_COMMAND`, …), which are
   also never wired or injected (the list covers the common ones, not every tool's:
   an env file still configures the program it is used with);
-- an unparseable `env.json` or `auth.json` is never overwritten.
+- an unparseable `env.json` or `auth.json` is never overwritten;
+- a [source](#team-secret-managers-vault-openbao-infisical-1password-aws-google-cloud-azure) is only
+  read, at the address `source add` was given: a reference cannot name a server, the address must be
+  https (http on localhost only; checked when it is set and again before every request), redirects are
+  not followed, the certificate is checked whatever Node's environment says, and the token goes in a
+  header, never a URL or argv. A vendor's CLI is started with a list of arguments, not a command line
+  (on Windows a `.cmd` launcher such as `az.cmd` or `gcloud.cmd` runs through `cmd.exe`, with every
+  argument escaped), without keyshroud's vault credentials in its environment, and no part of a
+  reference can become one of its options. What a server or a vendor's CLI says when it fails is never
+  passed on: an error names the reference, the HTTP status or the kind of failure, in keyshroud's
+  own words (and, for a KV secret with several fields, the names of its fields). Source credentials, login tokens and the token in `~/.vault-token` are
+  masked like any other value.
 
 Known limits: the local vault's integrity check proves a file was sealed with its key, not that it is
 the latest one or who sealed it. A program that can write `vault.json` can put an older copy back, and
@@ -672,7 +800,8 @@ its own: `claude-setup` is safe against another `claude-setup` (a stalled one re
 widens no file but the one it wrote), not against Claude Code writing the file at the same moment. The check that refuses a vault's own password as a secret asks `bw`: where
 no `bw` program is found, or all `bw` answers is that nobody is logged in, there is no vault on this
 machine to ask, and the value is stored; a `bw` that is there but does not start stops the save. A `.env.refs` can reference **any** item in your vault, not only the
-ones you wired, so read a cloned repo's `.env.refs` before running `--env-file`
+ones you wired, and any secret your sign-in to a source may read (keep a Vault token's policy, or the
+machine identity's access, as narrow as the work needs), so read a cloned repo's `.env.refs` before running `--env-file`
 with it. `import` decides what is secret by heuristics and keeps everything else
 as a literal; check its plan before committing `.env.refs`. The Claude Code
 `PostToolUse` hook does not see failed commands (`PostToolUseFailure` cannot
@@ -708,6 +837,21 @@ injected. pi's `/secret`, `/vault_add` and `/vault_rotate` popups store a pasted
 around it; for a value where those matter, use `keyshroud add --stdin`, which keeps everything
 but one line break at the very end (end the input with two if the value ends with one).
 
+Sources: `sources.json` is a plain file, so a program running as you can point the Vault source at
+another https server, which then receives the token on the next read; the same program could read
+`~/.vault-token` itself. A token of `vault login` is used as it is: keyshroud does not renew it, and
+when it ends the references are unresolved until you log in again. A secret read from a source is
+masked from the moment keyshroud reads it, not before. Wired names are read at session start and
+whenever the hook's index is refreshed (`add`, `rotate`, `wire`, `source add`), source references
+among them: a wired `op://` reference can bring up 1Password's own prompt then, so a reference only one
+project needs belongs in its `.env.refs`. A reference that sits in a wiring file and that no command
+injects is not read from a source just to mask it. When the server is away, each request waits up to
+10 seconds (a first read with AppRole makes three; a vendor's CLI gets 30) and the names are
+unresolved. Why a source refused is told only by kind (an HTTP status; for a vendor's CLI:
+not signed in, refused access, not found, or just "failed"), guessed from the CLI's message, so the
+kind can be wrong; the message itself is in your terminal when you run that CLI. keyshroud's Vault and Infisical code is tested against real servers; the `op`, `gcloud`
+and `az` paths only against stand-in CLIs.
+
 Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 
 ## Development
@@ -715,11 +859,14 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 ```bash
 npm install
 npm run check        # typecheck + tests (fake bw, no real vault) + build
+# the sources against real servers in Docker (Vault, OpenBao, Infisical, an AWS emulator):
+export $(sh test/live-servers.sh) && node --test test/live.test.ts; sh test/live-servers.sh down
 node src/cli.ts doctor   # run from source (Node ≥ 22.18 strips types)
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). The runtime-neutral core is in
-`src/core.ts` (the local vault's file format in `src/vault.ts`); agent integrations
+`src/core.ts` (the local vault's file format in `src/vault.ts`, the sources' protocols in
+`src/sources.ts`); agent integrations
 live in `extensions/`, `src/mcp.ts` and `src/hooks.ts`.
 
 ## Credits

@@ -1,12 +1,13 @@
 ---
 name: keyshroud
-description: Use secrets (API keys, tokens, passwords) from the user's keyshroud vault (an encrypted local vault, or their Vaultwarden/Bitwarden) without ever seeing their values. Use whenever a command needs a credential, the user mentions a token/API key/.env, asks to store or rotate a secret, or output might contain a secret.
+description: Use secrets (API keys, tokens, passwords) from the user's keyshroud vault (an encrypted local vault, their Vaultwarden/Bitwarden, or their team's HashiCorp Vault, OpenBao, Infisical, 1Password, AWS, Google Cloud or Azure secret manager) without ever seeing their values. Use whenever a command needs a credential, the user mentions a token/API key/.env, asks to store or rotate a secret, or output might contain a secret.
 ---
 
 # keyshroud
 
 The user's secrets live in keyshroud's encrypted local vault, or in their
-Vaultwarden/Bitwarden (`keyshroud status` says which). You work with **names and
+Vaultwarden/Bitwarden (`keyshroud status` says which); a team's secrets may stay in its own
+secret manager, which keyshroud only reads. You work with **names and
 references**, never values. keyshroud injects values into child processes and replaces them
 in output with `<redacted:NAME>`.
 
@@ -30,7 +31,10 @@ in output with `<redacted:NAME>`.
    `secrets_run` MCP tool). Plain shell commands are only masked when they
    succeed; `keyshroud run` masks even when the command fails.
 5. Never run `keyshroud get`, `keyshroud env --shell`, `keyshroud inject`
-   without `-o`, or `bw` directly — they print values.
+   without `-o`, or `bw` directly — they print values. The same goes for a secret
+   manager's own CLI (`vault kv get`, `bao kv get`, `op read`, `infisical secrets get`,
+   `aws secretsmanager get-secret-value`, `aws ssm get-parameter`, `gcloud secrets versions access`,
+   `az keyvault secret show`): use a reference through `keyshroud run` instead.
 
 ## See what exists
 
@@ -62,11 +66,35 @@ Percent-encode `/` in item names (`keyshroud://a%2Fb`). A project's `.env.refs`:
 ```dotenv
 GH_TOKEN=keyshroud://GitHub CLI token
 DATABASE_URL=bw://Prod DB/fields/url
+DB_PASSWORD=vault://secret/myapp/db#password
 LOG_LEVEL=debug
 ```
 
+## Secrets in a team's secret manager (read-only)
+
+```
+vault://<mount>/<path>#<field>                       HashiCorp Vault or OpenBao (KV v1/v2)
+infisical://<project id>/<env>/[<folder>/]<NAME>     Infisical
+op://<vault>/<item>/<field>                          1Password (its `op` CLI)
+awssecrets://<name>[?region=R][#<json key>]          AWS Secrets Manager (`aws`)
+awsssm://<parameter>[?region=R]                      AWS SSM Parameter Store (`awsssm:///prod/db`)
+gcpsecrets://<project>/<secret>[#<json key>]         Google Cloud Secret Manager (`gcloud`)
+azurekeyvault://<vault>/<secret>[#<json key>]        Azure Key Vault (`az`)
+```
+Use them in `.env.refs`, or wire a name: `keyshroud wire --env DB_PASSWORD --item 'vault://secret/myapp/db#password'`.
+keyshroud never writes to these systems: to change a secret there, the user does it in that system.
+`keyshroud source` lists which are set up. Vault/OpenBao and Infisical need their server named once;
+ask the user for the address, never guess it, and never put it in a reference:
+```bash
+keyshroud source add vault --addr https://vault.example.com              # uses the user's `vault login`
+keyshroud source add vault --addr https://vault.example.com --token      # or asks for a token in a dialog
+keyshroud source add infisical --client-id <machine identity client id>  # asks for its client secret
+```
+The others use the vendor CLI's own sign-in; if a reference is unresolved because that CLI is not
+signed in, ask the user to sign in (`aws sso login`, `op signin`, `gcloud auth login`, `az login`).
+
 Config files that cannot read env vars: `keyshroud inject -i config.tpl -o config`
-renders `{{ keyshroud://item }}` and `{{ bw://item/field }}` placeholders into a 0600 file. Add the output to
+renders `{{ keyshroud://item }}`, `{{ bw://item/field }}` and `{{ vault://… }}` placeholders into a 0600 file. Add the output to
 `.gitignore`.
 
 ## Before committing
@@ -78,7 +106,7 @@ keyshroud scan .          # exits 1 and lists file:line NAME for each vault valu
 ## Exit codes
 
 `0` ok · `2` usage · `3` vault locked/unavailable (ask the user to run
-`keyshroud unlock`) · `4` secret missing or item name ambiguous · `5` would
+`keyshroud unlock`), or a source that refused the sign-in · `4` secret missing or item name ambiguous · `5` would
 overwrite existing state.
 
 When the vault is locked, a command waits while a dialog on the user's desktop

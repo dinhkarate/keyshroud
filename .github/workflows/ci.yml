@@ -43,6 +43,19 @@ jobs:
       - run: npm test
         env: { KEYSHROUD_TEST_NODE: "${{ env.OLD_NODE }}", KEYSHROUD_TEST_CLI: dist/cli.js }
       - run: '"$OLD_NODE" dist/cli.js --version'
+  # The sources against real servers: HashiCorp Vault, OpenBao, Infisical, and an AWS emulator
+  # read through the runner's own aws CLI.
+  sources:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with: { node-version: "24", cache: npm }
+      - run: npm ci --ignore-scripts
+      - run: sh test/live-servers.sh >> "$GITHUB_ENV"
+      - run: node --test test/live.test.ts
+      - if: failure()
+        run: docker logs --tail 40 ks-live-infisical
   no-ai-coauthor:
     runs-on: ubuntu-latest
     steps:

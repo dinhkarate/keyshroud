@@ -8,12 +8,12 @@
     "source": "github"
   },
   "websiteUrl": "https://keyshroud.dev",
-  "version": "0.10.11",
+  "version": "0.11.0",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "keyshroud",
-      "version": "0.10.11",
+      "version": "0.11.0",
       "transport": {
         "type": "stdio"
       },
