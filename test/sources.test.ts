@@ -375,13 +375,14 @@ test("op://, awssecrets://, awsssm://, gcpsecrets://, azurekeyvault://: read thr
     assert.equal((await runCli(box, ["get", "awssecrets://prod/other"], undefined, clis.env)).stderr.trim(), `Secret unresolved: awssecrets://prod/other (${kind})`);
   }
   await rm(join(box.dir, "cli-bin", "aws.err"));
-  assert.match((await runCli(box, ["get", "op://Private/x/y"])).stderr, /the op command is not installed \(or not on PATH\)/);
+  assert.match((await runCli(box, ["get", "op://Private/x/y"], undefined, { PATH: box.dir })).stderr, /the op command is not installed \(or not on PATH\)/);
   await writeFile(join(box.dir, "cli-bin", "aws.out"), JSON.stringify({ Name: "x", SecretBinary: "AAEC" }));
   const binary = await runCli(box, ["get", "awssecrets://prod/blob"], undefined, clis.env);
   assert.match(binary.stderr, /no text value in the answer/);
   assert.ok(!binary.stderr.includes("AAEC"));
   assert.match((await runCli(box, ["source"], undefined, clis.env)).stdout, /^CLIs: op=found aws=found gcloud=found az=found$/m);
-  assert.match((await runCli(box, ["source"])).stdout, /^no source is set up .*\nCLIs: op=missing aws=missing gcloud=missing az=missing$/m);
+  // (A PATH of its own: a CI runner has some of these installed.)
+  assert.match((await runCli(box, ["source"], undefined, { PATH: box.dir })).stdout, /^no source is set up .*\nCLIs: op=missing aws=missing gcloud=missing az=missing$/m);
 });
 
 test("a source reference is wired, injected and listed like any other, and is never an item of keyshroud's", async () => {
