@@ -10,5 +10,16 @@ dist/
 .DS_Store
 !.env.*.example
 
-# Internal notes (competitor research, launch strategy) stay local
-docs/
+# Internal notes (competitor research, launch strategy, review reports) stay local;
+# the public pages are named one by one.
+docs/*
+!docs/local-vault.md
+!docs/vaultwarden.md
+!docs/team-secret-managers.md
+!docs/project-scope.md
+!docs/claude-code.md
+!docs/agents.md
+!docs/cli.md
+!docs/how-it-works.md
+!docs/security.md
+!docs/faq.md

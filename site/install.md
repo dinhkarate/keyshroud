@@ -186,7 +186,7 @@ keyshroud wire --env DB_PASSWORD --item 'vault://secret/myapp/db#password'
 `gcloud`, `az`) with the sign-in it already has. Signing in to a vendor's CLI or to Vault is the
 **user's** to do. `source add vault --token` and `source add infisical --client-id ID` ask for the
 credential in a dialog; never type it yourself. Reference formats:
-https://github.com/dinhkarate/keyshroud#team-secret-managers-vault-openbao-infisical-1password-aws-google-cloud-azure
+https://github.com/dinhkarate/keyshroud/blob/main/docs/team-secret-managers.md
 
 ## 5. Verify
 
@@ -224,4 +224,4 @@ now on secret-using commands go through `keyshroud run`. If they keep secrets in
 vault, mention `keyshroud backup` (one file under its own passphrase) once.
 
 Docs: https://github.com/dinhkarate/keyshroud#readme · Security model:
-https://github.com/dinhkarate/keyshroud#security-model
+https://github.com/dinhkarate/keyshroud/blob/main/docs/security.md

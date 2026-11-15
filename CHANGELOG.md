@@ -5,6 +5,24 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-11-15
+
+Documentation only; the code is the same as 0.12.0.
+
+### Changed
+- **README redesigned.** It now leads with what goes wrong without keyshroud, the quickstart, what
+  you get and where secrets live; the reference detail moved to pages in `docs/` (local vault,
+  Vaultwarden, team secret managers, project scope, Claude Code and the guard, other agents, CLI,
+  how it works, security model, FAQ). Headings that other pages link to keep their anchors. The
+  Vietnamese, Chinese and Japanese READMEs follow the new one.
+- **"How it compares" re-checked on 2026-11-15** against each project's documentation. It now
+  describes the four approaches in use (names in and masked output out; a wrapper that masks its
+  own child; a vault MCP server that returns values; an egress proxy with placeholders) and says
+  what Claude Code does itself (`permissions.deny`, `sandbox.credentials`) and what it does not.
+- **keyshroud.dev redesigned**, with two new recordings: a failed command masked by the guard, and
+  a secret read from a HashiCorp Vault server, a project scope refusing another project's name,
+  and a backup. `llms.txt` and `install.md` link to the new pages.
+
 ## [0.12.0] - 2026-11-15
 
 Three gaps closed: a failed command in Claude Code is masked, a project can be given only its own

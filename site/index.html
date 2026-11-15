@@ -23,7 +23,7 @@
   "url": "https://keyshroud.dev/",
   "applicationCategory": "DeveloperApplication",
   "operatingSystem": "macOS, Linux, Windows",
-  "softwareVersion": "0.12.0",
+  "softwareVersion": "0.12.1",
   "license": "https://opensource.org/licenses/MIT",
   "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
   "downloadUrl": "https://www.npmjs.com/package/keyshroud",
@@ -31,153 +31,270 @@
   "image": "https://keyshroud.dev/og.png"
 }
 </script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    { "@type": "Question", "name": "Do I need Vaultwarden or any server?", "acceptedAnswer": { "@type": "Answer", "text": "No. Secrets live in an encrypted file on your machine by default, with its key in the OS keychain. Vaultwarden or Bitwarden is optional, for the same secrets on several machines." } },
+    { "@type": "Question", "name": "Can the agent still use the key?", "acceptedAnswer": { "@type": "Answer", "text": "Yes. The command gets the real value in its environment; only the text the model reads is masked." } },
+    { "@type": "Question", "name": "Is keyshroud a sandbox?", "acceptedAnswer": { "@type": "Answer", "text": "No. It stops accidental disclosure. A hostile or prompt-injected agent can still send a value it can use somewhere else; for that threat use an egress proxy with placeholder credentials and keep a human approving commands." } },
+    { "@type": "Question", "name": "Doesn't Claude Code do this itself?", "acceptedAnswer": { "@type": "Answer", "text": "Partly, and differently. Claude Code can deny reads of files such as .env, and its sandbox can show a command a placeholder for a credential and put the real value on requests to hosts you allow. It has no secret store and does not rewrite what a tool prints. keyshroud is the store, works the same across agents, and masks output; the two combine." } },
+    { "@type": "Question", "name": "Why not just .gitignore my .env?", "acceptedAnswer": { "@type": "Answer", "text": "That stops commits, not reads. Agents read .env to debug, and whatever they read goes to the model provider." } },
+    { "@type": "Question", "name": "We use HashiCorp Vault, AWS or 1Password at work. Do I have to move the secrets?", "acceptedAnswer": { "@type": "Answer", "text": "No. keyshroud reads them where they are, with the sign-in you already have, and never writes there." } },
+    { "@type": "Question", "name": "Does it work on Windows?", "acceptedAnswer": { "@type": "Answer", "text": "Yes, tested on Windows 10 with Node 22. The local vault keeps its key with DPAPI. The guard for failed commands is macOS and Linux only." } }
+  ]
+}
+</script>
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="llms" href="/llms.txt">
 <meta name="color-scheme" content="light dark">
 <style>
 :root {
-  --bg: #fbfaf7; --surface: #ffffff; --text: #1b1d22; --muted: #5d6270; --line: #e4e2dc;
-  --accent: #6d5df6; --accent-ink: #ffffff; --term-bg: #14161b; --term-text: #e6e8ee;
-  --term-dim: #8a90a0; --ok: #3fb950; --redact: #f0b429;
+  --bg: #faf9f6; --bg-2: #f2f0ea; --surface: #ffffff; --text: #151a2d; --muted: #5b6072; --line: #e2dfd6;
+  --accent: #6d5df6; --accent-soft: rgba(109, 93, 246, .1); --accent-ink: #ffffff;
+  --term-bg: #12141c; --term-line: #252936; --term-text: #e6e8ee; --term-dim: #8a90a0;
+  --ok: #2f9e44; --redact: #f0b429; --redact-ink: #9a6400; --bad: #c2410c;
+  --mono: ui-monospace, "JetBrains Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #0f1115; --surface: #171a20; --text: #e8eaf0; --muted: #9aa1b2; --line: #272b34;
-    --accent: #8b7ffa; --accent-ink: #0f1115; --term-bg: #0a0b0e;
+    --bg: #0c0e15; --bg-2: #10131c; --surface: #151824; --text: #e9ebf3; --muted: #9aa1b5; --line: #242838;
+    --accent: #8b7ffa; --accent-soft: rgba(139, 127, 250, .14); --accent-ink: #0c0e15;
+    --term-bg: #090a0f; --term-line: #20232f; --ok: #3fb950; --redact-ink: #f0b429; --bad: #f47067;
   }
 }
 * { box-sizing: border-box; }
-html { -webkit-text-size-adjust: 100%; }
+html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
 body {
   margin: 0; background: var(--bg); color: var(--text);
   font: 16px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
 }
-code, pre, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+code, pre, kbd, .mono { font-family: var(--mono); }
 a { color: var(--accent); }
-.wrap { max-width: 1040px; margin: 0 auto; padding: 0 16px; }
-header.top { display: flex; align-items: center; justify-content: space-between; padding: 20px 0; gap: 12px; }
-.brand { font-weight: 700; font-size: 18px; letter-spacing: -0.01em; text-decoration: none; color: var(--text); display: flex; align-items: center; gap: 8px; }
-.brand img { height: 40px; width: auto; display: block; }
-nav a { color: var(--muted); text-decoration: none; margin-left: 18px; font-size: 15px; }
-nav a:hover { color: var(--text); }
-.hero { padding: 48px 0 24px; display: grid; gap: 40px; grid-template-columns: 1fr; }
-@media (min-width: 900px) { .hero { grid-template-columns: 1fr 1.05fr; align-items: center; padding-top: 72px; } }
-h1 { font-size: clamp(34px, 6vw, 54px); line-height: 1.08; letter-spacing: -0.03em; margin: 0 0 18px; }
-.lede { font-size: 18px; color: var(--muted); margin: 0 0 28px; max-width: 34em; }
-.cta { display: flex; flex-wrap: wrap; gap: 12px; }
+img, video { max-width: 100%; }
+.wrap { max-width: 1080px; margin: 0 auto; padding: 0 16px; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+
+/* top bar */
+.bar { position: sticky; top: 0; z-index: 10; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }
+.bar .wrap { display: flex; align-items: center; justify-content: space-between; gap: 12px; height: 60px; }
+.brand { display: flex; align-items: center; text-decoration: none; }
+.brand img { height: 38px; width: auto; display: block; }
+nav { display: flex; align-items: center; gap: 4px; }
+nav a { color: var(--muted); text-decoration: none; font-size: 14.5px; padding: 6px 10px; border-radius: 6px; }
+nav a:hover { color: var(--text); background: var(--accent-soft); }
+nav a.gh { color: var(--text); border: 1px solid var(--line); background: var(--surface); margin-left: 6px; }
+@media (max-width: 860px) { nav a.opt { display: none; } }
+@media (max-width: 370px) { nav a.opt2 { display: none; } }
+
+/* hero */
+.hero { position: relative; overflow: hidden; border-bottom: 1px solid var(--line);
+  background:
+    radial-gradient(900px 420px at 88% -10%, var(--accent-soft), transparent 70%),
+    radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--line) 80%, transparent) 1px, transparent 0) 0 0 / 22px 22px,
+    var(--bg); }
+.hero .wrap { display: grid; gap: 40px; grid-template-columns: minmax(0, 1fr); padding-top: 56px; padding-bottom: 56px; }
+@media (min-width: 940px) { .hero .wrap { grid-template-columns: minmax(0, 1fr) minmax(0, 1.02fr); align-items: center; padding-top: 84px; padding-bottom: 84px; } }
+.eyebrow { font: 600 12.5px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--accent); margin: 0 0 18px; }
+h1 { font-size: clamp(36px, 6.2vw, 58px); line-height: 1.04; letter-spacing: -0.035em; margin: 0 0 20px; }
+h1 .veil { background: linear-gradient(transparent 58%, var(--accent-soft) 58%); }
+.lede { font-size: 18px; color: var(--muted); margin: 0 0 26px; max-width: 34em; }
+.lede code, .sub code, p code, li code, td code { font-size: .9em; background: var(--accent-soft); padding: 1px 5px; border-radius: 4px; color: var(--text); }
+.get { display: flex; align-items: center; gap: 10px; background: var(--term-bg); color: var(--term-text); border: 1px solid var(--term-line); border-radius: 10px; padding: 10px 10px 10px 16px; max-width: 420px; font: 15px/1.4 var(--mono); }
+.get span { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.get b { color: #3fb950; font-weight: 400; margin-right: 8px; }
+.copy { font: 600 13px/1 ui-sans-serif, system-ui, sans-serif; padding: 9px 12px; border-radius: 7px; border: 0; background: var(--accent); color: var(--accent-ink); cursor: pointer; }
+.cta { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
 .btn { display: inline-block; padding: 11px 18px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 15px; border: 1px solid var(--line); color: var(--text); background: var(--surface); }
 .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
-.install { margin-top: 18px; font-size: 14px; color: var(--muted); }
-.install code { background: var(--surface); border: 1px solid var(--line); padding: 3px 8px; border-radius: 6px; color: var(--text); }
-.term { background: var(--term-bg); color: var(--term-text); border-radius: 12px; overflow: hidden; box-shadow: 0 20px 50px -20px rgba(0,0,0,.45); border: 1px solid #23262e; min-width: 0; }
-.term-bar { display: flex; gap: 6px; padding: 12px 14px; background: rgba(255,255,255,.04); }
-.term-bar i { width: 11px; height: 11px; border-radius: 50%; background: #3a3e48; display: block; }
-.term pre { margin: 0; padding: 16px 18px 20px; font-size: 13.5px; line-height: 1.7; overflow-x: auto; white-space: pre; }
-.p { color: var(--ok); } .d { color: var(--term-dim); } .r { color: var(--redact); }
-.line { opacity: 0; animation: show .01s forwards; }
-.l1 { animation-delay: .3s; } .l2 { animation-delay: 1.1s; } .l3 { animation-delay: 1.9s; } .l4 { animation-delay: 2.7s; }
-.l5 { animation-delay: 3.5s; } .l6 { animation-delay: 4.3s; } .l7 { animation-delay: 5.1s; } .l8 { animation-delay: 5.9s; }
-@keyframes show { to { opacity: 1; } }
-@media (prefers-reduced-motion: reduce) { .line { opacity: 1; animation: none; } }
-section { padding: 56px 0; border-top: 1px solid var(--line); }
-h2 { font-size: 28px; letter-spacing: -0.02em; margin: 0 0 8px; }
-.sub { color: var(--muted); margin: 0 0 32px; }
-.steps { display: grid; gap: 16px; grid-template-columns: 1fr; counter-reset: s; }
-@media (min-width: 760px) { .steps { grid-template-columns: repeat(3, 1fr); } }
-.step { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 18px; min-width: 0; }
+.tiny { margin: 16px 0 0; font-size: 13.5px; color: var(--muted); }
+
+.term { background: var(--term-bg); color: var(--term-text); border-radius: 14px; overflow: hidden; border: 1px solid var(--term-line); box-shadow: 0 30px 70px -30px rgba(21, 26, 45, .55); min-width: 0; }
+.term-bar { display: flex; align-items: center; gap: 6px; padding: 10px 12px; background: rgba(255, 255, 255, .035); border-bottom: 1px solid var(--term-line); }
+.term-bar i { width: 10px; height: 10px; border-radius: 50%; background: #343846; display: block; flex: none; }
+.views { margin-left: auto; display: inline-flex; background: #1c1f2b; border-radius: 8px; padding: 3px; }
+.views button { font: 600 12.5px/1 ui-sans-serif, system-ui, sans-serif; color: var(--term-dim); background: none; border: 0; border-radius: 6px; padding: 7px 10px; cursor: pointer; }
+.views button[aria-pressed="true"] { background: #8b7ffa; color: #0c0e15; }
+.term pre { margin: 0; padding: 18px 18px 20px; font-size: 13.5px; line-height: 1.75; white-space: pre-wrap; overflow-wrap: anywhere; }
+.p { color: #3fb950; } .d { color: var(--term-dim); } .r { color: var(--redact); }
+.secret { border-radius: 4px; padding: 1px 3px; transition: background-color .35s, color .35s; }
+.secret .mask { display: none; color: var(--redact); }
+.model .secret { background: rgba(240, 180, 41, .14); }
+.model .secret .real { display: none; }
+.model .secret .mask { display: inline; }
+.cmd .secret { background: rgba(244, 112, 103, .16); color: #ff938a; }
+.term-foot { margin: 0; padding: 10px 18px 14px; border-top: 1px solid var(--term-line); font-size: 12.5px; color: var(--term-dim); }
+.agents-strip { border-bottom: 1px solid var(--line); background: var(--bg-2); }
+.agents-strip p { margin: 0; padding: 14px 0; font: 13px/1.6 var(--mono); color: var(--muted); text-align: center; }
+.agents-strip b { color: var(--text); font-weight: 600; }
+
+/* sections */
+section { padding: 72px 0; border-bottom: 1px solid var(--line); scroll-margin-top: 60px; }
+section.alt { background: var(--bg-2); }
+.kicker { font: 600 12.5px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--accent); margin: 0 0 12px; }
+h2 { font-size: clamp(26px, 3.6vw, 36px); line-height: 1.15; letter-spacing: -0.025em; margin: 0 0 10px; }
+.sub { color: var(--muted); margin: 0 0 36px; max-width: 46em; font-size: 17px; }
+.grid { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 640px) { .grid.c2, .grid.c3, .grid.c4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (min-width: 980px) { .grid.c3 { grid-template-columns: repeat(3, minmax(0, 1fr)); } .grid.c4 { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 20px; min-width: 0; }
+.card h3 { margin: 0 0 6px; font-size: 16.5px; letter-spacing: -0.01em; }
+.card p { margin: 0; color: var(--muted); font-size: 14.5px; }
+.tag { display: inline-block; font: 600 11.5px/1 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--accent); background: var(--accent-soft); padding: 5px 7px; border-radius: 5px; margin-bottom: 12px; }
+.note { margin: 22px 0 0; font-size: 14px; color: var(--muted); }
+
+/* the leak */
+.leak .card { display: flex; flex-direction: column; }
+.leak .snip { margin: 0 0 14px; min-height: 82px; font-family: var(--mono); background: var(--term-bg); color: var(--term-text); border-radius: 8px; padding: 10px 12px; font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.leak .snip .x { color: #ff938a; background: rgba(244, 112, 103, .16); border-radius: 3px; padding: 0 2px; }
+.leak h3 { font-size: 16px; }
+.leak .fix { margin-top: auto; color: var(--text); font-size: 14px; }
+.leak .fix::before { content: ""; display: block; border-top: 1px dashed var(--line); margin: 12px 0; }
+.leak .fix b { color: var(--ok); font-weight: 700; margin-right: 5px; }
+
+/* how it works */
+.flow { display: grid; gap: 0; grid-template-columns: minmax(0, 1fr); align-items: stretch; margin-bottom: 28px; }
+.flow .node { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px; min-width: 0; }
+.flow .node b { display: block; font-size: 15px; margin-bottom: 4px; }
+.flow .node span { display: block; color: var(--muted); font-size: 13.5px; }
+.flow .node code { font-size: 12.5px; background: var(--accent-soft); padding: 1px 4px; border-radius: 4px; color: var(--text); overflow-wrap: anywhere; }
+.flow .node.us { border: 2px solid var(--accent); }
+.flow .node.out { border-style: dashed; }
+.flow .arrow { display: grid; place-items: center; align-content: center; color: var(--muted); font: 12px/1 var(--mono); padding: 8px 0; }
+.flow .arrow::before { content: "↓"; font-size: 18px; color: var(--accent); margin-bottom: 2px; }
+@media (min-width: 900px) {
+  .flow { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1.15fr) auto minmax(0, 1fr) auto minmax(0, 1fr); }
+  .flow .arrow { padding: 0 10px; }
+  .flow .arrow::before { content: "→"; }
+}
+.steps { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); counter-reset: s; }
+@media (min-width: 760px) { .steps { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.step { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 18px; min-width: 0; }
 .step h3 { margin: 0 0 10px; font-size: 16px; }
-.step h3::before { counter-increment: s; content: counter(s); display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: var(--accent); color: var(--accent-ink); font-size: 13px; margin-right: 8px; }
+.step h3::before { counter-increment: s; content: counter(s); display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: var(--accent); color: var(--accent-ink); font: 600 12.5px/1 var(--mono); margin-right: 8px; }
 .step pre { margin: 0; background: var(--term-bg); color: var(--term-text); border-radius: 8px; padding: 12px; font-size: 13px; overflow-x: auto; }
 .step p { margin: 10px 0 0; color: var(--muted); font-size: 14px; }
-.agent-setup { margin-top: 16px; background: var(--surface); border: 1px dashed var(--accent); border-radius: 10px; padding: 18px; }
+.agent-setup { margin-top: 16px; background: var(--surface); border: 1px dashed var(--accent); border-radius: 12px; padding: 18px; }
 .agent-setup h3 { margin: 0 0 4px; font-size: 16px; }
 .agent-setup p { margin: 0 0 12px; color: var(--muted); font-size: 14px; }
 .prompt { display: flex; gap: 8px; align-items: stretch; }
-.prompt pre { flex: 1; min-width: 0; margin: 0; background: var(--term-bg); color: var(--term-text); border-radius: 8px; padding: 12px; font-size: 13px; overflow-x: auto; }
-.prompt button { font: 600 14px/1 inherit; padding: 0 16px; border-radius: 8px; border: 1px solid var(--accent); background: var(--accent); color: var(--accent-ink); cursor: pointer; }
-.grid { display: grid; gap: 16px; grid-template-columns: 1fr; }
-@media (min-width: 640px) { .grid { grid-template-columns: repeat(2, 1fr); } }
-@media (min-width: 960px) { .grid { grid-template-columns: repeat(3, 1fr); } }
-.card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 20px; }
-.card h3 { margin: 0 0 6px; font-size: 16px; }
-.card p { margin: 0; color: var(--muted); font-size: 14.5px; }
-.card code { font-size: 13px; }
-.vs { display: grid; gap: 16px; grid-template-columns: 1fr; align-items: start; }
-@media (min-width: 820px) { .vs { grid-template-columns: 1.15fr 1fr 1fr; } }
-.vs .card { padding: 22px; }
-.vs .card.us { border: 2px solid var(--accent); box-shadow: 0 18px 40px -24px var(--accent); }
-.vs .tag { display: inline-block; font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
-.vs .us .tag { color: var(--accent); }
-.vs h3 { font-size: 19px; margin: 0 0 4px; }
-.vs .what { color: var(--muted); font-size: 14px; margin: 0 0 16px; }
-@media (min-width: 820px) { .vs .what { min-height: 3em; } }
-.vs ul { list-style: none; margin: 0; padding: 0; }
-.vs li { display: grid; grid-template-columns: 22px 1fr; gap: 10px; padding: 9px 0; border-top: 1px solid var(--line); font-size: 14.5px; }
-.vs li b { font-weight: 600; display: block; }
-.vs li span { color: var(--muted); font-size: 13.5px; }
-.mark { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 13px; font-weight: 700; line-height: 1; }
-.mark.y { background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok); }
-.mark.p { background: color-mix(in srgb, var(--redact) 22%, transparent); color: #b7791f; }
-.mark.n { background: color-mix(in srgb, var(--muted) 16%, transparent); color: var(--muted); }
-@media (prefers-color-scheme: dark) { .mark.p { color: var(--redact); } }
-.note { color: var(--muted); font-size: 13.5px; margin-top: 12px; }
-.agents { display: grid; gap: 12px; grid-template-columns: 1fr; }
-@media (min-width: 640px) { .agents { grid-template-columns: repeat(2, 1fr); } }
-@media (min-width: 960px) { .agents { grid-template-columns: repeat(3, 1fr); } }
-.agent { display: block; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; text-decoration: none; color: var(--text); }
-.agent:hover { border-color: var(--accent); }
-.agent b { display: block; font-size: 16px; margin-bottom: 4px; }
-.agent .via { display: inline-block; font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--accent); margin-bottom: 8px; }
-.agent span:last-child { display: block; color: var(--muted); font-size: 14px; }
-.pain { display: grid; gap: 16px; grid-template-columns: 1fr; }
-@media (min-width: 760px) { .pain { grid-template-columns: 1fr 1fr; } }
-.pain ul { list-style: none; margin: 0; padding: 0; }
-.pain li { padding: 8px 0 8px 30px; position: relative; color: var(--muted); }
-.pain li::before { position: absolute; left: 0; top: 8px; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 700; }
-.pain .bad li::before { content: "\2715"; background: color-mix(in srgb, var(--muted) 16%, transparent); color: var(--muted); }
-.pain .good li::before { content: "\2713"; background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok); }
-.pain li b { color: var(--text); }
-.final { text-align: center; }
-.final .cta { justify-content: center; margin-top: 24px; }
-.threat { display: grid; gap: 16px; grid-template-columns: 1fr; }
-@media (min-width: 760px) { .threat { grid-template-columns: 1fr 1fr; } }
-.threat ul { margin: 0; padding-left: 20px; color: var(--muted); }
-.threat li { margin: 6px 0; }
-.demo-tabs { display: none; gap: 4px; width: max-content; max-width: 100%; overflow-x: auto; scrollbar-width: none; margin: 0 0 16px; padding: 4px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
-.tabbed .demo-tabs { display: flex; }
-.demo-tabs button { font-family: inherit; font-size: 14px; font-weight: 600; line-height: 1.2; padding: 9px 14px; border: 0; border-radius: 7px; background: none; color: var(--muted); cursor: pointer; white-space: nowrap; }
+.prompt pre { flex: 1; min-width: 0; margin: 0; background: var(--term-bg); color: var(--term-text); border-radius: 8px; padding: 12px; font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* demo */
+.demo-tabs { display: flex; gap: 4px; padding: 4px; margin: 0 0 20px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); overflow-x: auto; scrollbar-width: none; max-width: 100%; width: max-content; }
+.demo-tabs button { font: inherit; font-size: 14.5px; font-weight: 600; line-height: 1.2; color: var(--muted); background: none; border: 0; border-radius: 7px; padding: 8px 14px; cursor: pointer; white-space: nowrap; }
 .demo-tabs button:hover { color: var(--text); }
 .demo-tabs button[aria-selected="true"] { background: var(--accent); color: var(--accent-ink); }
-.demo :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.demo:not(.tabbed) .demo-tabs { display: none; }
 .demo:not(.tabbed) .panel + .panel { margin-top: 48px; }
 .panel-title { margin: 0 0 12px; font-size: 18px; }
 .tabbed .panel-title { display: none; }
-.tabbed .panel { scroll-margin-top: 72px; }
+.tabbed .panel { scroll-margin-top: 80px; }
 .stage { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); align-items: start; }
 @media (min-width: 900px) { .stage { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); } }
-.demo video { display: block; width: 100%; height: auto; background: var(--term-bg); border-radius: 12px; border: 1px solid #23262e; box-shadow: 0 20px 50px -20px rgba(0,0,0,.45); }
+.demo video { display: block; width: 100%; height: auto; background: var(--term-bg); border-radius: 12px; border: 1px solid var(--term-line); box-shadow: 0 20px 50px -24px rgba(21, 26, 45, .5); }
 .stage video { aspect-ratio: 820 / 900; max-width: 600px; margin: 0 auto; }
 .wide video { aspect-ratio: 1120 / 540; }
 .proof { display: grid; gap: 12px; min-width: 0; }
 .proof .card { padding: 16px; }
-.proof h3 { margin: 0 0 8px; font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+.proof h3 { margin: 0 0 8px; font: 600 11.5px/1 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
 .proof pre, .demo details pre { margin: 0; padding: 12px; border-radius: 8px; background: var(--term-bg); color: var(--term-text); font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
 .proof p { margin: 8px 0 0; font-size: 13.5px; color: var(--muted); }
 .demo details { margin-top: 12px; }
 .demo summary { cursor: pointer; color: var(--accent); font-size: 14px; font-weight: 600; }
 .demo details pre { margin-top: 8px; max-height: 420px; overflow: auto; }
-footer { padding: 32px 0 48px; border-top: 1px solid var(--line); color: var(--muted); font-size: 14px; display: flex; flex-wrap: wrap; gap: 8px 24px; justify-content: space-between; }
-footer a { color: var(--muted); }
-@media (max-width: 480px) { nav a.hide-sm { display: none; } }
+
+/* vaults */
+.vault .schemes { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }
+.vault .schemes code { font-size: 12px; background: var(--term-bg); color: var(--term-text); border-radius: 5px; padding: 3px 7px; }
+.vault .card { display: flex; flex-direction: column; }
+.vault .tag { align-self: flex-start; }
+.vault ul { margin: 12px 0 0; padding: 0; list-style: none; }
+.vault li { position: relative; padding: 6px 0 6px 20px; color: var(--muted); font-size: 14px; border-top: 1px solid var(--line); }
+.vault li::before { content: "✓"; position: absolute; left: 0; color: var(--ok); font-weight: 700; }
+.vault .more { display: inline-block; margin-top: auto; padding-top: 14px; font-size: 14px; font-weight: 600; text-decoration: none; }
+
+/* agents */
+.agent { display: block; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 18px; text-decoration: none; color: var(--text); min-width: 0; }
+.agent:hover { border-color: var(--accent); }
+.agent .via { display: block; font: 600 11.5px/1 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--accent); margin-bottom: 8px; }
+.agent b { display: block; font-size: 16.5px; margin-bottom: 4px; }
+.agent span:last-child { display: block; color: var(--muted); font-size: 14px; }
+.agent code { font-size: .9em; }
+
+/* least privilege */
+.duo { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 820px) { .duo { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.duo pre { margin: 12px 0 0; background: var(--term-bg); color: var(--term-text); border-radius: 8px; padding: 12px; font-size: 12.5px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* compare */
+.cmp { width: 100%; border-collapse: separate; border-spacing: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; font-size: 14.5px; }
+.cmp th, .cmp td { text-align: left; vertical-align: top; padding: 14px 16px; border-top: 1px solid var(--line); }
+.cmp thead th { border-top: 0; font: 600 11.5px/1.3 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); background: var(--bg-2); }
+.cmp td { color: var(--muted); }
+.cmp td:first-child { color: var(--text); width: 30%; }
+.cmp td b { color: var(--text); }
+.cmp code { white-space: nowrap; }
+.cmp tr.us td { background: var(--accent-soft); }
+.cmp tr.us td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+.yes { color: var(--ok); font-weight: 700; } .no { color: var(--bad); font-weight: 700; } .part { color: var(--redact-ink); font-weight: 700; }
+@media (max-width: 820px) {
+  .cmp thead { display: none; }
+  .cmp, .cmp tbody, .cmp tr, .cmp td { display: block; }
+  .cmp { border: 0; background: none; overflow: visible; }
+  .cmp tr { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; margin-bottom: 12px; overflow: hidden; }
+  .cmp td { border-top: 1px solid var(--line); padding: 10px 14px; }
+  .cmp td:first-child { border-top: 0; font-size: 15.5px; width: auto; }
+  .cmp td[data-l]::before { content: attr(data-l); display: block; font: 600 11px/1.4 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin-bottom: 2px; }
+}
+
+/* threat model */
+.threat ul { margin: 0; padding: 0; list-style: none; }
+.threat li { position: relative; padding: 8px 0 8px 26px; color: var(--muted); font-size: 14.5px; border-top: 1px solid var(--line); }
+.threat li:first-child { border-top: 0; }
+.threat li::before { position: absolute; left: 0; top: 8px; font-weight: 700; }
+.threat .yes-list li::before { content: "✓"; color: var(--ok); }
+.threat .no-list li::before { content: "✕"; color: var(--bad); }
+.threat h3 { font-size: 17px; margin-bottom: 10px; }
+
+/* faq */
+.faq details { max-width: 820px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 0 18px; margin-bottom: 10px; }
+.faq summary { cursor: pointer; padding: 15px 0; font-weight: 600; list-style: none; display: flex; justify-content: space-between; gap: 12px; }
+.faq summary::-webkit-details-marker { display: none; }
+.faq summary::after { content: "+"; color: var(--accent); font: 400 20px/1.2 var(--mono); }
+.faq details[open] summary::after { content: "–"; }
+.faq details p { margin: 0 0 16px; color: var(--muted); font-size: 15px; }
+
+/* closing */
+.final { text-align: center; }
+.final h2 { margin-bottom: 12px; }
+.final .sub { margin-left: auto; margin-right: auto; }
+.final .get { margin: 0 auto; text-align: left; }
+.final .cta { justify-content: center; }
+footer { padding: 40px 0 48px; color: var(--muted); font-size: 14px; }
+footer .cols { display: grid; gap: 24px; grid-template-columns: repeat(2, minmax(0, 1fr)); margin-bottom: 28px; }
+@media (min-width: 760px) { footer .cols { grid-template-columns: 1.4fr repeat(3, minmax(0, 1fr)); } }
+footer h4 { margin: 0 0 10px; font: 600 11.5px/1 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--text); }
+footer ul { margin: 0; padding: 0; list-style: none; }
+footer li { padding: 3px 0; }
+footer p { margin: 0; max-width: 26em; }
+footer a { color: var(--muted); text-decoration: none; }
+footer a:hover { color: var(--text); text-decoration: underline; }
+footer .legal { border-top: 1px solid var(--line); padding-top: 20px; max-width: none; }
 @media (max-width: 480px) {
+  .views button { padding: 7px 8px; font-size: 11.5px; }
+  .term-bar i { display: none; }
+  .views { margin-left: 0; width: 100%; }
+  .views button { flex: 1; }
   .demo-tabs button { padding: 8px 10px; font-size: 13.5px; }
-  .term pre, .prompt pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 }
 </style>
 </head>
 <body>
-<div class="wrap">
-  <header class="top">
+<header class="bar">
+  <div class="wrap">
     <a class="brand" href="/">
       <picture>
         <source srcset="logo-dark.svg" media="(prefers-color-scheme: dark)">
@@ -185,47 +302,124 @@ footer a { color: var(--muted); }
       </picture>
     </a>
     <nav>
-      <a href="#demo">Demo</a>
+      <a class="opt2" href="#demo">Demo</a>
       <a href="#quickstart">Quickstart</a>
-      <a class="hide-sm" href="#agents">Agents</a>
-      <a class="hide-sm" href="#compare">Compare</a>
-      <a class="hide-sm" href="https://github.com/dinhkarate/keyshroud#readme">Docs</a>
-      <a href="https://github.com/dinhkarate/keyshroud">GitHub</a>
+      <a class="opt" href="#vaults">Vaults</a>
+      <a class="opt" href="#agents">Agents</a>
+      <a class="opt" href="#compare">Compare</a>
+      <a class="opt" href="#threat">Security</a>
+      <a class="opt" href="https://github.com/dinhkarate/keyshroud#documentation">Docs</a>
+      <a class="gh" href="https://github.com/dinhkarate/keyshroud">GitHub</a>
     </nav>
-  </header>
+  </div>
+</header>
 
-  <div class="hero">
+<div class="hero">
+  <div class="wrap">
     <div>
-      <h1>Your agents use the keys. They never see them.</h1>
+      <p class="eyebrow">Secrets for AI coding agents</p>
+      <h1>Your agents use the keys. <span class="veil">They never see them.</span></h1>
       <p class="lede">keyshroud keeps API keys in an encrypted vault on your machine (or your own Vaultwarden, or the secret manager your team already runs) and injects them into the commands your AI coding agent runs. Any secret value that shows up in tool output is replaced with <code>&lt;redacted:NAME&gt;</code> before the model reads it.</p>
+      <div class="get"><span><b>$</b>npm i -g keyshroud</span><button type="button" class="copy" data-copy="npm i -g keyshroud">Copy</button></div>
       <div class="cta">
         <a class="btn primary" href="#quickstart">Get started</a>
         <a class="btn" href="#demo">Watch the demo</a>
         <a class="btn" href="https://github.com/dinhkarate/keyshroud">Star on GitHub</a>
       </div>
-      <p class="install">Free, MIT-licensed, no account &middot; <code>npm i -g keyshroud</code></p>
+      <p class="tiny">Free, MIT-licensed, no account, no telemetry. Node.js 18.19+ on macOS, Linux and Windows.</p>
     </div>
-    <div class="term" role="img" aria-label="Terminal demo: an agent prints a token and sees a redacted placeholder">
-      <div class="term-bar"><i></i><i></i><i></i></div>
-<pre><span class="line l1"><span class="p">$</span> keyshroud add --env GH_TOKEN --item "GitHub token"</span>
-<span class="line l2">Paste secret for GH_TOKEN: <span class="d">********************</span></span>
-<span class="line l3"><span class="d"># inside Claude Code or pi, the agent tries to read it</span></span>
-<span class="line l4"><span class="p">$</span> echo $GH_TOKEN</span>
-<span class="line l5"><span class="r">&lt;redacted:GH_TOKEN&gt;</span></span>
-<span class="line l6"><span class="p">$</span> keyshroud run -- gh api user -q .login</span>
-<span class="line l7">dinhkarate</span>
-<span class="line l8"><span class="d"># the key worked; the model saw only its name</span></span></pre>
+    <div class="term model" id="views">
+      <div class="term-bar"><i></i><i></i><i></i>
+        <div class="views" role="group" aria-label="Whose view of the output">
+          <button type="button" data-view="cmd" aria-pressed="false">What the command printed</button>
+          <button type="button" data-view="model" aria-pressed="true">What the model read</button>
+        </div>
+      </div>
+<pre><span class="p">$</span> keyshroud run -- ./deploy.sh
+<span class="d">&gt; POST /v1/deploy HTTP/1.1</span>
+&gt; Authorization: Bearer <span class="secret"><span class="real">ghp_DEMOdemo0123456789demo</span><span class="mask">&lt;redacted:GH_TOKEN&gt;</span></span>
+&lt; HTTP/1.1 <span class="p">200 OK</span>
+deployed acme-app to production
+<span class="p">$</span> echo $GH_TOKEN
+<span class="secret"><span class="real">ghp_DEMOdemo0123456789demo</span><span class="mask">&lt;redacted:GH_TOKEN&gt;</span></span></pre>
+      <p class="term-foot">The command got the real token and the deploy worked. The transcript holds only its name. (The token shown is fake.)</p>
     </div>
   </div>
 </div>
+<div class="agents-strip"><div class="wrap"><p>Works with <b>Claude Code</b> · <b>Codex</b> · <b>Cursor</b> · <b>Cline</b> · <b>OpenCode</b> · <b>Gemini CLI</b> · <b>pi</b> · <b>omp</b> · any MCP client · any shell</p></div></div>
+
+<section class="leak" id="why">
+  <div class="wrap">
+    <p class="kicker">The problem</p>
+    <h2>A key only has to be printed once</h2>
+    <p class="sub">Whatever an agent reads goes to the model provider and stays in the transcript. These are the usual ways a key gets there, and what keyshroud does about each.</p>
+    <div class="grid c4">
+      <div class="card">
+        <div class="snip">&gt; here is my token:
+<span class="x">ghp_9fK2…</span></div>
+        <h3>Pasted into the chat</h3>
+        <p>It is in the transcript, the provider&#8217;s logs and every later context window.</p>
+        <p class="fix"><b>✓</b><code>keyshroud add</code> takes the value in a masked prompt or a desktop dialog, never through the chat.</p>
+      </div>
+      <div class="card">
+        <div class="snip">$ cat .env
+STRIPE_KEY=<span class="x">sk_live_4e…</span></div>
+        <h3>Read from <code>.env</code></h3>
+        <p>Agents read it to debug. <code>.gitignore</code> stops commits, not reads.</p>
+        <p class="fix"><b>✓</b>Values live in the vault. <code>.env.refs</code> holds names you can commit.</p>
+      </div>
+      <div class="card">
+        <div class="snip">get_secret("stripe")
+→ <span class="x">"sk_live_4eC3…"</span></div>
+        <h3>Returned by a vault tool</h3>
+        <p>Most vault MCP servers hand the plaintext straight to the model.</p>
+        <p class="fix"><b>✓</b>keyshroud&#8217;s MCP tools run the command for the model. None returns a value.</p>
+      </div>
+      <div class="card">
+        <div class="snip">&gt; Authorization: Bearer
+  <span class="x">acme_7c1e…</span>
+curl: (22) error: 401</div>
+        <h3>Printed on failure</h3>
+        <p>Claude Code cannot rewrite the output of a command that fails.</p>
+        <p class="fix"><b>✓</b><code>keyshroud claude-guard</code> masks what every Bash command prints, failed ones included.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="alt" id="how">
+  <div class="wrap">
+    <p class="kicker">How it works</p>
+    <h2>Names in, masked output out</h2>
+    <p class="sub">The agent works with names. The command gets the value. Whatever the command prints is masked before the model reads it.</p>
+    <div class="flow">
+      <div class="node"><b>Your vault</b><span>A local encrypted file, your Vaultwarden, or your team&#8217;s secret manager.</span></div>
+      <div class="arrow">value</div>
+      <div class="node us"><b>keyshroud</b><span>Resolves <code>GH_TOKEN</code> to its vault item and puts the value in the command&#8217;s environment. Never in its arguments.</span></div>
+      <div class="arrow">env</div>
+      <div class="node"><b>Your command</b><span><code>gh</code>, <code>npm publish</code>, <code>curl</code>, a deploy script. It runs with the real key.</span></div>
+      <div class="arrow">output</div>
+      <div class="node out"><b>The model</b><span>Reads <code>&lt;redacted:GH_TOKEN&gt;</code> wherever the value was printed.</span></div>
+    </div>
+    <div class="grid c3">
+      <div class="card"><span class="tag">1 · wire</span><h3>A secret gets a name</h3><p><code>keyshroud add --env GH_TOKEN</code> stores the value and wires the name. Config files and <code>.env.refs</code> hold only names and references.</p></div>
+      <div class="card"><span class="tag">2 · inject</span><h3>The command gets the value</h3><p><code>keyshroud run -- &lt;command&gt;</code> reads what the command needs from the vault and starts it with those variables set.</p></div>
+      <div class="card"><span class="tag">3 · redact</span><h3>The model gets the name</h3><p>Output streams through a redactor. Hooks in Claude Code and pi mask tool results of commands you did not wrap, too.</p></div>
+    </div>
+    <p class="note">More detail, with the pieces and what each one touches: <a href="https://github.com/dinhkarate/keyshroud/blob/main/docs/how-it-works.md">how it works</a>.</p>
+  </div>
+</section>
 
 <section class="demo" id="demo">
   <div class="wrap">
+    <p class="kicker">Demo</p>
     <h2>Watch Claude use a key it never sees</h2>
     <p class="sub">A real Claude Code session, recorded in one take. The prompt never mentions keyshroud: the plugin tells Claude which secret names exist, and Claude runs the check through keyshroud on its own. The API gets the key. Claude gets its name.</p>
     <div class="demo-tabs" role="tablist" aria-label="Demo recordings">
       <button type="button" role="tab" id="tab-code" aria-controls="demo-code" aria-selected="true">Claude Code</button>
       <button type="button" role="tab" id="tab-mcp" aria-controls="demo-mcp" aria-selected="false" tabindex="-1">Over MCP</button>
+      <button type="button" role="tab" id="tab-guard" aria-controls="demo-guard" aria-selected="false" tabindex="-1">A failed command</button>
+      <button type="button" role="tab" id="tab-team" aria-controls="demo-team" aria-selected="false" tabindex="-1">Team vault &amp; scope</button>
       <button type="button" role="tab" id="tab-cli" aria-controls="demo-cli" aria-selected="false" tabindex="-1">Terminal</button>
     </div>
     <div class="panels">
@@ -288,6 +482,22 @@ footer a { color: var(--muted); }
         <p class="note" id="note-mcp">Recorded in November 2026 in Claude Code 2.1.309 with its built-in tools turned off and keyshroud&#8217;s MCP server as its only tools: the same server, tools and results Claude Desktop gets from this entry. Claude Desktop itself is not shown. Same fake key and local mock as the Claude Code take: <a href="https://github.com/dinhkarate/keyshroud/blob/main/assets/demo/claude-mcp.tape">claude-mcp.tape</a>.</p>
         <details data-src="demo-mcp.txt"><summary>Read the session as text</summary><pre><a href="demo-mcp.txt">Open the text version</a></pre></details>
       </div>
+      <div class="panel wide" id="demo-guard">
+        <h3 class="panel-title">A failed command</h3>
+        <video controls muted loop playsinline preload="none" width="1120" height="540" data-poster="demo-guard.jpg" aria-describedby="note-guard" aria-label="Terminal recording: a deploy script fails with HTTP 401 and prints the Authorization header with the full fake key. After keyshroud claude-guard, the same script run through the guard's launcher prints the header as &lt;redacted:ACME_API_KEY&gt; and still exits with status 22.">
+          <source src="demo-guard.webm" type="video/webm">
+          <source src="demo-guard.mp4" type="video/mp4">
+        </video>
+        <p class="note" id="note-guard">Claude Code cannot rewrite the output of a command that fails, so a hook alone leaves it unmasked. <code>keyshroud claude-guard</code> makes Claude Code start its shell through a small launcher that masks what the command prints as it is written, and keeps its exit status. There is no agent in this take: the last command is what Claude Code&#8217;s Bash tool runs once the guard is on, in a shell started through <code>keyshroud run</code> the way <code>keyshroud run -- claude</code> starts Claude Code. Recorded in November 2026 with keyshroud 0.12 from <a href="https://github.com/dinhkarate/keyshroud/blob/main/assets/demo/guard.tape">guard.tape</a> and <a href="https://github.com/dinhkarate/keyshroud/blob/main/assets/demo/tour-shell.sh">tour-shell.sh</a>. The key is fake, and the API is a local mock that refuses the call. macOS and Linux.</p>
+      </div>
+      <div class="panel wide" id="demo-team">
+        <h3 class="panel-title">Team vault &amp; scope</h3>
+        <video controls muted loop playsinline preload="none" width="1120" height="540" data-poster="demo-team.jpg" aria-describedby="note-team" aria-label="Terminal recording: keyshroud source add vault takes a token in a masked prompt, a name is wired to vault://secret/myapp/db#password and a command prints it as &lt;redacted:DB_PASSWORD&gt;. keyshroud scope narrows the project to DB and ACME names, a command that asks for GH_TOKEN is refused as outside the project's scope, and keyshroud backup writes the local vault to one file under a new passphrase.">
+          <source src="demo-team.webm" type="video/webm">
+          <source src="demo-team.mp4" type="video/mp4">
+        </video>
+        <p class="note" id="note-team">A secret is read from a real HashiCorp Vault 2.2.2 dev server on localhost and used masked; nothing is copied out of Vault and keyshroud never writes there. Then the project is narrowed to its own names, a command that asks for another project&#8217;s token is refused, and the local vault is copied into one file under a passphrase of its own. No agent in this take. Recorded in November 2026 with keyshroud 0.12 from <a href="https://github.com/dinhkarate/keyshroud/blob/main/assets/demo/team.tape">team.tape</a> and <a href="https://github.com/dinhkarate/keyshroud/blob/main/assets/demo/tour-shell.sh">tour-shell.sh</a>. The token, passphrase and secrets are made up.</p>
+      </div>
       <div class="panel wide" id="demo-cli">
         <h3 class="panel-title">Terminal</h3>
         <video controls muted loop playsinline preload="none" width="1120" height="540" data-poster="demo-cli.webp" aria-label="Terminal recording: keyshroud add creates the local vault and stores a GitHub token through a masked prompt; keyshroud run prints &lt;redacted:GH_TOKEN&gt; in place of the token; keyshroud scan finds the token in debug.log; auth.json holds only a keyshroud:// reference">
@@ -298,17 +508,320 @@ footer a { color: var(--muted); }
     </div>
   </div>
 </section>
+
+<section class="alt" id="quickstart">
+  <div class="wrap">
+    <p class="kicker">Quickstart</p>
+    <h2>Up and running in three steps</h2>
+    <p class="sub">You need Node.js 18.19+. No account, no server: the first secret creates an encrypted vault on your machine.</p>
+    <div class="steps">
+      <div class="step">
+        <h3>Install</h3>
+        <pre><code>npm i -g keyshroud</code></pre>
+        <p>One CLI that agents call from their shell, plus plugins for Claude Code and pi. An MCP server covers clients without a shell.</p>
+      </div>
+      <div class="step">
+        <h3>Store a secret</h3>
+        <pre><code>keyshroud add --env GH_TOKEN \
+  --item "GitHub token"</code></pre>
+        <p>Typed into a masked prompt, or a dialog when an agent starts it. The vault&#8217;s key goes to the macOS keychain, the Linux Secret Service or Windows DPAPI. Already have a <code>.env</code>? <code>keyshroud import</code> moves it.</p>
+      </div>
+      <div class="step">
+        <h3>Run your agent</h3>
+        <pre><code>keyshroud run -- claude</code></pre>
+        <p>Or install the Claude Code plugin: <code>/plugin marketplace add dinhkarate/keyshroud</code></p>
+      </div>
+    </div>
+    <div class="agent-setup">
+      <h3>Or let your agent set it up</h3>
+      <p>Paste this into Claude Code, Codex, Cursor, OpenCode or pi. The agent follows <a href="/install.md">install.md</a> and leaves typing secrets (and any vault password) to you.</p>
+      <div class="prompt">
+        <pre><code id="agent-prompt">Read https://keyshroud.dev/install.md and set up keyshroud for me.</code></pre>
+        <button type="button" class="copy" data-copy-from="agent-prompt">Copy</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="vault" id="vaults">
+  <div class="wrap">
+    <p class="kicker">Where secrets live</p>
+    <h2>Keep them where you already keep them</h2>
+    <p class="sub">A reference names its vault, so all three work side by side. keyshroud has no service of its own to sign up for.</p>
+    <div class="grid c3">
+      <div class="card">
+        <span class="tag">Default</span>
+        <h3>A local vault</h3>
+        <div class="schemes"><code>keyshroud://</code></div>
+        <p>An AES-256-GCM file on your machine. No account, no server, works offline.</p>
+        <ul>
+          <li>Key in the macOS keychain, Linux Secret Service or Windows DPAPI</li>
+          <li>Touch ID on a Mac, or a passphrase, if you want to be asked</li>
+          <li><code>keyshroud backup</code> writes one file that restores anywhere</li>
+        </ul>
+        <a class="more" href="https://github.com/dinhkarate/keyshroud/blob/main/docs/local-vault.md">The local vault →</a>
+      </div>
+      <div class="card">
+        <span class="tag">Several machines</span>
+        <h3>Vaultwarden or Bitwarden</h3>
+        <div class="schemes"><code>bw://</code></div>
+        <p>The same secrets everywhere, in the Vaultwarden you host or a Bitwarden account.</p>
+        <ul>
+          <li>Passwords, usernames, notes, TOTP codes, URIs and custom fields</li>
+          <li>A separate account for agents, so they never open your whole vault</li>
+          <li>Machines that used keyshroud 0.7 keep Vaultwarden</li>
+        </ul>
+        <a class="more" href="https://github.com/dinhkarate/keyshroud/blob/main/docs/vaultwarden.md">Sync setup →</a>
+      </div>
+      <div class="card">
+        <span class="tag">Your team&#8217;s</span>
+        <h3>The secret manager at work</h3>
+        <div class="schemes"><code>vault://</code><code>infisical://</code><code>op://</code><code>awssecrets://</code><code>awsssm://</code><code>gcpsecrets://</code><code>azurekeyvault://</code></div>
+        <p>HashiCorp Vault, OpenBao, Infisical, 1Password, AWS, Google Cloud and Azure, read where the secrets already are.</p>
+        <ul>
+          <li>Read-only: nothing is copied, and keyshroud never writes there</li>
+          <li>Uses the sign-in you already have</li>
+          <li>Masked in output like any other secret</li>
+        </ul>
+        <a class="more" href="https://github.com/dinhkarate/keyshroud/blob/main/docs/team-secret-managers.md">Team secret managers →</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="alt" id="features">
+  <div class="wrap">
+    <p class="kicker">Features</p>
+    <h2>Built for agents, not just shells</h2>
+    <p class="sub">Every feature works with names and references, never with values.</p>
+    <div class="grid c3">
+      <div class="card"><h3>Masked output</h3><p><code>keyshroud run</code> streams stdout and stderr through a redactor. A secret is never split across chunks and slips through, and masking is on by default when output isn't going to a terminal.</p></div>
+      <div class="card"><h3>Hooks on tool output</h3><p>pi <code>tool_result</code> and Claude Code <code>PostToolUse</code> hooks scrub tool results, including commands the agent ran without keyshroud.</p></div>
+      <div class="card"><h3>The guard</h3><p>Claude Code can't rewrite a failed call, so <code>keyshroud claude-guard</code> masks what every Bash command prints as it is written, failed ones included.</p></div>
+      <div class="card"><h3>MCP server</h3><p>For clients without a shell, <code>keyshroud mcp</code> gives them <code>secrets_run</code>, <code>secrets_list</code> and <code>secrets_request</code>. None of them return values.</p></div>
+      <div class="card"><h3>Committable references</h3><p>Write <code>GH_TOKEN=keyshroud://GitHub token</code> in a <code>.env.refs</code> file you can commit. <code>keyshroud import</code> converts an existing <code>.env</code>.</p></div>
+      <div class="card"><h3>Paste-to-create</h3><p>When an agent needs a new key it runs <code>keyshroud add</code>, and a hidden-input dialog opens on your desktop. You paste; the chat never sees it.</p></div>
+      <div class="card"><h3>Inject &amp; scan</h3><p><code>inject</code> renders <code>{{ keyshroud://… }}</code> templates into files only you can read (mode 0600). <code>scan</code> finds leaked values in your repo before you commit.</p></div>
+      <div class="card"><h3>A project's own secrets</h3><p>A <code>.keyshroud.json</code> in a repo, such as <code>{ "only": ["STRIPE_*"] }</code>, narrows what <code>keyshroud run</code> and the agent get there to the names that project needs.</p></div>
+      <div class="card"><h3>Names-only audit log</h3><p><code>audit.jsonl</code> records which names were used, when and by which command, so you can see what an agent reached for. Never a value.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="agents">
+  <div class="wrap">
+    <p class="kicker">Agents</p>
+    <h2>Works with your agent</h2>
+    <p class="sub">One vault, every coding agent you use. Setup for each is in the docs. Watch it in <a href="#demo-code">Claude Code</a> and over <a href="#demo-mcp">MCP</a>.</p>
+    <div class="grid c3">
+      <a class="agent" href="https://github.com/dinhkarate/keyshroud#claude-code"><span class="via">Plugin</span><b>Claude Code</b><span>SessionStart and PostToolUse hooks mask tool results, a shell guard masks failed commands too; a skill teaches Claude the CLI.</span></a>
+      <a class="agent" href="https://github.com/dinhkarate/keyshroud#pi--omp"><span class="via">Extension</span><b>pi / omp</b><span>Hydrates env before provider auth and masks every tool result, failed ones too.</span></a>
+      <a class="agent" href="https://github.com/dinhkarate/keyshroud#other-agents-with-a-shell"><span class="via">Skill</span><b>Codex, OpenCode, Gemini CLI, Cursor</b><span><code>npx skills add dinhkarate/keyshroud</code>, then the agent uses the CLI.</span></a>
+      <a class="agent" href="https://github.com/dinhkarate/keyshroud#mcp-clients-without-a-shell"><span class="via">MCP</span><b>Claude Desktop &amp; chat clients</b><span>One <code>mcpServers</code> entry. <code>secrets_run</code> returns masked output.</span></a>
+      <a class="agent" href="https://github.com/dinhkarate/keyshroud#quickstart"><span class="via">CLI</span><b>Any shell or CI</b><span><code>keyshroud run -- &lt;cmd&gt;</code> injects env and masks stdout/stderr.</span></a>
+      <a class="agent" href="/install.md"><span class="via">Setup guide</span><b>Let the agent install it</b><span><code>install.md</code> is written for agents: what to run, and what to leave to you.</span></a>
+    </div>
+  </div>
+</section>
+
+<section class="alt" id="least">
+  <div class="wrap">
+    <p class="kicker">Least privilege</p>
+    <h2>Give each project only its own keys</h2>
+    <p class="sub">By default a command gets every wired secret. Narrow that per project or per command. These are defaults against accidents, not walls: see the <a href="#threat">threat model</a>.</p>
+    <div class="duo">
+      <div class="card">
+        <span class="tag">Per project</span>
+        <h3>A scope file in the repo</h3>
+        <p>In that directory, <code>keyshroud run</code>, the MCP tools and the names an agent is told are narrowed to the names in scope. Masking still covers every value.</p>
+<pre><span class="p">$</span> keyshroud scope --only 'DB_*,ACME_*'
+<span class="p">$</span> keyshroud run --only GH_TOKEN -- gh auth status
+<span class="d">Secret unresolved: GH_TOKEN is outside this project's scope (~/acme-app/.keyshroud.json)</span></pre>
+        <p class="note"><a href="https://github.com/dinhkarate/keyshroud/blob/main/docs/project-scope.md">Project scope →</a></p>
+      </div>
+      <div class="card">
+        <span class="tag">Per command</span>
+        <h3>Name what a command needs</h3>
+        <p><code>--only</code> gives a command just the names you list. With Vaultwarden, <code>keyshroud setup</code> gives agents an account of their own, so they never open your whole vault.</p>
+<pre><span class="p">$</span> keyshroud run --only GH_TOKEN -- gh pr list
+<span class="d"># gh gets GH_TOKEN and no other secret</span></pre>
+        <p class="note"><a href="https://github.com/dinhkarate/keyshroud#least-privilege">Least privilege →</a></p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="compare">
+  <div class="wrap">
+    <p class="kicker">Compare</p>
+    <h2>Four ways to give an agent a secret</h2>
+    <p class="sub">The tools in this space take one of four approaches. keyshroud masks what the model reads whether or not you wrapped the command, and keeps the vault on your side.</p>
+    <table class="cmp">
+      <thead><tr><th>Approach</th><th>Does the model see the value?</th><th>A command you did not wrap</th><th>Covers</th></tr></thead>
+      <tbody>
+        <tr class="us">
+          <td><b>Names in, masked output out</b><br>keyshroud</td>
+          <td data-l="Does the model see the value?"><span class="yes">No.</span> Tool output is masked.</td>
+          <td data-l="A command you did not wrap"><span class="yes">Masked too</span> in Claude Code (hook, plus the guard for failed commands) and pi/omp. Other agents rely on <code>keyshroud run</code>.</td>
+          <td data-l="Covers">Any secret a command reads from its environment or a file. Free, MIT, no account.</td>
+        </tr>
+        <tr>
+          <td><b>A wrapper that masks its own child</b><br>1Password <code>op run</code>, <code>dotenvx run --redact</code>, <code>varlock run</code>, <code>secretspec run</code></td>
+          <td data-l="Does the model see the value?"><span class="part">Not from the wrapped command.</span></td>
+          <td data-l="A command you did not wrap"><span class="no">Not masked.</span></td>
+          <td data-l="Covers">The same, for the commands you wrap. <code>op run</code> needs a paid 1Password account.</td>
+        </tr>
+        <tr>
+          <td><b>A vault MCP server</b><br>Bitwarden MCP, HashiCorp Vault MCP, Doppler MCP, Infisical MCP (by default)</td>
+          <td data-l="Does the model see the value?"><span class="no">Yes.</span> The tool returns it.</td>
+          <td data-l="A command you did not wrap">Not masked.</td>
+          <td data-l="Covers">Looking a secret up, with the value in the context from then on.</td>
+        </tr>
+        <tr>
+          <td><b>An egress proxy with placeholders</b><br>Infisical Agent Vault, OneCLI, <code>fnox proxy</code>, 1Password for NVIDIA OpenShell, Claude Code&#8217;s <code>sandbox.credentials</code> mask</td>
+          <td data-l="Does the model see the value?"><span class="yes">No.</span> The agent holds a placeholder.</td>
+          <td data-l="A command you did not wrap">Nothing to mask: the real value is never in the shell.</td>
+          <td data-l="Covers">HTTP(S) credentials for hosts you allow. Needs a proxy that can read the requests.</td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="note">An egress proxy is the stronger tool against a hostile or prompt-injected agent, for the credentials it covers; keyshroud also covers database passwords, SSH and signing keys and every CLI that reads a variable. They combine. As we read each project&#8217;s documentation on 2026-11-15; corrections are welcome in an <a href="https://github.com/dinhkarate/keyshroud/issues">issue</a>.</p>
+  </div>
+</section>
+
+<section class="alt threat" id="threat">
+  <div class="wrap">
+    <p class="kicker">Security</p>
+    <h2>An honest threat model</h2>
+    <p class="sub">Redaction is defense in depth, not a sandbox. Every guarantee we test for and every known limit is in the <a href="https://github.com/dinhkarate/keyshroud/blob/main/docs/security.md">security model</a>.</p>
+    <div class="duo">
+      <div class="card">
+        <h3>Protected</h3>
+        <ul class="yes-list">
+          <li>Secret values entering the model's context through tool output, a failed command&#8217;s included (in Claude Code, with <code>keyshroud claude-guard</code> on)</li>
+          <li>Secrets at rest: the local vault is AES-256-GCM, its key in the OS keychain</li>
+          <li>Secrets pasted into chat while being stored (keyshroud uses a masked prompt instead)</li>
+          <li>Plaintext in agent config and <code>auth.json</code> (only references are stored)</li>
+          <li>Secret values accidentally committed to your repo (caught by <code>keyshroud scan</code>)</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>Not protected</h3>
+        <ul class="no-list">
+          <li>A malicious or prompt-injected agent that encodes a value or sends it over the network</li>
+          <li>Other programs running as your user: they can read the vault&#8217;s key from the keychain (create the vault with a passphrase to be asked instead)</li>
+          <li>In Claude Code with the guard off: what a failed command prints, unless it ran through <code>keyshroud run</code> (the hook can&#8217;t rewrite a failed call)</li>
+          <li>A project scope and the guard are defaults against accidents, not walls: a program running as you can change them</li>
+          <li>Values shorter than 6 characters (not redacted, to avoid noise)</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="faq" id="faq">
+  <div class="wrap">
+    <p class="kicker">FAQ</p>
+    <h2>Questions people ask first</h2>
+    <p class="sub">The long list, with CI, Docker, Windows and upgrading, is in the <a href="https://github.com/dinhkarate/keyshroud/blob/main/docs/faq.md">FAQ</a>.</p>
+    <details><summary>Do I need Vaultwarden or any server?</summary><p>No. Secrets live in an encrypted file on your machine by default, with its key in the OS keychain. Vaultwarden or Bitwarden is optional, for the same secrets on several machines.</p></details>
+    <details><summary>Can the agent still use the key?</summary><p>Yes. The command gets the real value in its environment; only the text the model reads is masked.</p></details>
+    <details><summary>Is this a sandbox?</summary><p>No. It stops accidental disclosure. A hostile or prompt-injected agent can still send a value it can use somewhere else; for that threat use an egress proxy with placeholder credentials and keep a human approving commands.</p></details>
+    <details><summary>Doesn&#8217;t Claude Code do this itself?</summary><p>Partly, and differently. Claude Code can deny reads of files such as <code>.env</code>, and its sandbox can show a command a placeholder for a credential and put the real value on requests to hosts you allow. It has no secret store and does not rewrite what a tool prints. keyshroud is the store, works the same across agents, and masks output; the two combine.</p></details>
+    <details><summary>Why not just <code>.gitignore</code> my <code>.env</code>?</summary><p>That stops commits, not reads. Agents read <code>.env</code> to debug, and whatever they read goes to the model provider.</p></details>
+    <details><summary>We use HashiCorp Vault, AWS or 1Password at work. Do I have to move the secrets?</summary><p>No. keyshroud reads them where they are, with the sign-in you already have, and never writes there.</p></details>
+    <details><summary>Does it work on Windows?</summary><p>Yes, tested on Windows 10 with Node 22. The local vault keeps its key with DPAPI. The guard for failed commands is macOS and Linux only.</p></details>
+  </div>
+</section>
+
+<section class="alt final">
+  <div class="wrap">
+    <h2>Stop pasting API keys into chat</h2>
+    <p class="sub">Every key you paste lives on in the transcript, the provider&#8217;s logs and every future context window. Give your agent the name instead.</p>
+    <div class="get"><span><b>$</b>npm i -g keyshroud</span><button type="button" class="copy" data-copy="npm i -g keyshroud">Copy</button></div>
+    <div class="cta">
+      <a class="btn primary" href="#quickstart">Get started free</a>
+      <a class="btn" href="https://github.com/dinhkarate/keyshroud#readme">Read the docs</a>
+    </div>
+    <p class="tiny">No account · No telemetry · MIT</p>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="cols">
+      <div>
+        <h4>keyshroud</h4>
+        <p>Your agents use the keys. They never see them. A local vault, Vaultwarden and Bitwarden, or your team&#8217;s secret manager.</p>
+      </div>
+      <div>
+        <h4>Docs</h4>
+        <ul>
+          <li><a href="https://github.com/dinhkarate/keyshroud#quickstart">Quickstart</a></li>
+          <li><a href="https://github.com/dinhkarate/keyshroud/blob/main/docs/cli.md">CLI reference</a></li>
+          <li><a href="https://github.com/dinhkarate/keyshroud/blob/main/docs/claude-code.md">Claude Code</a></li>
+          <li><a href="https://github.com/dinhkarate/keyshroud/blob/main/docs/agents.md">Other agents</a></li>
+          <li><a href="/install.md">Agent setup guide</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Vaults</h4>
+        <ul>
+          <li><a href="https://github.com/dinhkarate/keyshroud/blob/main/docs/local-vault.md">Local vault</a></li>
+          <li><a href="https://github.com/dinhkarate/keyshroud/blob/main/docs/vaultwarden.md">Vaultwarden, Bitwarden</a></li>
+          <li><a href="https://github.com/dinhkarate/keyshroud/blob/main/docs/team-secret-managers.md">Team secret managers</a></li>
+          <li><a href="https://github.com/dinhkarate/keyshroud/blob/main/docs/project-scope.md">Project scope</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Project</h4>
+        <ul>
+          <li><a href="https://github.com/dinhkarate/keyshroud">GitHub</a></li>
+          <li><a href="https://www.npmjs.com/package/keyshroud">npm</a></li>
+          <li><a href="https://github.com/dinhkarate/keyshroud/blob/main/CHANGELOG.md">Changelog</a></li>
+          <li><a href="https://github.com/dinhkarate/keyshroud/blob/main/docs/security.md">Security model</a></li>
+          <li><a href="https://github.com/dinhkarate/keyshroud/blob/main/SECURITY.md">Report a vulnerability</a></li>
+        </ul>
+      </div>
+    </div>
+    <p class="legal">keyshroud · MIT · Not affiliated with Anthropic, Bitwarden, Inc. or any vendor named here.</p>
+  </div>
+</footer>
+
 <script>
 (() => {
+  // Copy buttons.
+  document.querySelectorAll('.copy').forEach((button) => button.addEventListener('click', async () => {
+    const text = button.dataset.copy ?? document.getElementById(button.dataset.copyFrom).textContent;
+    try { await navigator.clipboard.writeText(text); button.textContent = 'Copied'; }
+    catch { button.textContent = 'Select & copy'; }
+    setTimeout(() => { button.textContent = 'Copy'; }, 1600);
+  }));
+
+  // The hero terminal: the same output as the command printed it and as the model read it.
+  const calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const views = document.getElementById('views');
+  const buttons = [...views.querySelectorAll('[data-view]')];
+  let view = 'model';
+  const show = (to) => {
+    view = to;
+    views.classList.toggle('model', to === 'model');
+    views.classList.toggle('cmd', to === 'cmd');
+    buttons.forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.view === to)));
+  };
+  const timer = calm ? 0 : setInterval(() => show(view === 'model' ? 'cmd' : 'model'), 3200);
+  buttons.forEach((b) => b.addEventListener('click', () => { clearInterval(timer); show(b.dataset.view); }));
+
+  // Demo tabs.
   const demo = document.getElementById('demo');
   const tabs = [...demo.querySelectorAll('[role="tab"]')];
   const panels = tabs.map((tab) => document.getElementById(tab.getAttribute('aria-controls')));
   const videos = panels.map((panel) => panel.querySelector('video'));
-  const calm = matchMedia('(prefers-reduced-motion: reduce)').matches || navigator.connection?.saveData === true;
+  const quiet = calm || navigator.connection?.saveData === true;
   const held = new Set(); // videos the visitor paused
   let current = 0;
   let inView = false;
-  const start = (v) => { if (!calm && inView && !held.has(v)) v.play().catch(() => {}); };
+  const start = (v) => { if (!quiet && inView && !held.has(v)) v.play().catch(() => {}); };
   const stop = (v) => { if (!v.paused) { v.dataset.auto = '1'; v.pause(); } };
   function select(i, focus) {
     current = i;
@@ -342,7 +855,7 @@ footer a { color: var(--muted); }
     }
   }, { threshold: 0.4 });
   videos.forEach((v) => {
-    if (calm) v.loop = false;
+    if (quiet) v.loop = false;
     v.addEventListener('pause', () => { if (v.dataset.auto) delete v.dataset.auto; else held.add(v); });
     v.addEventListener('play', () => held.delete(v));
     seen.observe(v);
@@ -362,192 +875,5 @@ footer a { color: var(--muted); }
   }));
 })();
 </script>
-
-<section id="quickstart">
-  <div class="wrap">
-    <h2>Up and running in three steps</h2>
-    <p class="sub">You need Node.js 18.19+. No account, no server: the first secret creates an encrypted vault on your machine.</p>
-    <div class="steps">
-      <div class="step">
-        <h3>Install</h3>
-        <pre><code>npm i -g keyshroud</code></pre>
-        <p>One CLI that agents call from their shell, plus plugins for Claude Code and pi. An MCP server covers clients without a shell.</p>
-      </div>
-      <div class="step">
-        <h3>Store a secret</h3>
-        <pre><code>keyshroud add --env GH_TOKEN \
-  --item "GitHub token"</code></pre>
-        <p>Typed into a masked prompt, or a dialog when an agent starts it. The vault&#8217;s key goes to the macOS keychain, the Linux Secret Service or Windows DPAPI. Already have a <code>.env</code>? <code>keyshroud import</code> moves it.</p>
-      </div>
-      <div class="step">
-        <h3>Run your agent</h3>
-        <pre><code>keyshroud run -- claude</code></pre>
-        <p>Or install the Claude Code plugin: <code>/plugin marketplace add dinhkarate/keyshroud</code></p>
-      </div>
-    </div>
-    <p class="note">Several machines? Keep the secrets in Vaultwarden or Bitwarden instead: <a href="https://github.com/dinhkarate/keyshroud#sync-across-machines-vaultwarden-or-bitwarden">sync setup</a>. Machines that used keyshroud 0.7 keep Vaultwarden. Team on HashiCorp Vault, OpenBao, Infisical, 1Password, AWS, Google Cloud or Azure? keyshroud reads the secrets where they are: <a href="https://github.com/dinhkarate/keyshroud#team-secret-managers-vault-openbao-infisical-1password-aws-google-cloud-azure">team secret managers</a>.</p>
-    <div class="agent-setup">
-      <h3>Or let your agent set it up</h3>
-      <p>Paste this into Claude Code, Codex, Cursor, OpenCode or pi. The agent follows <a href="/install.md">install.md</a> and leaves typing secrets (and any vault password) to you.</p>
-      <div class="prompt">
-        <pre><code id="agent-prompt">Read https://keyshroud.dev/install.md and set up keyshroud for me.</code></pre>
-        <button type="button" id="copy-prompt">Copy</button>
-      </div>
-    </div>
-  </div>
-</section>
-<script>
-document.getElementById('copy-prompt').addEventListener('click', async (e) => {
-  try { await navigator.clipboard.writeText(document.getElementById('agent-prompt').textContent); e.target.textContent = 'Copied'; }
-  catch { e.target.textContent = 'Select & copy'; }
-  setTimeout(() => { e.target.textContent = 'Copy'; }, 1600);
-});
-</script>
-
-<section>
-  <div class="wrap">
-    <h2>Built for agents, not just shells</h2>
-    <p class="sub">Every feature works with names and references, never with values.</p>
-    <div class="grid">
-      <div class="card"><h3>Masked output</h3><p><code>keyshroud run</code> streams stdout and stderr through a redactor. A secret is never split across chunks and slips through, and masking is on by default when output isn't going to a terminal.</p></div>
-      <div class="card"><h3>Hooks on tool output</h3><p>pi <code>tool_result</code> and Claude Code <code>PostToolUse</code> hooks scrub tool results, including commands the agent ran without keyshroud. Claude Code can't rewrite a failed call, so <code>keyshroud claude-guard</code> masks what every Bash command prints as it is written, failed ones included.</p></div>
-      <div class="card"><h3>MCP server</h3><p>For clients without a shell, <code>keyshroud mcp</code> gives them <code>secrets_run</code>, <code>secrets_list</code> and <code>secrets_request</code>. None of them return values.</p></div>
-      <div class="card"><h3>Committable references</h3><p>Write <code>GH_TOKEN=keyshroud://GitHub token</code> in a <code>.env.refs</code> file you can commit. <code>bw://</code> references reach Vaultwarden passwords, usernames, notes, TOTP codes, URIs and custom fields.</p></div>
-      <div class="card"><h3>Your team's secret manager</h3><p><code>vault://</code>, <code>infisical://</code>, <code>op://</code>, <code>awssecrets://</code>, <code>awsssm://</code>, <code>gcpsecrets://</code> and <code>azurekeyvault://</code> references read HashiCorp Vault, OpenBao, Infisical, 1Password, AWS, Google Cloud and Azure where the secrets already are. Read-only: nothing is copied, and keyshroud never writes there.</p></div>
-      <div class="card"><h3>Inject &amp; scan</h3><p><code>inject</code> renders <code>{{ keyshroud://… }}</code> templates into files only you can read (mode 0600). <code>scan</code> finds leaked values in your repo before you commit.</p></div>
-      <div class="card"><h3>Local first, sync if you want</h3><p>Secrets live in an AES-256-GCM vault on your machine, its key in the OS keychain or behind Touch ID on a Mac. <code>keyshroud backup</code> writes one file under its own passphrase that restores anywhere; for several machines, keep them in the Vaultwarden you host, or Bitwarden. No SaaS account with us, no telemetry.</p></div>
-      <div class="card"><h3>A project's own secrets</h3><p>A <code>.keyshroud.json</code> in a repo, such as <code>{ "only": ["STRIPE_*"] }</code>, narrows what <code>keyshroud run</code> and the agent get there to the names that project needs. Masking still covers every value.</p></div>
-      <div class="card"><h3>Names-only audit log</h3><p><code>audit.jsonl</code> records which names were used, when and by which command, so you can see what an agent reached for. Never a value.</p></div>
-    </div>
-  </div>
-</section>
-
-<section id="agents">
-  <div class="wrap">
-    <h2>Works with your agent</h2>
-    <p class="sub">One vault, every coding agent you use. Setup for each is in the docs. Watch it in <a href="#demo-code">Claude Code</a> and over <a href="#demo-mcp">MCP</a>.</p>
-    <div class="agents">
-      <a class="agent" href="https://github.com/dinhkarate/keyshroud#claude-code"><span class="via">Plugin</span><b>Claude Code</b><span>SessionStart and PostToolUse hooks mask tool results, a shell guard masks failed commands too; a skill teaches Claude the CLI.</span></a>
-      <a class="agent" href="https://github.com/dinhkarate/keyshroud#pi--omp"><span class="via">Extension</span><b>pi / omp</b><span>Hydrates env before provider auth and masks every tool result, failed ones too.</span></a>
-      <a class="agent" href="https://github.com/dinhkarate/keyshroud#other-agents-with-a-shell"><span class="via">Skill</span><b>Codex, OpenCode, Gemini CLI, Cursor</b><span><code>npx skills add dinhkarate/keyshroud</code>, then the agent uses the CLI.</span></a>
-      <a class="agent" href="https://github.com/dinhkarate/keyshroud#mcp-clients-without-a-shell"><span class="via">MCP</span><b>Claude Desktop &amp; chat clients</b><span>One <code>mcpServers</code> entry. <code>secrets_run</code> returns masked output.</span></a>
-      <a class="agent" href="https://github.com/dinhkarate/keyshroud#quickstart"><span class="via">CLI</span><b>Any shell or CI</b><span><code>keyshroud run -- &lt;cmd&gt;</code> injects env and masks stdout/stderr.</span></a>
-    </div>
-  </div>
-</section>
-
-<section id="compare">
-  <div class="wrap">
-    <h2>How it compares</h2>
-    <p class="sub">The closest tools, side by side. keyshroud is the only one that keeps values out of the model and off someone else&#8217;s cloud.</p>
-    <div class="vs">
-      <div class="card us">
-        <span class="tag">This project</span>
-        <h3>keyshroud</h3>
-        <p class="what">Your vault, masked agent output, plugins for the agents you use.</p>
-        <ul>
-          <li><i class="mark y" role="img" aria-label="Yes">&#10003;</i><div><b>Keys stay with you</b><span>On your machine, your Vaultwarden, or your team&#8217;s own secret manager</span></div></li>
-          <li><i class="mark y" role="img" aria-label="Yes">&#10003;</i><div><b>No account needed</b><span>The local vault needs no signup</span></div></li>
-          <li><i class="mark y" role="img" aria-label="Yes">&#10003;</i><div><b>Free</b><span>MIT-licensed, no telemetry</span></div></li>
-          <li><i class="mark y" role="img" aria-label="Yes">&#10003;</i><div><b>Masks agent output</b><span>Every tool result, wrapped or not</span></div></li>
-          <li><i class="mark y" role="img" aria-label="Yes">&#10003;</i><div><b>Agent plugins</b><span>Claude Code, pi, MCP</span></div></li>
-        </ul>
-      </div>
-      <div class="card">
-        <span class="tag">Commercial</span>
-        <h3>1Password <code>op run</code></h3>
-        <p class="what">Polished, but your secrets live in 1Password&#8217;s cloud.</p>
-        <ul>
-          <li><i class="mark n" role="img" aria-label="No">&#10005;</i><div><b>Keys stay with you</b><span>1Password cloud only</span></div></li>
-          <li><i class="mark n" role="img" aria-label="No">&#10005;</i><div><b>No account needed</b><span>Needs a 1Password account</span></div></li>
-          <li><i class="mark n" role="img" aria-label="No">&#10005;</i><div><b>Free</b><span>Needs a paid plan</span></div></li>
-          <li><i class="mark p" role="img" aria-label="Partly">~</i><div><b>Masks agent output</b><span>Only commands wrapped in <code>op run</code></span></div></li>
-          <li><i class="mark y" role="img" aria-label="Yes">&#10003;</i><div><b>Agent plugins</b><span>Claude Code, Cursor, MCP</span></div></li>
-        </ul>
-      </div>
-      <div class="card">
-        <span class="tag">Open source</span>
-        <h3>Bitwarden MCP server</h3>
-        <p class="what">Self-hosted too, but it hands values to the model.</p>
-        <ul>
-          <li><i class="mark y" role="img" aria-label="Yes">&#10003;</i><div><b>Keys stay with you</b><span>Vaultwarden or Bitwarden</span></div></li>
-          <li><i class="mark n" role="img" aria-label="No">&#10005;</i><div><b>No account needed</b><span>Needs a vault account</span></div></li>
-          <li><i class="mark y" role="img" aria-label="Yes">&#10003;</i><div><b>Free</b><span>Open source</span></div></li>
-          <li><i class="mark n" role="img" aria-label="No">&#10005;</i><div><b>Masks agent output</b><span>Returns plaintext to the model</span></div></li>
-          <li><i class="mark p" role="img" aria-label="Partly">~</i><div><b>Agent plugins</b><span>MCP only</span></div></li>
-        </ul>
-      </div>
-    </div>
-    <p class="note">Also nearby: <a href="https://github.com/dmno-dev/varlock">varlock</a> (env schemas with log redaction) and <a href="https://dotenvx.com">dotenvx</a> (encrypted <code>.env</code> files). Neither plugs into agent tool output. As of 2026-10-13.</p>
-  </div>
-</section>
-
-<section id="threat">
-  <div class="wrap">
-    <h2>An honest threat model</h2>
-    <p class="sub">Redaction is defense in depth, not a sandbox.</p>
-    <div class="threat">
-      <div class="card">
-        <h3>Protected</h3>
-        <ul>
-          <li>Secret values entering the model's context through tool output, a failed command&#8217;s included (in Claude Code, with <code>keyshroud claude-guard</code> on)</li>
-          <li>Secrets at rest: the local vault is AES-256-GCM, its key in the OS keychain</li>
-          <li>Secrets pasted into chat while being stored (keyshroud uses a masked prompt instead)</li>
-          <li>Plaintext in agent config and <code>auth.json</code> (only references are stored)</li>
-          <li>Secret values accidentally committed to your repo (caught by <code>keyshroud scan</code>)</li>
-        </ul>
-      </div>
-      <div class="card">
-        <h3>Not protected</h3>
-        <ul>
-          <li>A malicious or prompt-injected agent that encodes a value or sends it over the network</li>
-          <li>Other programs running as your user: they can read the vault&#8217;s key from the keychain (create the vault with a passphrase to be asked instead)</li>
-          <li>In Claude Code with the guard off: what a failed command prints, unless it ran through <code>keyshroud run</code> (the hook can&#8217;t rewrite a failed call)</li>
-          <li>A project scope and the guard are defaults against accidents, not walls: a program running as you can change them</li>
-          <li>Values shorter than 6 characters (not redacted, to avoid noise)</li>
-        </ul>
-      </div>
-    </div>
-  </div>
-</section>
-
-<section class="final-band">
-  <div class="wrap">
-    <h2>Stop pasting API keys into chat</h2>
-    <p class="sub">Every key you paste lives on in the transcript, the provider&#8217;s logs and every future context window.</p>
-    <div class="pain">
-      <div class="card bad">
-        <h3>Without keyshroud</h3>
-        <ul>
-          <li>The agent <b>reads <code>.env</code></b> while debugging and the key lands in the transcript</li>
-          <li>A vault MCP server <b>returns plaintext</b> to the model</li>
-          <li>Keeping keys out of chat <b>means a paid, hosted</b> secrets manager</li>
-        </ul>
-      </div>
-      <div class="card good">
-        <h3>With keyshroud</h3>
-        <ul>
-          <li>The agent sees <b>names and <code>keyshroud://</code> references</b>, never values</li>
-          <li>Any value in tool output becomes <b><code>&lt;redacted:NAME&gt;</code></b></li>
-          <li>Keys stay <b>on your machine</b>, or in your own Vaultwarden, free and MIT-licensed</li>
-        </ul>
-      </div>
-    </div>
-    <div class="final">
-      <div class="cta">
-        <a class="btn primary" href="#quickstart">Get started free</a>
-        <a class="btn" href="https://github.com/dinhkarate/keyshroud#readme">Read the docs</a>
-      </div>
-      <p class="install"><code>npm i -g keyshroud</code> &middot; No account &middot; No telemetry &middot; MIT</p>
-    </div>
-  </div>
-</section>
-
-<div class="wrap">
-  <footer>
-    <span>keyshroud &middot; MIT &middot; a local vault, Vaultwarden and Bitwarden, or your team&#8217;s secret manager. Not affiliated with Anthropic, Bitwarden, Inc. or any vendor named here.</span>
-    <span><a href="https://github.com/dinhkarate/keyshroud">GitHub</a> &middot; <a href="https://www.npmjs.com/package/keyshroud">npm</a> &middot; <a href="https://github.com/dinhkarate/keyshroud/blob/main/SECURITY.md">Security</a></span>
-  </footer>
-</div>
 </body>
 </html>
