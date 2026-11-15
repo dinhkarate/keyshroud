@@ -208,6 +208,50 @@ export function compileRedactIndex(index: RedactIndex): (text: string) => string
   return (text) => applyHits(text, find(text));
 }
 
+// An output masked from the index as it arrives (the Claude Code guard). A fingerprint cannot say
+// whether the end of the text is the beginning of a value, so the length of the longest one is
+// held back. `idle`, for when nothing more is arriving, lets the whole lines go: a value of one
+// line is never cut by it, and one of several lines stays masked by its long runs. `index` is
+// asked each time, so an index that grows while the output runs is the one that masks it.
+export function createIndexFeed(index: () => RedactIndex, maxHold = MAX_HOLD): { push(text: string): string; idle(): string; end(): string } {
+  let compiled: RedactIndex | null = null;
+  let find: ReturnType<typeof compileIndexSearch> = () => [];
+  let behind = 0;
+  let pending = "";
+  let gone = "";
+  const held = () => {
+    const now = index();
+    if (now !== compiled) {
+      compiled = now;
+      find = compileIndexSearch(now);
+      behind = Math.max(0, now.entries.reduce((max, entry) => Math.max(max, entry.length), 0) - 1);
+    }
+    return behind;
+  };
+  // Lets go of `wanted` characters of what is pending, or fewer: a value that is all there and
+  // crosses that place is kept whole for its one placeholder (up to `maxHold`; past it, both
+  // sides are masked).
+  const emit = (wanted: number) => {
+    const all = gone + pending, from = gone.length;
+    const hits = find(all);
+    let cut = from + wanted;
+    for (let moved = true; moved;) {
+      moved = false;
+      for (const hit of hits) if (hit.start >= from && hit.start < cut && hit.end > cut) { cut = hit.start; moved = true; }
+    }
+    if (from + wanted - cut > maxHold) cut = from + wanted;
+    const out = applyHits(all, hits, from, cut);
+    gone = behind ? all.slice(0, cut).slice(-behind) : "";
+    pending = all.slice(cut);
+    return out;
+  };
+  return {
+    push(text) { pending += text; return emit(Math.max(0, pending.length - held())); },
+    idle() { held(); return emit(pending.lastIndexOf("\n") + 1); },
+    end() { held(); return emit(pending.length); },
+  };
+}
+
 // Where the indexed values are in a text: the name and the offset of each (for `scan`).
 export function compileIndexSearch(index: RedactIndex): (text: string) => Array<{ start: number; end: number; name: string }> {
   const key = Buffer.from(index.key, "base64");

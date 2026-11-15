@@ -96,7 +96,16 @@ keyshroud doctor
 | Docker、服务器、钥匙环被锁定的 SSH 会话、没有 systemd 的 Linux | 由口令派生（scrypt） | `keyshroud unlock`；会话 30 分钟后结束 |
 
 想在任何机器上都被询问口令，可以在终端里用 `KEYSHROUD_VAULT_KEY=passphrase keyshroud unlock` 创建 vault
-（输入两次，至少 12 个字符）。丢失密钥或忘记口令都无法恢复，而且 vault 只属于一台机器；需要备份或多台机器时，请使用 Vaultwarden 或 Bitwarden。
+（输入两次，至少 12 个字符）。丢失密钥或忘记口令都无法恢复，而且 vault 只属于一台机器。
+
+**备份：** `keyshroud backup`（在终端里运行）把整个本地 vault 写入一个文件，用你当场设置的独立口令加密，
+因此可以在任何机器上打开。`keyshroud restore FILE` 先打印计划（只有名称），加上 `--yes` 才执行：
+补上缺少的条目，保留本机上值不同的条目（除非加 `--replace`），并重新关联每个条目的变量名。
+需要多台机器同时使用同一批密钥时，请使用 Vaultwarden 或 Bitwarden。
+
+**按项目限定：** `keyshroud scope --only 'STRIPE_*,GH_TOKEN'` 会在仓库里写入 `.keyshroud.json`；
+在该目录及其子目录中，`keyshroud run`、`env` 和 agent 只能拿到列表里的名称。遮蔽仍然覆盖所有的值。
+这是防止误用的默认设置，不是安全边界。
 
 ### 多台机器同步
 
@@ -165,6 +174,9 @@ npm install -g keyshroud
 
 **限制**：命令**失败**时，Claude Code 触发的是 `PostToolUseFailure`，它无法改写输出。
 因此 skill 和会话上下文会要求 Claude 通过 `keyshroud run`（或 `secrets_run`）运行所有用到密钥的命令 —— 它在进程内部完成遮蔽，与退出码无关。
+要让没有通过 `keyshroud run` 运行的命令也被遮蔽，可以开启 guard：`keyshroud claude-guard`（macOS、Linux）。
+此后 Claude Code 通过 keyshroud 启动它的 shell，Bash 命令输出的内容在写出时即被遮蔽，命令失败时也一样
+（每条命令大约多 0.2 秒；用 `keyshroud claude-guard --off` 关闭）。
 
 ### 任意 MCP 客户端
 

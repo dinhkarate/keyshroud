@@ -64,7 +64,7 @@ webhooks, databases. The usual options are bad:
 |---|---|
 | 🙈 **Masked output** | `keyshroud run` replaces every secret value in stdout/stderr with `<redacted:NAME>` — streaming-safe across chunk boundaries. |
 | 🔐 **Local vault** | An AES-256-GCM file whose key is in the macOS keychain, the Linux Secret Service or Windows DPAPI (a passphrase where there is none). No account, no server, no `bw`. |
-| 🪝 **Agent hooks** | The pi/omp `tool_result` hook redacts every tool result, failed ones included. Claude Code's `PostToolUse` hook redacts every *successful* tool result (Bash, Read, Grep, MCP…) — see [limits](#security-model). |
+| 🪝 **Agent hooks** | The pi/omp `tool_result` hook redacts every tool result, failed ones included. Claude Code's `PostToolUse` hook redacts every *successful* tool result (Bash, Read, Grep, MCP…), and [`keyshroud claude-guard`](#claude-code) masks what a Bash command prints as it is written, failed commands included — see [limits](#security-model). |
 | 🔌 **MCP server** | For clients without a shell: `keyshroud mcp` gives them `secrets_run`, `secrets_list`, `secrets_request`, `vault_status`. No tool ever returns a value. |
 | 🔗 **Committable references** | `keyshroud://item`, `bw://item`, `bw://item/username`, `bw://item/fields/name`, `bw://item/totp` in `.env.refs` files and templates: names, not values. |
 | ⌨️ **Paste-to-create** | New secrets go through a masked prompt in the user's terminal or a masked popup in pi — never through the chat. |
@@ -73,6 +73,8 @@ webhooks, databases. The usual options are bad:
 | ⚡ **Fast** | The local vault answers in milliseconds, offline. With Vaultwarden: one batched `bw list items` per session instead of one `bw get` (~3 s) per secret. |
 | 🔄 **Optional sync** | Vaultwarden on a $5 VPS or a Raspberry Pi, or Bitwarden, when the same secrets should reach several machines. `keyshroud://` and `bw://` references work side by side. |
 | 🏢 **Team secret managers** | `vault://secret/app#password`, `infisical://…`, `op://…`, `awssecrets://…`, `awsssm://…`, `gcpsecrets://…`, `azurekeyvault://…`: read-only [sources](#team-secret-managers-vault-openbao-infisical-1password-aws-google-cloud-azure), injected and masked like any other secret. |
+| 🎯 **Project scope** | A `.keyshroud.json` in a repo (`{ "only": ["STRIPE_*", "GH_TOKEN"] }`) narrows what `run`, `env` and the agents get there to the names that project needs; masking still covers every value. |
+| 💾 **Backup** | `keyshroud backup` copies the local vault into one file under a passphrase of its own; `keyshroud restore` brings it back on any machine and wires the names again. |
 | 🧾 **Audit log** | `audit.jsonl` records which *names* were used, when, by which command. Never values. |
 
 ## Supported agents
@@ -166,9 +168,30 @@ log in again once you approve a Touch ID sheet), and over SSH it tells you to ru
 moves a vault between key types (a new key and vault id each time); run `rekey --to passphrase` before
 moving to another Mac.
 
-Nothing can recover a lost key or a forgotten passphrase, and the vault belongs to one machine.
-`vault.json` is safe to copy as long as its key is not. For backups and several machines, use
-Vaultwarden or Bitwarden.
+Nothing can recover a lost key or a forgotten passphrase, and the vault belongs to one machine:
+`vault.json` copied elsewhere does not open without its key, which stays in this machine's key store.
+
+### Backup and restore
+
+```bash
+keyshroud backup                           # asks for a new passphrase, writes ./keyshroud-backup-<date>.json
+keyshroud restore keyshroud-backup-….json  # what it would add; --yes does it
+```
+
+`backup` (in a terminal) copies every item of the local vault into one file in the vault's own format,
+sealed under a passphrase you choose now (at least 12 characters, typed twice), not under this
+machine's key: it opens anywhere. It first proves the vault's current key the way `rekey` does (a
+passphrase vault asks for its passphrase, a Touch ID vault for Touch ID; an open session is not enough),
+never writes over a file that is there (`--out FILE` names another), and the file is `0600`. Keep it
+somewhere that is not this machine. Nothing can recover its passphrase.
+
+`restore FILE` (in a terminal) asks for that passphrase and prints a plan of names: items the local
+vault lacks are added, items it holds with the same value are left alone, and an item that has another
+value here is kept as it is unless you add `--replace`. Nothing changes until `--yes`. The variable an
+item was stored for (`add --env NAME`) is wired to it again when nothing is wired under that name, so
+on a new machine `keyshroud restore FILE --yes` is the whole move; the vault it creates there gets
+that machine's own key. Items in Vaultwarden, the servers of the sources and their sign-ins are not
+part of a backup. For the same secrets on several machines at once, use Vaultwarden or Bitwarden.
 
 ### Sync across machines: Vaultwarden or Bitwarden
 
@@ -251,6 +274,43 @@ keyshroud migrate --yes                          # copy them; references keep wo
   end. Unlock it again with `keyshroud unlock --unattended`.
 - Self-hosted Vaultwarden with `SIGNUPS_ALLOWED=false`: invite the address from the admin page
   (`/admin`), or allow signups for a minute, then pass `--registered` once the account exists.
+
+### Least privilege: a project's own names
+
+By default `keyshroud run` puts every wired secret into the command, so an agent working on one
+project can use the tokens of all the others. A scope narrows that for a directory:
+
+```bash
+cd ~/code/shop
+keyshroud scope --only 'STRIPE_*,GH_TOKEN'   # writes ./.keyshroud.json
+keyshroud scope                              # what is in scope here, and how many names are not
+```
+
+```json
+{ "only": ["STRIPE_*", "GH_TOKEN"] }
+```
+
+In that directory and below it (the nearest `.keyshroud.json` going up decides):
+
+- `keyshroud run`, `secrets_run`, `env`, `env --shell` and pi/omp's shell get only the names in
+  scope; `run` and `secrets_run` do not pass a wired name outside it on, not even from the
+  environment the agent was started with.
+- `run --only NAME`, `get NAME` and `secrets_run` with `only` refuse a name outside the scope, and
+  say so.
+- The names Claude Code is told at session start, and `secrets_list`, are the ones in scope.
+- Masking is not narrowed: a value outside the scope that turns up in output is still masked (a
+  name wired to a [team secret manager](#team-secret-managers-vault-openbao-infisical-1password-aws-google-cloud-azure)
+  from the moment its value has been read there: masking never contacts a source by itself).
+- `secrets_run` takes the scope of the directory its command runs in (`cwd`; through a link, the
+  directory it leads to), `secrets_list` the one of the directory the MCP server was started in.
+- `add` and `wire` say when the name they just wired is outside the scope, so you can add it there.
+
+The file holds names and patterns only (`*` stands for any run of characters), so it can be committed;
+a teammate's machine applies it to whatever they have wired under those names. A file that cannot be
+read as a scope (also a link to a file that is gone) puts nothing in scope and says why, instead of
+falling back to everything or to a scope further up. References
+(`--env-file .env.refs`, `get keyshroud://Item`) are not narrowed: they already name what they want.
+A scope is a default against accidents, not a wall: see the [security model](#security-model).
 
 ### Team secret managers: Vault, OpenBao, Infisical, 1Password, AWS, Google Cloud, Azure
 
@@ -405,7 +465,8 @@ What you get:
   **Limit:** when a command fails, Claude Code fires `PostToolUseFailure`, which
   cannot rewrite output. The skill and session context therefore tell Claude to
   run every secret-using command through `keyshroud run`, which masks inside
-  the process regardless of the exit code.
+  the process regardless of the exit code; the guard below covers the commands
+  that are not run that way.
 - **Skill** — teaches Claude to use names and references, never values.
 
 Claude uses the CLI from its Bash tool, so the plugin adds no MCP server (since
@@ -429,6 +490,38 @@ keyshroud claude-setup --item "Anthropic API key" --ttl-ms 600000
 
 It backs up `settings.json` first and refuses to replace an existing helper
 without `--force`.
+
+### The guard: failed commands masked too
+
+```bash
+keyshroud claude-guard          # on (macOS, Linux); takes effect in new Claude Code sessions
+keyshroud claude-guard --off
+```
+
+With the guard on, Claude Code starts its shell through keyshroud (`CLAUDE_CODE_SHELL` in
+`~/.claude/settings.json` points at a small launcher in `~/.config/keyshroud/guard/`). Each Bash
+command runs in your real bash or zsh with the same arguments; what it prints passes through a
+masking process on its way to Claude Code, so a wired value becomes `<redacted:NAME>` whether the
+command succeeds, fails or is interrupted, and whether or not it was run through `keyshroud run`.
+The exit status, the order of stdout and stderr, the working directory and background jobs behave as
+before; a command costs about 0.2 s more.
+
+The guard knows values the way the hook does: from the fingerprint index, never from the vault, so it
+never asks for anything and masks nothing before an index exists. It covers the Bash tool; the
+`PostToolUse` hook stays on for the other tools. If its pipes or the masking process cannot be
+started, the command is not run (exit 126, with the reason) rather than run unmasked; if the masking
+process stops while a command runs, the shell and what it started are told to end, and killed after
+two seconds. That is as good as the list of processes it can get: one that has cut itself loose from
+the shell is not found, and if the list cannot be had at that moment the guard stops what it knows of
+and says that the rest may still run (the list comes from `/proc` or the system's `ps`; a machine
+with neither runs nothing through the guard). A value of
+several lines that is printed with a pause between its lines is masked by its runs of 20 characters
+or more only. `keyshroud doctor` shows `claude guard=on|off`; `--shell PATH` picks the bash or zsh it
+stands in for (default: the one Claude Code was set to use, else your `$SHELL`), `--off` restores what
+the setting was. The settings alone say whether the guard is on: a launcher looks there before each
+command, so sessions that were started while it was on keep working after `--off` (their launcher then
+only starts the shell), and mask again after `claude-guard`. If the settings cannot be read, the
+launcher does not take that for off: the command is not run.
 
 ## pi / omp
 
@@ -518,6 +611,7 @@ keyshroud inject [-i template] [-o out] [--force]
 keyshroud redact < log.txt
 keyshroud scan [paths...]
 keyshroud env [--shell]
+keyshroud scope [--only A,B_* | --clear]           this directory's .keyshroud.json: which wired names it gets
 keyshroud add --env NAME --item ITEM [--notes TEXT] [--target pi|omp|both] [--stdin|--dialog]
 keyshroud import [--from F|-] [--out F] [--prefix P] [--only A,B] [--skip A,B] [--yes] [--replace] [--force]
 keyshroud rotate --item ITEM [--stdin|--dialog]
@@ -534,10 +628,13 @@ keyshroud migrate [--item NAME]... [--env-file F]... [--yes]                    
 keyshroud migrate --to local [--yes]                                                            (Vaultwarden -> local vault)
 keyshroud unlock [--unattended | --stdin]
 keyshroud rekey [--to keychain|secure-enclave|passphrase|dpapi]                                 (in a terminal)
+keyshroud backup [--out FILE]                                                                   (in a terminal)
+keyshroud restore FILE [--replace] [--yes]                                                      (in a terminal)
 keyshroud status | lock | doctor
 keyshroud mcp
 keyshroud hook claude <session-start|post-tool-use>
 keyshroud claude-setup --item ITEM [--settings PATH] [--ttl-ms N] [--force]
+keyshroud claude-guard [--off] [--shell PATH] [--settings PATH]
 keyshroud api-key --item ITEM
 keyshroud link-cli [--dir DIR] [--force]
 ```
@@ -619,7 +716,7 @@ closed (exit `4`) instead of guessing; the local vault refuses to create one.
 | `KEYSHROUD_CACHE_TTL_MS` | `3600000` | in-memory Vaultwarden snapshot + session check lifetime, and how long a long-running process keeps a value read from a source; `0` disables |
 | `KEYSHROUD_SESSION_TTL_MS` | `1800000` | how long an unlocked session lasts (Vaultwarden, or a passphrase or Touch ID vault) |
 | `KEYSHROUD_LOCK_TIMER` | on | `0` skips the background timer (sessions then end on the next call) |
-| `KEYSHROUD_CONFIG_DIR` | `$XDG_CONFIG_HOME/keyshroud` | `vault.json`, `env.json` (wiring), `sources.json` (servers of the sources), `backend`, sessions, `bw/` (after `setup`), master-password hash, redact index, audit log |
+| `KEYSHROUD_CONFIG_DIR` | `$XDG_CONFIG_HOME/keyshroud` | `vault.json`, `env.json` (wiring), `sources.json` (servers of the sources), `backend`, sessions, `bw/` (after `setup`), `guard/` (after `claude-guard`), master-password hash, redact index, audit log |
 | `KEYSHROUD_KEYCHAIN_MASTER` | `vaultwarden-master-password` | keychain service names (after `setup`: `keyshroud-…`) |
 | `KEYSHROUD_KEYCHAIN_CLIENT_ID` | `vaultwarden-api-client-id` | |
 | `KEYSHROUD_KEYCHAIN_CLIENT_SECRET` | `vaultwarden-api-client-secret` | |
@@ -649,9 +746,15 @@ local vault the default for new items. A field other than the password becomes a
 vault (names and references only), and `.env.refs` files keep their `bw://` references until you change
 them. Other machines that use the same Vaultwarden are not affected.
 
-**How do I back up the local vault?** `vault.json` is encrypted, so copy it anywhere; it opens only with
-its key, which stays in this machine's keychain (or your passphrase). If you lose the machine, you lose
-the key. For a real backup, or the same secrets on several machines, use Vaultwarden or Bitwarden.
+**How do I back up the local vault?** `keyshroud backup` writes one file sealed under a passphrase you
+choose, and `keyshroud restore FILE --yes` brings its items and their wiring back on any machine
+([Backup and restore](#backup-and-restore)). A plain copy of `vault.json` is not a backup: it opens only
+with its key, which stays in this machine's key store. For the same secrets on several machines at
+once, use Vaultwarden or Bitwarden.
+
+**Can a project get only its own secrets?** Yes: `keyshroud scope --only 'STRIPE_*,GH_TOKEN'` in the
+repo writes a `.keyshroud.json` that narrows `run`, `env` and what the agents are told there to those
+names ([Least privilege: a project's own names](#least-privilege-a-projects-own-names)).
 
 **We use HashiCorp Vault (or AWS, 1Password, …) at work. Do I have to move the secrets?** No.
 keyshroud reads them where they are: see [team secret managers](#team-secret-managers-vault-openbao-infisical-1password-aws-google-cloud-azure).
@@ -729,10 +832,12 @@ types the Mac's password). For the session that follows (30 minutes), the key si
 or a shorter `KEYSHROUD_SESSION_TTL_MS` narrows that window. Touch ID proves someone is present, not
 what they meant to approve: a program already running as you can show its own sheet, or change
 keyshroud or its helper to capture the next approval. There is no recovery: the vault opens on that
-Mac only, so run `rekey --to passphrase` before erasing or moving it, and keep Vaultwarden for
-backups. A local vault belongs to one machine and has no recovery: back up with Vaultwarden or
-Bitwarden, which is also the option for several machines. `vault.json` is safe to copy only as long as
-its key is not.
+Mac only, so run `keyshroud backup` (or `rekey --to passphrase`) before erasing or moving it. A local
+vault belongs to one machine and has no recovery of its own: `keyshroud backup` is its backup, and
+Vaultwarden or Bitwarden the option for several machines. `vault.json` is safe to copy only as long as
+its key is not. A backup file holds every item under its passphrase alone: whoever has the file can
+guess at that passphrase offline (scrypt, N=2^17, slows each guess), so choose a long one and keep
+the file off the machines agents work on.
 
 Guarantees we test for:
 
@@ -805,14 +910,20 @@ machine identity's access, as narrow as the work needs), so read a cloned repo's
 with it. `import` decides what is secret by heuristics and keeps everything else
 as a literal; check its plan before committing `.env.refs`. The Claude Code
 `PostToolUse` hook does not see failed commands (`PostToolUseFailure` cannot
-rewrite output) or anything a client sends as telemetry, it masks nothing until an index exists
+rewrite output; `keyshroud claude-guard` masks those for the Bash tool, on macOS and Linux, once you turn
+it on) or anything a client sends as telemetry, it masks nothing until an index exists
 (written at session start, and added to by `run`, `secrets_run`, `get`, `inject`, `api-key`, `add`,
-`rotate` and `wire`; a hook that fails lets the output through as it is), and it only knows wired
+`rotate` and `wire`; a hook that fails lets the output through as it is; the guard reads the same index, and does not run the command when it cannot start), and it only knows wired
 values, keys written into `auth.json` as plain text, and values keyshroud itself printed (`get`, `inject`, `api-key`), so a failed
 `keyshroud get bw://…` or `run --no-mask` still shows in the clear; run
 secret-using commands through `keyshroud run` or `secrets_run`, with `--only` (or
-`only`) naming the secrets the command needs, since every wired secret is injected
-otherwise. An agent with shell access as your user can open a
+`only`) naming the secrets the command needs, since every wired secret (every one in the
+[project's scope](#least-privilege-a-projects-own-names), where there is one) is injected
+otherwise. A project's scope is a default, not a wall: it is a file in the repo, so whoever can write
+there (the agent included) can widen or remove it, a reference names any item whatever the scope says,
+and a command run from another directory is not under it. The guard is a setting of Claude Code and a
+launcher file, both writable by a program running as you: an agent that means to can turn it off, as it
+can skip `keyshroud run`; both guard against accidents, not against that. An agent with shell access as your user can open a
 keychain-mode local vault at any time, and use a passphrase vault's session files until the session
 ends. It can also read `~/.config/keyshroud/session` and use `bw` directly until that session ends —
 after `setup` that reaches only the agent account; a stored master password (keychain entry or

@@ -1,7 +1,7 @@
 // Minimal MCP stdio server (newline-delimited JSON-RPC 2.0). It gives any MCP
 // client the same contract as the pi extension: names in, masked output out.
 import { spawn, type ChildProcessByStdio } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { readFile, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline";
@@ -61,24 +61,34 @@ type Json = Record<string, unknown>;
 function text(value: string, isError = false): Json { return { content: [{ type: "text", text: value }], ...(isError ? { isError: true } : {}) }; }
 function shellQuote(value: string): string { return `'${value.replaceAll("'", "'\\''")}'`; }
 
-async function collectEntries(envFile: unknown): Promise<Array<{ name: string; raw: string }>> {
-  const entries = await core.authEnvEntries();
+// The wired names of the project in `cwd` (see core.projectScope; the server's own directory
+// without one), and what an env file names.
+async function collectEntries(envFile: unknown, cwd?: string): Promise<{ entries: Array<{ name: string; raw: string }>; outside: string[] }> {
+  const { entries, outside } = await core.scopedEnvEntries(cwd);
   if (typeof envFile === "string" && envFile) entries.push(...await core.envFileEntries(envFile));
-  return [...new Map(entries.map((entry) => [entry.name, entry])).values()];
+  return { entries: [...new Map(entries.map((entry) => [entry.name, entry])).values()], outside };
 }
 
 async function runTool(args: Json): Promise<Json> {
   if (typeof args.command !== "string" || !args.command.trim()) return text("command is required", true);
-  let entries = await collectEntries(args.env_file);
-  // With `only`, the other wired names do not reach the command from this server's own environment either.
-  let dropped: string[] = [];
+  // The scope is that of the directory the command runs in: the one a link leads to.
+  let cwd = process.cwd();
+  if (typeof args.cwd === "string" && args.cwd) {
+    try { cwd = await realpath(args.cwd); } catch (error) { return text(`cwd cannot be opened (${(error as NodeJS.ErrnoException).code ?? "error"})`, true); }
+  }
+  const collected = await collectEntries(args.env_file, cwd);
+  let entries = collected.entries;
+  // With `only`, the other wired names do not reach the command from this server's own environment
+  // either; nor do the names outside the project's scope.
+  let dropped: string[] = collected.outside.filter((name) => !entries.some((entry) => entry.name === name));
   if (args.only !== undefined) {
     // Anything but a list of names would mean every secret: refused, not guessed.
     if (!Array.isArray(args.only) || !args.only.every((name) => typeof name === "string")) return text("only must be a list of names", true);
     const only = args.only as string[];
     const unknown = only.filter((name) => !entries.some((entry) => entry.name === name));
-    if (unknown.length) return text(`Not wired: ${unknown.join(", ")}`, true);
-    dropped = entries.filter((entry) => !only.includes(entry.name)).map((entry) => entry.name);
+    const outside = unknown.filter((name) => collected.outside.includes(name));
+    if (unknown.length) return text(outside.length ? `Outside this project's scope (${core.SCOPE_FILE}): ${outside.join(", ")}` : `Not wired: ${unknown.join(", ")}`, true);
+    dropped = [...dropped, ...entries.filter((entry) => !only.includes(entry.name)).map((entry) => entry.name)];
     entries = entries.filter((entry) => only.includes(entry.name));
   }
   let vaultError = "";
@@ -99,7 +109,7 @@ async function runTool(args: Json): Promise<Json> {
   // An error about the environment or the arguments could quote one of them.
   try {
     child = spawn(windows ? process.env.ComSpec ?? join(core.SYSTEM32, "cmd.exe") : "/bin/sh", windows ? ["/d", "/s", "/c", `"${args.command}"`] : ["-c", args.command], {
-      cwd: typeof args.cwd === "string" && args.cwd ? args.cwd : process.cwd(),
+      cwd,
       env: core.childEnv(env.values, dropped),
       stdio: ["ignore", "pipe", "pipe"],
       detached: !windows,
@@ -165,7 +175,7 @@ async function callTool(name: string, args: Json): Promise<Json> {
   if (name === "secrets_list") {
     let vaultError = "";
     try { await core.ensureSession(); } catch (error) { vaultError = error instanceof Error ? error.message : String(error); }
-    const env = await core.resolveEntries(await collectEntries(args.env_file));
+    const env = await core.resolveEntries((await collectEntries(args.env_file)).entries);
     const resolved = Object.keys(env.values);
     return text(`resolved: ${resolved.join(", ") || "none"}\nunresolved: ${env.missing.join(", ") || "none"}${env.missing.length ? core.unresolvedReason(vaultError) : ""}`);
   }

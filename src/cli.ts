@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-import { existsSync } from "node:fs";
-import { chmod, mkdir, lstat, readdir, readFile, readlink, rename, stat, symlink, unlink, writeFile } from "node:fs/promises";
+import { constants as fsConstants, existsSync } from "node:fs";
+import { access, chmod, mkdir, lstat, readdir, readFile, readlink, rename, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import { constants, homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { spawn } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import process from "node:process";
 import { BRAND } from "./brand.ts";
 import * as core from "./core.ts";
@@ -28,6 +28,8 @@ Secrets
   redact                           Copy stdin to stdout with vault secrets masked
   scan [paths...]                  Find vault secret values in files (exit 1 on leaks)
   env [--shell]                    List wired names (or print shell exports)
+  scope [--only A,B_* | --clear]   Show which wired names this project may use, or write
+                                   ./${core.SCOPE_FILE} (run, env and the agents then use only those)
   add --env NAME --item ITEM [--notes TEXT] [--target pi|omp|both] [--stdin|--dialog]
                                    ITEM is a name (default backend), ${BRAND.refScheme}://NAME or bw://NAME
   import [--from F|-] [--out F] [--prefix P] [--only A,B] [--skip A,B] [--yes] [--replace] [--force]
@@ -72,12 +74,20 @@ Vault (the local vault by default; bw/Vaultwarden once set up)
                                    (--stdin: a passphrase vault's passphrase from stdin, e.g. in CI)
   rekey [--to keychain|secure-enclave|passphrase|dpapi]
                                    Give the local vault a new key, kept that way (in a terminal)
+  backup [--out FILE]              Copy the local vault into one file under a passphrase of its own
+                                   (in a terminal); it opens on any machine
+  restore FILE [--replace] [--yes] Bring back what a backup holds and the local vault lacks, and wire
+                                   the names again (dry run unless --yes; --replace: also the items
+                                   that have another value here)
   status | lock | doctor
 
 Agents
   mcp                              Serve the MCP tools over stdio
   hook claude <event>              Claude Code hook entry point
   claude-setup --item ITEM [--settings PATH] [--ttl-ms N] [--force]
+  claude-guard [--off] [--shell PATH] [--settings PATH]
+                                   Mask what every Bash command of Claude Code prints, also when it
+                                   fails: Claude Code starts its shell through ${BRAND.name} (macOS, Linux)
   api-key --item ITEM              Claude Code apiKeyHelper entry point
   link-cli [--dir DIR] [--force]`;
 
@@ -127,6 +137,12 @@ function failureCode(error: unknown): number {
   if (/not found|Ambiguous|Empty secret|unresolved|No value|reference/i.test(text)) return 4;
   return 3;
 }
+function outsideScope(scope: core.Scope): string { return `is outside this project's scope (${core.shownPath(scope.path)})`; }
+// After add and wire: a name the project's scope leaves out is not there for `run` until the scope lists it.
+async function scopeNote(envName: string): Promise<void> {
+  const scope = await core.projectScope().catch(() => null);
+  if (!core.inScope(scope, envName)) console.error(`${envName} ${outsideScope(scope!)}: add it there to use it in this project`);
+}
 async function authRaw(name: string): Promise<string | undefined> {
   return core.authEntryRaw((await core.wiredEntries())[name]);
 }
@@ -151,6 +167,20 @@ async function readSettings(path: string): Promise<Record<string, unknown>> {
   try { parsed = JSON.parse(text); } catch {}
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error(`${path} is not a valid JSON object`);
   return parsed as Record<string, unknown>;
+}
+// Read, checked and replaced under the lock keyshroud's own writers share, as a write that
+// cannot land once that lock is gone (Claude Code has no lock to share). The backup and the
+// text that waits are private (settings can hold keys); the file gets its old mode back
+// once the new text is in place. `change` says whether there is anything to write.
+async function changeSettings(settingsPath: string, change: (settings: Record<string, unknown>, target: string) => boolean | Promise<boolean>): Promise<boolean> {
+  return core.updateFile(settingsPath, async (target, write) => {
+    const settings = await readSettings(target);
+    if (!(await change(settings, target))) return false;
+    const existing = await stat(target).catch(() => null);
+    if (existing) await writeFile(`${settingsPath}.bak-${timestamp()}-${randomBytes(3).toString("hex")}`, await readFile(target), { mode: 0o600, flag: "wx" });
+    await write(`${JSON.stringify(settings, null, 2)}\n`, existing ? existing.mode & 0o777 : 0o600);
+    return true;
+  });
 }
 async function parseItem(arg: string): Promise<{ backend: core.BackendName; name: string }> {
   try { return await core.parseItemArg(arg); } catch (error) { fail(error instanceof Error ? error.message : String(error), 2); }
@@ -185,13 +215,16 @@ async function runCommand(args: string[]): Promise<void> {
   const [command, ...commandArgs] = args.slice(start);
   requireKnownFlags(flags, ["--env-file", "--only"], ["--no-auth", "--mask", "--no-mask"]);
 
-  const entries = flags.includes("--no-auth") ? [] : await core.authEnvEntries();
+  // A project's scope narrows the wired names; what an env file names is asked for by name.
+  const wired = flags.includes("--no-auth") ? { entries: [], outside: [], scope: null } : await core.scopedEnvEntries();
+  const entries = wired.entries;
   for (const file of valuesAfter(flags, "--env-file")) entries.push(...await core.envFileEntries(file));
   const only = valueAfter(flags, "--only")?.split(",").map((name) => name.trim()).filter(Boolean);
   const selected = only ? entries.filter((entry) => only.includes(entry.name)) : entries;
-  if (only) for (const name of only) if (!selected.some((entry) => entry.name === name)) fail(`Secret unresolved: ${name} is not wired`, 4);
-  // With --only, the other wired names do not reach the command from this process's own environment either.
-  const dropped = only ? entries.filter((entry) => !only.includes(entry.name)).map((entry) => entry.name) : [];
+  if (only) for (const name of only) if (!selected.some((entry) => entry.name === name)) fail(`Secret unresolved: ${name} ${wired.outside.includes(name) ? outsideScope(wired.scope!) : "is not wired"}`, 4);
+  // With --only, the other wired names do not reach the command from this process's own environment
+  // either; nor do the names outside the scope.
+  const dropped = [...wired.outside, ...(only ? entries.filter((entry) => !only.includes(entry.name)).map((entry) => entry.name) : [])];
   // Later sources win: env files override auth.json.
   const deduped = [...new Map(selected.map((entry) => [entry.name, entry])).values()];
   let vaultError = "";
@@ -409,7 +442,12 @@ async function migrateLocalCommand(args: string[]): Promise<void> {
   // and an item called "Sentry (field dsn)") become one item only if they hold one value: else
   // both are left where they are.
   for (const row of rows) row.shared = rows.some((other) => other !== row && other.local.toLowerCase() === row.local.toLowerCase());
-  if (!rows.length) { console.log("Nothing to migrate: no wired name points at Vaultwarden."); return; }
+  if (!rows.length) {
+    console.log("Nothing to migrate: no wired name points at Vaultwarden.");
+    // Nothing left there to move: with --yes the local vault is where new items go from now on.
+    if (args.includes("--yes") && (await core.defaultBackend()) !== "local") { await core.rememberBackend("local"); console.log("New items go to the local vault."); }
+    return;
+  }
   const existing = new Set((await core.findItems("", "local").catch(() => [])).map((item) => item.name.toLowerCase()));
   const width = Math.max(4, ...rows.map((row) => row.local.length));
   console.log("migrate plan (Vaultwarden -> local vault):");
@@ -714,6 +752,138 @@ async function sourceCommand(args: string[]): Promise<void> {
   if (verified !== "yes") process.exitCode = 3;
 }
 
+// scope: what the project's scope file lets through, or (--only) a new one in this directory.
+async function scopeCommand(args: string[]): Promise<void> {
+  requireKnownFlags(args, ["--only"], ["--clear"]);
+  const here = join(process.cwd(), core.SCOPE_FILE);
+  const only = valueAfter(args, "--only");
+  if (args.includes("--clear")) {
+    if (only !== undefined) fail("--only writes a scope and --clear removes one: pick one", 2);
+    const removed = await unlink(here).then(() => true, () => false);
+    console.log(removed ? `removed ${core.shownPath(here)}` : `no ${core.SCOPE_FILE} in this directory`);
+  } else if (only !== undefined) {
+    const patterns = only.split(",").map((pattern) => pattern.trim()).filter(Boolean);
+    const bad = patterns.find((pattern) => !core.scopePatternOk(pattern));
+    if (bad !== undefined) fail(`${bad} is not a variable name (UPPER_SNAKE_CASE, with * for any run of characters)`, 2);
+    await writeFile(here, `${JSON.stringify({ only: patterns }, null, 2)}\n`);
+  }
+  const { entries, outside, scope } = await core.scopedEnvEntries();
+  const names = [...new Set(entries.map((entry) => entry.name))];
+  if (!scope) { console.log(`scope=none: every wired name can be used here (${names.length}). \`${BRAND.bin} scope --only NAME,PREFIX_*\` writes ./${core.SCOPE_FILE}`); return; }
+  console.log(`scope=${core.shownPath(scope.path)} only=${scope.only.join(",") || "nothing"}`);
+  console.log(`in scope (${names.length}): ${names.join(", ") || "none"}`);
+  console.log(`outside: ${outside.length} wired name(s)`);
+  const idle = scope.only.filter((pattern) => !names.some((name) => core.inScope({ path: scope.path, only: [pattern] }, name)));
+  if (idle.length) console.error(`no wired name matches: ${idle.join(", ")}`);
+}
+
+// claude-guard: Claude Code starts its shell through a launcher that is named like the real shell
+// (Claude Code takes a path with bash or zsh in it), and guard.ts masks what each command prints.
+// Whether the guard is on is said by one file alone, Claude Code's settings: it is on while they
+// name a launcher. A launcher looks there too, and only starts the shell once they no longer do
+// (a session that is running keeps the launcher it was started with). Each settings file has a
+// directory of its own in CONFIG_DIR/guard for its launchers and for guard.json, which keeps the
+// shell the newest launcher stands in for and what the setting was before.
+const GUARD_DIR = join(core.CONFIG_DIR, "guard");
+interface GuardState { shell?: string; previous?: string }
+const guardLauncher = (value: unknown): value is string => typeof value === "string" && dirname(dirname(value)) === GUARD_DIR && ["bash", "zsh"].includes(basename(value));
+const guardDir = (settingsFile: string) => join(GUARD_DIR, createHash("sha256").update(settingsFile).digest("hex").slice(0, 16));
+async function guardState(dir: string): Promise<GuardState> {
+  try { const state = JSON.parse(await readFile(join(dir, "guard.json"), "utf8")) as GuardState; return state && typeof state === "object" ? state : {}; } catch { return {}; }
+}
+// In place by a rename: a session may be starting its shell through the launcher.
+async function writeGuardFile(path: string, text: string, mode: number): Promise<void> {
+  const tmp = `${path}.tmp.${randomBytes(6).toString("hex")}`;
+  await writeFile(tmp, text, { mode, flag: "wx" });
+  await chmod(tmp, mode);
+  await rename(tmp, path);
+}
+async function usableShell(path: string | undefined): Promise<boolean> {
+  if (!path || !path.startsWith("/") || !["bash", "zsh"].includes(basename(path)) || path.startsWith(`${GUARD_DIR}/`)) return false;
+  return access(path, fsConstants.X_OK).then(() => true, () => false);
+}
+// On and off are each one write of the settings, made under their lock as a write that cannot
+// land once that lock is gone: a run that was paused past it changes nothing.
+async function guardCommand(args: string[]): Promise<void> {
+  requireKnownFlags(args, ["--settings", "--shell"], ["--off"]);
+  if (process.platform === "win32") fail("claude-guard stands in for a POSIX shell: not on Windows, where the hook masks the commands that succeed", 2);
+  const settingsPath = resolve(valueAfter(args, "--settings") ?? join(homedir(), ".claude", "settings.json"));
+  if (args.includes("--off")) {
+    const changed = await changeSettings(settingsPath, async (settings, target) => {
+      const env = settings.env as Record<string, unknown> | undefined;
+      if (!env || !guardLauncher(env.CLAUDE_CODE_SHELL)) return false;
+      // What the setting was before is this file's own record; a launcher of another file has none here.
+      const previous = dirname(env.CLAUDE_CODE_SHELL) === guardDir(target) ? (await guardState(guardDir(target))).previous : undefined;
+      if (previous) env.CLAUDE_CODE_SHELL = previous; else delete env.CLAUDE_CODE_SHELL;
+      if (!Object.keys(env).length) delete settings.env;
+      return true;
+    });
+    console.log(changed ? "guard=off (sessions that are running keep their launcher, which now only starts the shell)" : "guard=off (it was not on)");
+    return;
+  }
+  const asked = valueAfter(args, "--shell");
+  if (asked && !(await usableShell(resolve(asked)))) fail(`--shell must be a bash or a zsh that can be run (Claude Code takes no other shell): ${asked}`, 2);
+  const guard = shellQuote(fileURLToPath(import.meta.url).replace(/cli(\.[cm]?[jt]s)$/, "guard$1"));
+  let done: { shell: string; launcher: string } | null = null;
+  await changeSettings(settingsPath, async (settings, target) => {
+    const env = settings.env && typeof settings.env === "object" && !Array.isArray(settings.env) ? settings.env as Record<string, unknown> : {};
+    const current = env.CLAUDE_CODE_SHELL;
+    const dir = guardDir(target);
+    const on = guardLauncher(current) && dirname(current) === dir;
+    const kept = on ? await guardState(dir) : {};
+    // The shell Claude Code was told to use before, if any, is the one to stand in for, and to give
+    // back; never a launcher (one of another settings file, copied here).
+    const previous = on ? kept.previous : typeof current === "string" && current && !guardLauncher(current) ? current : undefined;
+    let shell: string | undefined;
+    for (const candidate of [asked && resolve(asked), kept.shell, previous, process.env.SHELL, "/bin/zsh", "/bin/bash", "/usr/bin/zsh", "/usr/bin/bash", "/usr/local/bin/zsh", "/usr/local/bin/bash", "/opt/homebrew/bin/zsh", "/opt/homebrew/bin/bash"]) {
+      if (await usableShell(candidate || undefined)) { shell = candidate as string; break; }
+    }
+    if (!shell) return false;
+    const launcher = join(dir, basename(shell));
+    await mkdir(dir, { recursive: true, mode: 0o700 });
+    for (const path of [GUARD_DIR, dir]) await chmod(path, 0o700);
+    const unread = `${BRAND.bin} guard: ${settingsPath} cannot be read, so whether the guard is still on is not known and nothing was run. Start a new Claude Code session, or run \`${BRAND.bin} claude-guard\` again.`;
+    const gone = `${BRAND.bin} guard: node or the ${BRAND.bin} it was set up with is gone, so nothing was run. Run \`${BRAND.bin} claude-guard\` again or \`${BRAND.bin} claude-guard --off\`, or take CLAUDE_CODE_SHELL out of ${settingsPath}.`;
+    await writeGuardFile(launcher, [
+      "#!/bin/sh",
+      `# ${BRAND.bin} guard: Claude Code starts its shell through this file (CLAUDE_CODE_SHELL in its settings),`,
+      "# so that what a command prints is masked as it is written, whether the command fails or not.",
+      `# \`${BRAND.bin} claude-guard --off\` turns it off; \`${BRAND.bin} claude-guard\` writes this file again.`,
+      // Still on? The settings say, read whole (cat fails where a read does): unread is not off.
+      `cat=/bin/cat; [ -x "$cat" ] || cat=cat`,
+      `settings=$("$cat" ${shellQuote(settingsPath)} 2>/dev/null) || { echo ${shellQuote(unread)} >&2; exit 126; }`,
+      // Off, no launcher of theirs named any more: the shell alone, for the sessions started through this file.
+      `case "$settings" in *${shellQuote(`${JSON.stringify(dir).slice(0, -1)}/`)}*) ;; *) exec ${shellQuote(shell)} "$@" ;; esac`,
+      // The node this was set up with, or after an upgrade moved it, the one on PATH.
+      `node=${shellQuote(process.execPath)}; [ -x "$node" ] || node=$(command -v node)`,
+      `[ -x "$node" ] && [ -f ${guard} ] || { echo ${shellQuote(gone)} >&2; exit 126; }`,
+      `exec "$node" ${guard} ${shellQuote(core.REDACT_INDEX_FILE)} ${shellQuote(shell)} "$@"`,
+      "",
+    ].join("\n"), 0o755);
+    await writeGuardFile(join(dir, "guard.json"), `${JSON.stringify({ shell, ...(previous ? { previous } : {}) })}\n`, 0o600);
+    done = { shell, launcher };
+    if (current === launcher) return false;
+    settings.env = { ...env, CLAUDE_CODE_SHELL: launcher };
+    return true;
+  });
+  const on = done as { shell: string; launcher: string } | null;
+  if (!on) fail("No bash or zsh found to stand in for; name one with --shell", 2);
+  // Which vault this machine uses is settled first: on one with none yet, the audit line alone
+  // would look like the trace of an old Vaultwarden setup.
+  await core.defaultBackend();
+  await core.audit("claude-guard", [], "cli");
+  console.log(`guard=on shell=${on.shell} launcher=${core.shownPath(on.launcher)} settings=${core.shownPath(settingsPath)}`);
+  console.error(`Claude Code sessions started from now on run their Bash commands through it (about 0.2 s more each); ${BRAND.bin} claude-guard --off undoes it.`);
+}
+async function guardLine(): Promise<string> {
+  const settings = await readSettings(join(homedir(), ".claude", "settings.json")).catch(() => ({} as Record<string, unknown>));
+  const launcher = (settings.env as Record<string, unknown> | undefined)?.CLAUDE_CODE_SHELL;
+  if (!guardLauncher(launcher)) return "claude guard=off";
+  if (!existsSync(launcher)) return `claude guard=broken (${core.shownPath(launcher)} is missing: run ${BRAND.bin} claude-guard again)`;
+  const { shell } = await guardState(dirname(launcher));
+  return `claude guard=on${shell && basename(shell) === basename(launcher) ? ` (shell ${shell})` : ""}`;
+}
+
 const KEY_TYPES: readonly VaultKeyType[] = ["keychain", "secure-enclave", "passphrase", "dpapi"];
 async function rekeyCommand(args: string[]): Promise<void> {
   requireKnownFlags(args, ["--to"]);
@@ -723,6 +893,33 @@ async function rekeyCommand(args: string[]): Promise<void> {
   const result = await core.rekeyLocal(to as VaultKeyType | undefined);
   console.error(result.notice);
   console.log(`rekeyed vault=${core.shownPath(core.VAULT_FILE)} key=${result.from} -> key=${result.to} items=${result.items}`);
+}
+
+async function backupCommand(args: string[]): Promise<void> {
+  requireKnownFlags(args, ["--out"]);
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[-:]/g, "").replace("T", "-");
+  const out = resolve(valueAfter(args, "--out") ?? `${BRAND.bin}-backup-${stamp}.json`);
+  if (!(process.stdin.isTTY && process.stderr.isTTY)) fail(`${BRAND.bin} backup asks for the vault's current key and a passphrase for the backup: run it in a terminal`, 2);
+  const { items } = await core.backupLocal(out);
+  console.log(`backup=${core.shownPath(out)} items=${items}`);
+  console.error(`Keep it somewhere that is not this machine. \`${BRAND.bin} restore ${core.shownPath(out)}\` brings the items back and wires their names again.`);
+}
+
+async function restoreCommand(args: string[]): Promise<void> {
+  const [file, ...flags] = args;
+  if (!file || file.startsWith("--")) fail(usage, 2);
+  requireKnownFlags(flags, [], ["--yes", "--replace"]);
+  if (!(process.stdin.isTTY && process.stderr.isTTY)) fail(`${BRAND.bin} restore asks for the passphrase of the backup: run it in a terminal`, 2);
+  const apply = flags.includes("--yes"), replace = flags.includes("--replace");
+  const plan = await core.restoreLocal(resolve(file), { apply, replace });
+  const line = (label: string, names: string[]) => { if (names.length) console.log(`  ${label} (${names.length}): ${names.join(", ")}`); };
+  console.log(apply ? `restored from ${core.shownPath(resolve(file))}:` : `restore plan (${core.shownPath(resolve(file))} -> local vault):`);
+  line(apply ? "added" : "add", plan.add);
+  line("already here", plan.same);
+  line(replace ? (apply ? "replaced" : "replace") : "another value here, kept (--replace takes the backup's)", plan.differ);
+  line(apply ? "wired" : "wire", plan.wire);
+  if (!plan.add.length && !plan.same.length && !plan.differ.length) console.log("  the backup holds no item");
+  if (!apply) console.log("Dry run: nothing changed. Re-run with --yes.");
 }
 
 // doctor with the local vault as the default backend: no bw lines, no bw call
@@ -736,6 +933,7 @@ async function localDoctor(reason: string): Promise<void> {
   console.log(`redact index=${(await core.readRedactIndex()) ? "present" : "missing"}`);
   const settings = await readSettings(join(homedir(), ".claude", "settings.json")).catch(() => ({} as Record<string, unknown>));
   console.log(`apiKeyHelper wired=${settings.apiKeyHelper ? "yes" : "no"}`);
+  console.log(await guardLine());
   // Never builds the helper and never asks.
   if (l.key === "secure-enclave" || process.env[`${BRAND.envPrefix}_VAULT_KEY`]?.trim() === "secure-enclave") console.log(`touchid helper=${await core.touchIdHelperState()}`);
   if (l.status === "locked" || l.status === "error") process.exitCode = 3;
@@ -798,13 +996,17 @@ async function main(): Promise<void> {
     if (command === "env") {
       if (args.some((arg) => arg !== "--shell")) fail(usage, 2);
       // Names need no unlock, so they list even while the vault is locked.
-      if (args.includes("--shell")) for (const [name, value] of Object.entries(await core.buildEnvMap())) console.log(`export ${name}=${shellQuote(value)}`);
-      else for (const name of new Set((await core.authEnvEntries()).map((entry) => entry.name))) console.log(name);
+      // A scope file that is not one is said, not answered with nothing.
+      if (args.includes("--shell")) { await core.projectScope(); for (const [name, value] of Object.entries(await core.buildEnvMap())) console.log(`export ${name}=${shellQuote(value)}`); }
+      else for (const name of new Set((await core.scopedEnvEntries()).entries.map((entry) => entry.name))) console.log(name);
       return;
     }
+    if (command === "scope") { await scopeCommand(args); return; }
     if (command === "get") {
       if (args.length !== 1) fail(usage, 2);
       const ref = parseRef(args[0]);
+      const scope = ref ? null : await core.projectScope();
+      if (!core.inScope(scope, args[0])) fail(`Secret unresolved: ${args[0]} ${outsideScope(scope!)}`, 4);
       const raw = ref ? args[0] : await authRaw(args[0]);
       let vaultError = "";
       try { await core.ensureUnlocked(raw ? [raw] : [], { prompt: true }); } catch (error) { vaultError = error instanceof Error ? error.message : String(error); }
@@ -861,6 +1063,7 @@ async function main(): Promise<void> {
       const verified = (await core.resolveShellValue(reference)) !== null;
       await core.refreshRedactIndex();
       console.log(`created item=${itemName} env=${envName} targets=${targets.map(core.shownPath).join(",")} verified=${verified ? "yes" : "no"}`);
+      await scopeNote(envName);
       if (conflict) { console.error("Item created, but one or more auth targets already contained the environment name."); process.exitCode = 5; }
       return;
     }
@@ -868,6 +1071,8 @@ async function main(): Promise<void> {
     if (command === "list") { await listCommand(args); return; }
     if (command === "rm") { await rmCommand(args); return; }
     if (command === "rekey") { await rekeyCommand(args); return; }
+    if (command === "backup") { await backupCommand(args); return; }
+    if (command === "restore") { await restoreCommand(args); return; }
     if (command === "source") { await sourceCommand(args); return; }
     if (command === "setup") { await setupCommand(args); return; }
     if (command === "migrate") { await migrateCommand(args); return; }
@@ -894,7 +1099,7 @@ async function main(): Promise<void> {
       for (const path of targets) { const result = await core.writeAuthEntry(path, envName, reference, { overwrite: args.includes("--force") }); if (!result.ok) fail(result.message, 5); }
       // So a Claude Code hook masks the value from now on (when the vault is open: wire itself never asks).
       try { await core.ensureUnlocked([reference]); await core.refreshRedactIndex(); } catch {}
-      console.log(`wired env=${envName} item=${itemName} targets=${targets.map(core.shownPath).join(",")}`); return;
+      console.log(`wired env=${envName} item=${itemName} targets=${targets.map(core.shownPath).join(",")}`); await scopeNote(envName); return;
     }
     if (command === "unwire") {
       requireKnownFlags(args, ["--env", "--target"]);
@@ -921,23 +1126,16 @@ async function main(): Promise<void> {
       const itemName = valueAfter(args, "--item"); if (!itemName) fail(usage, 2);
       const settingsPath = resolve(valueAfter(args, "--settings") ?? join(homedir(), ".claude", "settings.json"));
       const ttl = valueAfter(args, "--ttl-ms"); if (ttl && !/^\d+$/.test(ttl)) fail(usage, 2);
-      // Read, checked and replaced under the lock keyshroud's own writers share, as a write that
-      // cannot land once that lock is gone (Claude Code has no lock to share). The backup and the
-      // text that waits are private (settings can hold keys); the file gets its old mode back
-      // once the new text is in place.
-      const taken = await core.updateFile(settingsPath, async (target, write) => {
-        const settings = await readSettings(target);
-        if (settings.apiKeyHelper && !args.includes("--force")) return true;
-        const existing = await stat(target).catch(() => null);
-        if (existing) await writeFile(`${settingsPath}.bak-${timestamp()}-${randomBytes(3).toString("hex")}`, await readFile(target), { mode: 0o600, flag: "wx" });
+      const changed = await changeSettings(settingsPath, (settings) => {
+        if (settings.apiKeyHelper && !args.includes("--force")) return false;
         const cliPath = fileURLToPath(import.meta.url); settings.apiKeyHelper = `${shellQuote(process.execPath)} ${shellQuote(cliPath)} api-key --item ${shellQuote(itemName)}`;
         if (ttl) settings.env = { ...(settings.env as Record<string, unknown> ?? {}), CLAUDE_CODE_API_KEY_HELPER_TTL_MS: ttl };
-        await write(`${JSON.stringify(settings, null, 2)}\n`, existing ? existing.mode & 0o777 : 0o600);
-        return false;
+        return true;
       });
-      if (taken) fail("apiKeyHelper already set; use --force to replace it", 5);
+      if (!changed) fail("apiKeyHelper already set; use --force to replace it", 5);
       console.log(`configured apiKeyHelper for item=${itemName}`); return;
     }
+    if (command === "claude-guard") { await guardCommand(args); return; }
     if (command === "doctor") {
       requireKnownFlags(args, []);
       const choice = await core.backendInfo();
@@ -960,6 +1158,7 @@ async function main(): Promise<void> {
       console.log(`redact index=${(await core.readRedactIndex()) ? "present" : "missing"}`);
       const settings = await readSettings(join(homedir(), ".claude", "settings.json")).catch(() => ({} as Record<string, unknown>));
       console.log(`apiKeyHelper wired=${settings.apiKeyHelper ? "yes" : "no"}`);
+      console.log(await guardLine());
       console.log(`local ${localLine(await core.localStatus())}`);
       if (s.status !== "unlocked") process.exitCode = 3; return;
     }

@@ -97,7 +97,17 @@ chạy lệnh còn bạn chỉ việc dán. Đã có `.env`? `keyshroud import` 
 
 Muốn luôn được hỏi passphrase thì tạo vault bằng `KEYSHROUD_VAULT_KEY=passphrase keyshroud unlock`
 trong terminal (gõ hai lần, ít nhất 12 ký tự). Mất khoá hay quên passphrase thì không có cách khôi phục,
-và vault chỉ thuộc về một máy; muốn sao lưu hoặc dùng nhiều máy, hãy dùng Vaultwarden hoặc Bitwarden.
+và vault chỉ thuộc về một máy.
+
+**Sao lưu:** `keyshroud backup` (chạy trong terminal) chép toàn bộ vault cục bộ vào một file, khoá bằng
+passphrase riêng do bạn đặt lúc đó, nên file mở được trên máy nào cũng được. `keyshroud restore FILE`
+in kế hoạch (chỉ có tên), thêm `--yes` để thực hiện: thêm các item còn thiếu, giữ nguyên item đang có giá
+trị khác (trừ khi thêm `--replace`), và nối lại tên biến của từng item. Muốn dùng cùng lúc trên nhiều
+máy thì dùng Vaultwarden hoặc Bitwarden.
+
+**Giới hạn theo project:** `keyshroud scope --only 'STRIPE_*,GH_TOKEN'` ghi file `.keyshroud.json` trong
+repo; ở thư mục đó trở xuống, `keyshroud run`, `env` và agent chỉ nhận các tên trong danh sách. Việc che
+output vẫn áp dụng cho mọi giá trị. Đây là mặc định để tránh nhầm lẫn, không phải hàng rào bảo mật.
 
 ### Đồng bộ nhiều máy: Vaultwarden hoặc Bitwarden
 
@@ -162,6 +172,9 @@ npm install -g keyshroud
 
 Lưu ý: khi một lệnh **lỗi**, Claude Code gọi `PostToolUseFailure`, hook này không sửa được output.
 Vì vậy mọi lệnh dùng secret nên chạy qua `keyshroud run` (hoặc `secrets_run`) — lệnh đó tự che bất kể exit code.
+Để che cả những lệnh không chạy qua `keyshroud run`, bật guard: `keyshroud claude-guard` (macOS, Linux).
+Claude Code khi đó khởi động shell qua keyshroud, và mọi thứ lệnh Bash in ra đều được che ngay lúc in,
+kể cả khi lệnh lỗi (chậm thêm khoảng 0,2 giây mỗi lệnh; tắt bằng `keyshroud claude-guard --off`).
 
 ### MCP client bất kỳ
 

@@ -5,6 +5,47 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-15
+
+Three gaps closed: a failed command in Claude Code is masked, a project can be given only its own
+secrets, and the local vault has a backup.
+
+### Added
+- **`keyshroud claude-guard`** (macOS, Linux): Claude Code starts its shell through keyshroud
+  (`CLAUDE_CODE_SHELL` in its settings points at a launcher in `~/.config/keyshroud/guard/`), and
+  what every Bash command prints is masked as it is written, whether the command succeeds, fails
+  or is interrupted. Until now a failed command was masked only when it was run through
+  `keyshroud run`, because Claude Code's `PostToolUseFailure` hook cannot rewrite output. The
+  command runs in the real bash or zsh with the same arguments, exit status, output order and
+  working directory; background jobs keep running and stay masked. Masking comes from the
+  fingerprint index (no vault access, nothing is asked), about 0.2 s per command. If the masking
+  process cannot be started the command is not run, and if it stops, the shell and what it
+  started are stopped (as far as the processes can be listed; the guard says when they cannot). `--off` restores the setting, and the launchers of sessions that are
+  running then only start the shell; `doctor` shows `claude guard=on|off`.
+- **Project scopes**: `.keyshroud.json` (`{ "only": ["NAME", "PREFIX_*"] }`) in a directory narrows
+  the wired names that `run`, `env`, `get NAME`, `secrets_run`, `secrets_list`, pi/omp's shell and
+  Claude Code's session context give there and below it. `keyshroud scope [--only A,B_* | --clear]`
+  shows, writes and removes it; `add` and `wire` say when a new name is outside it. `secrets_run`
+  takes the scope of the directory its command runs in. Masking is not narrowed, references are
+  not narrowed, and a file that is not a scope (or a link to nothing) puts nothing in scope.
+- **`keyshroud backup [--out FILE]`** and **`keyshroud restore FILE [--replace] [--yes]`** (in a
+  terminal): the local vault in one file under a passphrase of its own, in the vault's format, and
+  back again on any machine. `backup` proves the vault's current key first (as `rekey` does) and
+  never writes over a file; `restore` prints a plan of names, keeps an item that has another value
+  here unless `--replace`, and wires each item's variable again when nothing is wired under it.
+  Items are matched by name only and get a new id here.
+
+### Changed
+- `migrate --to local --yes` with nothing left to move makes the local vault the default for new
+  items, instead of leaving a machine on `backend=bw` with every name already local.
+
+### Security
+- A scope is a default against accidents, not a boundary: the file is in the repository, a
+  reference names any item, and a command run elsewhere is not under it. The guard is a setting
+  and a launcher a program running as the user can change. Both are described in the security model.
+- A backup holds every item under its passphrase alone (scrypt N=2^17, at least 12 characters);
+  `backup` and `restore` run in a terminal only, and take no passphrase from stdin.
+
 ## [0.11.0] - 2026-11-15
 
 keyshroud reads the secret managers teams already run. Nothing is copied: a reference names the

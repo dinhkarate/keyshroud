@@ -976,6 +976,18 @@ test("migrate --to local moves wired Vaultwarden items into the local vault and 
   assert.doesNotMatch(again.stdout, /GitHub token/);
 });
 
+test("migrate --to local --yes with nothing left in Vaultwarden makes the local vault the default", async () => {
+  const box = await sandbox([item("id-1", "GitHub token", "gh-value-0001")]);
+  const dry = await runCli(box, ["migrate", "--to", "local"]);
+  assert.equal(dry.stdout, "Nothing to migrate: no wired name points at Vaultwarden.\n");
+  assert.ok(!existsSync(join(box.configDir, "backend")));
+  const done = await runCli(box, ["migrate", "--to", "local", "--yes"]);
+  assert.equal(done.code, 0, done.stderr);
+  assert.equal(done.stdout, "Nothing to migrate: no wired name points at Vaultwarden.\nNew items go to the local vault.\n");
+  assert.equal(await readFile(join(box.configDir, "backend"), "utf8"), "local\n");
+  assert.equal((await runCli(box, ["migrate", "--to", "local", "--yes"], undefined, { KEYSHROUD_BACKEND: "" })).stdout, "Nothing to migrate: no wired name points at Vaultwarden.\n");
+});
+
 test("wiring is written to env.json, and to pi's or omp's auth.json only when installed or named", async () => {
   const box = await blank();
   const own = join(box.configDir, "env.json"), pi = join(box.env.HOME, ".pi", "agent", "auth.json"), omp = join(box.env.PI_CODING_AGENT_DIR, "auth.json");

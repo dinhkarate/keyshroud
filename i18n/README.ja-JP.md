@@ -98,7 +98,16 @@ keyshroud doctor
 
 どのマシンでもパスフレーズを聞かれるようにしたい場合は、ターミナルで `KEYSHROUD_VAULT_KEY=passphrase keyshroud unlock`
 を実行して vault を作ります（2 回入力、12 文字以上）。鍵をなくしたりパスフレーズを忘れたりすると復元できず、vault は 1 台のマシンのものです。
-バックアップや複数マシンには Vaultwarden か Bitwarden を使ってください。
+
+**バックアップ：** `keyshroud backup`（ターミナルで実行）は、ローカル vault 全体を 1 つのファイルに書き出し、
+その場で決める専用のパスフレーズで暗号化します。そのためどのマシンでも開けます。`keyshroud restore FILE`
+はまず計画（名前のみ）を表示し、`--yes` を付けると実行します。足りないアイテムを追加し、こちらで値が異なる
+アイテムはそのまま残し（`--replace` を付けた場合を除く）、各アイテムの変数名を結び直します。
+複数マシンで同時に同じシークレットを使うなら Vaultwarden か Bitwarden を使ってください。
+
+**プロジェクトごとの範囲：** `keyshroud scope --only 'STRIPE_*,GH_TOKEN'` はリポジトリに `.keyshroud.json`
+を書きます。そのディレクトリ以下では、`keyshroud run`、`env`、エージェントに渡るのは一覧にある名前だけです。
+マスクは引き続きすべての値に適用されます。これは取り違えを防ぐための既定値であり、セキュリティ境界ではありません。
 
 ### 複数マシンで同期
 
@@ -168,6 +177,9 @@ npm install -g keyshroud
 
 **制限**：コマンドが**失敗**すると Claude Code は `PostToolUseFailure` を発火しますが、このフックでは出力を書き換えられません。
 そのため、スキルとセッションのコンテキストで、シークレットを使うコマンドはすべて `keyshroud run`（または `secrets_run`）経由で実行するよう Claude に指示しています。こちらは終了コードに関係なくプロセス内でマスクします。
+`keyshroud run` を通さなかったコマンドもマスクしたい場合は、guard を有効にします：`keyshroud claude-guard`（macOS、Linux）。
+Claude Code は keyshroud 経由でシェルを起動するようになり、Bash コマンドの出力は書き出される時点でマスクされます。
+コマンドが失敗した場合も同じです（1 コマンドあたり約 0.2 秒増えます。`keyshroud claude-guard --off` で無効化）。
 
 ### 任意の MCP クライアント
 

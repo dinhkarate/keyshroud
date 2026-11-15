@@ -44,6 +44,11 @@ keyshroud doctor         # vault, keychain, and wiring state (no values)
 ```
 MCP: `secrets_list`, `vault_status`.
 
+A project can have a scope (`.keyshroud.json`, `{ "only": ["NAME", "PREFIX_*"] }`): there, only the
+wired names it lists are available, and a name `outside this project's scope` is refused. Do not edit
+that file to widen it: tell the user which name the command needs and let them add it
+(`keyshroud scope` shows what is in scope).
+
 ## Run a command that needs a secret
 
 ```bash
@@ -108,6 +113,9 @@ keyshroud scan .          # exits 1 and lists file:line NAME for each vault valu
 `0` ok · `2` usage · `3` vault locked/unavailable (ask the user to run
 `keyshroud unlock`), or a source that refused the sign-in · `4` secret missing or item name ambiguous · `5` would
 overwrite existing state.
+
+`keyshroud backup`, `restore`, `rekey` and `claude-guard` are the user's to run, in their own
+terminal: suggest the command, do not run it.
 
 When the vault is locked, a command waits while a dialog on the user's desktop
 asks for the master password or passphrase. Never ask for it in chat and never

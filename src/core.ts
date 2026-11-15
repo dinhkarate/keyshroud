@@ -3,7 +3,7 @@
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomBytes, randomUUID, scrypt, timingSafeEqual, type ScryptOptions } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { appendFile, chmod, mkdir, mkdtemp, open, readdir, readFile, realpath, rename, rm, stat, symlink, unlink, utimes, writeFile } from "node:fs/promises";
+import { appendFile, chmod, lstat, mkdir, mkdtemp, open, readdir, readFile, realpath, rename, rm, stat, symlink, unlink, utimes, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, delimiter, join, dirname, resolve as absolutePath } from "node:path";
 import process from "node:process";
@@ -16,7 +16,7 @@ import { cliFailure, fieldOf, infisicalLogin, infisicalRead, jsonField, sourceCo
 import {
   derivePassphraseKey, findLocalItem, formatVersion, keychainService, newPassphraseKey, newVaultId, openSession, openVault, parseVaultFile, passphraseProblem,
   sealSession, sealVault, serializeVault, unwrapFromEnclave, VAULT_KIND, VaultFormatError, VaultVersionError, wrapForEnclave,
-  type EnclaveKey, type VaultData, type VaultFile, type VaultHeader, type VaultKeySpec, type VaultKeyType,
+  type EnclaveKey, type LocalItem, type VaultData, type VaultFile, type VaultHeader, type VaultKeySpec, type VaultKeyType,
 } from "./vault.ts";
 
 const P = BRAND.envPrefix;
@@ -1267,12 +1267,76 @@ export async function authEnvEntries(): Promise<Array<{ name: string; raw: strin
   return entries;
 }
 
+// A project's scope: `.keyshroud.json` in the working directory, or in the nearest directory
+// above it, { "only": ["NAME", "PREFIX_*"] }. With one, only the wired names it lists are put
+// into a command's environment, listed, or given by name there. It can only narrow: a name
+// still has to be wired on this machine, and every value is masked as before. It is a default
+// for the work in that directory, not a wall: whoever can write the file can widen it.
+export const SCOPE_FILE = `.${BRAND.bin}.json`;
+export interface Scope { path: string; only: string[] }
+const SCOPE_PATTERN_RE = /^[A-Z0-9_*]+$/;
+export function scopePatternOk(pattern: string): boolean { return SCOPE_PATTERN_RE.test(pattern); }
+
+// The scope file that applies in `from`; null when there is none. One that cannot be read or is
+// not what it should be is an error, so that a broken file never means "everything".
+export async function projectScope(from: string = process.cwd()): Promise<Scope | null> {
+  // The directories above where the work really is: a link to a project is that project.
+  for (let dir = await realpath(from).catch(() => absolutePath(from)); ; dir = dirname(dir)) {
+    const path = join(dir, SCOPE_FILE);
+    let text: string | null = null;
+    try { text = await readFile(path, "utf8"); } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      // Not there at all, or there and not readable: a link to a file that is gone is the second.
+      const there = code === "ENOENT" || code === "ENOTDIR" ? await lstat(path).then(() => true, () => false) : true;
+      if (there) throw new Error(`${path} cannot be read (${code ?? "error"}): no secret is in scope here`);
+    }
+    if (text !== null) {
+      let parsed: unknown = null;
+      try { parsed = JSON.parse(text); } catch {}
+      const only = parsed && typeof parsed === "object" && !Array.isArray(parsed) && Object.keys(parsed).length === 1 ? (parsed as { only?: unknown }).only : undefined;
+      if (!Array.isArray(only) || !only.every((pattern): pattern is string => typeof pattern === "string" && scopePatternOk(pattern))) {
+        throw new Error(`${path} is not a scope file ({ "only": ["NAME", "PREFIX_*"] }): no secret is in scope here`);
+      }
+      return { path, only };
+    }
+    if (dirname(dir) === dir) return null;
+  }
+}
+
+// `*` stands for any run of characters. Matched piece by piece, left to right: a pattern from a
+// cloned repository costs no more than its length.
+function matchesPattern(pattern: string, name: string): boolean {
+  const parts = pattern.split("*");
+  const first = parts[0], last = parts[parts.length - 1];
+  if (parts.length === 1) return pattern === name;
+  if (name.length < first.length + last.length || !name.startsWith(first) || !name.endsWith(last)) return false;
+  let at = first.length;
+  for (const part of parts.slice(1, -1)) {
+    const found = name.indexOf(part, at);
+    if (found < 0 || found + part.length > name.length - last.length) return false;
+    at = found + part.length;
+  }
+  return true;
+}
+
+export function inScope(scope: Scope | null, name: string): boolean {
+  return !scope || scope.only.some((pattern) => matchesPattern(pattern, name));
+}
+
+// The wired names of this project: all of them without a scope; `outside` are the others.
+export async function scopedEnvEntries(from?: string): Promise<{ entries: Array<{ name: string; raw: string }>; outside: string[]; scope: Scope | null }> {
+  const scope = await projectScope(from);
+  const all = await authEnvEntries();
+  const entries = all.filter((entry) => inScope(scope, entry.name));
+  return { entries, outside: [...new Set(all.filter((entry) => !inScope(scope, entry.name)).map((entry) => entry.name))], scope };
+}
+
 // Environment wired through pi/omp auth.json. Values already present in the
 // process environment win, matching earlier releases, except local vault values
 // this process set itself (`injected`): those are resolved again, so `lock` and
 // the end of a passphrase session reach them.
 export async function buildEnvMap(injected: Record<string, string> = {}): Promise<Record<string, string>> {
-  try { return (await resolveEntries(await authEnvEntries(), { preferProcessEnv: true, injected })).values; } catch { return {}; }
+  try { return (await resolveEntries((await scopedEnvEntries()).entries, { preferProcessEnv: true, injected })).values; } catch { return {}; }
 }
 
 // Values to redact in-process: wired secrets (labelled by variable name), the
@@ -2465,11 +2529,11 @@ async function rotateLocalItem(opts: { itemName: string; secret: string }): Prom
   return { id };
 }
 
-// `rekey`: the current key, proven now (never from a session), since rekey can turn Touch ID off.
-async function currentKey(file: VaultFile, target: VaultKeyType): Promise<Buffer> {
+// `rekey` and `backup`: the current key, proven now (never from a session), since rekey can turn
+// Touch ID off and a backup holds every item.
+async function currentKey(file: VaultFile, reason: string): Promise<Buffer> {
   const spec = file.key;
-  if (spec.type === "secure-enclave") return enclaveKey(file, spec, target === "secure-enclave" ? `give the ${BRAND.name} vault a new key`
-    : target === "passphrase" ? `move the ${BRAND.name} vault from Touch ID to a passphrase` : `turn off Touch ID for the ${BRAND.name} vault`);
+  if (spec.type === "secure-enclave") return enclaveKey(file, spec, reason);
   if (spec.type === "passphrase") {
     const key = await derivePassphraseKey(await readMasked("Passphrase of the local vault: "), spec);
     if (!openVault(file, key)) throw new Error("Wrong passphrase; nothing was changed");
@@ -2488,7 +2552,8 @@ export async function rekeyLocal(to?: VaultKeyType): Promise<{ from: VaultKeyTyp
   if (target === "keychain" && process.platform === "win32") throw new Error("Windows has no keychain here; use dpapi or passphrase");
   if (target === "dpapi" && process.platform !== "win32") throw new Error("dpapi keeps keys on Windows only; use keychain, secure-enclave or passphrase");
   process.stderr.write(`${BRAND.name}: giving the local vault ${shownPath(VAULT_FILE)} a new key (${target}); first it needs its current key (${from}).\n`);
-  const oldKey = await currentKey(read.file, target);
+  const oldKey = await currentKey(read.file, target === "secure-enclave" ? `give the ${BRAND.name} vault a new key`
+    : target === "passphrase" ? `move the ${BRAND.name} vault from Touch ID to a passphrase` : `turn off Touch ID for the ${BRAND.name} vault`);
   const fresh = await commitVaultKey(await newVaultKey(target, newVaultId(), read.file.key.type === "secure-enclave" && target === "secure-enclave" ? read.file.key : undefined));
   let items = 0;
   try {
@@ -2516,6 +2581,103 @@ export async function rekeyLocal(to?: VaultKeyType): Promise<{ from: VaultKeyTyp
   }
   await audit("rekey", [], "cli");
   return { from, to: target, items, notice };
+}
+
+// `backup`: every item of the local vault in one file of the vault's own format, sealed under a
+// passphrase asked now, so it opens on any machine and without this one's key store. Terminal only.
+export async function backupLocal(path: string): Promise<{ items: number }> {
+  if (!(process.stdin.isTTY && process.stderr.isTTY)) throw new Error(`${BRAND.bin} backup asks for the vault's current key and a passphrase for the backup: run it in a terminal`);
+  const read = await readVaultFile();
+  if (!read) throw new Error(`There is no local vault yet (${shownPath(VAULT_FILE)})`);
+  process.stderr.write(`${BRAND.name}: copying the local vault ${shownPath(VAULT_FILE)} into a backup file; first it needs its current key (${read.file.key.type}).\n`);
+  const key = await currentKey(read.file, `back up the ${BRAND.name} vault`);
+  let data: VaultData | null;
+  try { data = openVault(read.file, key); } catch (error) { throw localFileError(error); }
+  if (!data) throw localFileError(new VaultFormatError("not opened by its key"));
+  process.stderr.write("A passphrase of its own protects the backup: whoever has the file and that passphrase has every secret in it. Nothing can recover it.\n");
+  const passphrase = await readMasked("New passphrase for the backup: ");
+  const problem = passphraseProblem(passphrase);
+  if (problem) throw new Error(`The passphrase ${problem}; nothing was written`);
+  if ((await readMasked("Repeat it: ")) !== passphrase) throw new Error("The passphrases differ; nothing was written");
+  const spec = newPassphraseKey();
+  const text = serializeVault(sealVault({ v: formatVersion("passphrase"), kind: VAULT_KIND, id: newVaultId(), key: spec }, data, await derivePassphraseKey(passphrase, spec)));
+  const handle = await open(path, "wx", 0o600).catch((error: NodeJS.ErrnoException) => {
+    throw new Error(error.code === "EEXIST" ? `${path} is there already; nothing was written` : `${path} could not be created (${error.code ?? "error"}); nothing was written`);
+  });
+  try { await handle.writeFile(text, "utf8"); await handle.sync(); } finally { await handle.close(); }
+  await audit("backup", [], "cli");
+  return { items: data.items.length };
+}
+
+export interface RestorePlan { add: string[]; same: string[]; differ: string[]; wire: string[] }
+
+// `restore`: the items of a backup that the local vault lacks. One that is here under the same
+// name with another value stays as it is, unless `replace`. The name an item was stored for is
+// wired to it again when nothing is wired under that name. Terminal only; without `apply` it
+// only says what it would do.
+export async function restoreLocal(path: string, opts: { apply?: boolean; replace?: boolean } = {}): Promise<RestorePlan> {
+  if (!(process.stdin.isTTY && process.stderr.isTTY)) throw new Error(`${BRAND.bin} restore asks for the passphrase of the backup: run it in a terminal`);
+  const notOne = new Error(`${path} is not a ${BRAND.name} backup; nothing was changed`);
+  const text = await readFile(path, "utf8").catch((error: NodeJS.ErrnoException) => { throw new Error(`${path} could not be read (${error.code ?? "error"})`); });
+  let file: VaultFile;
+  try { file = parseVaultFile(text); } catch (error) {
+    throw error instanceof VaultVersionError ? new Error(`${path} was written by a newer ${BRAND.name}; update it (npm i -g ${BRAND.bin}@latest)`) : notOne;
+  }
+  if (file.key.type !== "passphrase") throw new Error(`${path} is a vault whose key stays on the machine it was made on (${file.key.type}); \`${BRAND.bin} backup\` writes a file that opens anywhere`);
+  const key = await derivePassphraseKey(await readMasked("Passphrase of the backup: "), file.key);
+  let backup: VaultData | null;
+  try { backup = openVault(file, key); } catch { throw notOne; }
+  if (!backup) throw new Error("Wrong passphrase; nothing was changed");
+  if (backup.items.some((item) => itemNameProblem(item.name))) throw notOne;
+
+  const secrets = (item: LocalItem) => JSON.stringify([item.value, item.fields ?? {}]);
+  const now = new Date().toISOString();
+  // With `change`, also done: under the vault's lock, on the items as they are then.
+  const sort = (data: VaultData, change: boolean) => {
+    const plan: RestorePlan = { add: [], same: [], differ: [], wire: [] };
+    const settled: LocalItem[] = [];
+    for (const item of backup.items) {
+      // By name only: a name is never taken for the id of another item, here or in the backup.
+      const name = item.name.trim().toLowerCase();
+      if (data.items.some((other) => other.id === item.name && other.name.trim().toLowerCase() !== name)) throw new Error(`The backup's item ${item.name} is named like the id of another item of the local vault; nothing was changed`);
+      const mine = data.items.find((other) => other.name.trim().toLowerCase() === name);
+      if (!mine) {
+        plan.add.push(item.name);
+        settled.push(item);
+        // With an id of its own: no id of a backup is taken over.
+        if (change) data.items.push({ ...item, id: randomUUID() });
+      } else if (secrets(mine) === secrets(item)) { plan.same.push(item.name); settled.push(item); }
+      else {
+        plan.differ.push(item.name);
+        if (opts.replace) settled.push(item);
+        if (change && opts.replace) Object.assign(mine, item, { id: mine.id, created: mine.created, updated: now });
+      }
+    }
+    return { plan, settled };
+  };
+  const wiring = async (settled: LocalItem[]) => {
+    const wired = new Set(Object.keys(await wiredEntries()));
+    const names = new Map<string, string>();
+    for (const item of settled) {
+      if (item.env && ENV_NAME_RE.test(item.env) && !PROVIDER_KEYS.has(item.env) && !isLoaderEnvName(item.env) && !wired.has(item.env) && !names.has(item.env)) names.set(item.env, item.name);
+    }
+    return names;
+  };
+
+  if (!opts.apply) {
+    const { plan, settled } = sort({ items: (await openLocal({ prompt: true }))?.data.items ?? [] }, false);
+    return { ...plan, wire: [...(await wiring(settled)).keys()] };
+  }
+  await prepareLocalVault({ prompt: true });
+  let done: ReturnType<typeof sort> | null = null;
+  await updateLocal((data) => { done = sort(data, true); }, { prompt: true, create: true });
+  const { plan, settled } = done!;
+  for (const [env, item] of await wiring(settled)) {
+    if ((await writeAuthEntry(getAuthTargets().own, env, referenceFor(item, "local"))).ok) plan.wire.push(env);
+  }
+  await audit("restore", [...plan.add, ...(opts.replace ? plan.differ : [])], "cli");
+  await refreshRedactIndex();
+  return plan;
 }
 
 // ---------------------------------------------------------------------------
