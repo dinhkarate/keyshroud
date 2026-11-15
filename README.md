@@ -67,7 +67,7 @@ webhooks, databases. The usual options are bad:
 | 🪝 **Agent hooks** | The pi/omp `tool_result` hook redacts every tool result, failed ones included. Claude Code's `PostToolUse` hook redacts every *successful* tool result (Bash, Read, Grep, MCP…), and [`keyshroud claude-guard`](#claude-code) masks what a Bash command prints as it is written, failed commands included — see [limits](#security-model). |
 | 🔌 **MCP server** | For clients without a shell: `keyshroud mcp` gives them `secrets_run`, `secrets_list`, `secrets_request`, `vault_status`. No tool ever returns a value. |
 | 🔗 **Committable references** | `keyshroud://item`, `bw://item`, `bw://item/username`, `bw://item/fields/name`, `bw://item/totp` in `.env.refs` files and templates: names, not values. |
-| ⌨️ **Paste-to-create** | New secrets go through a masked prompt in the user's terminal or a masked popup in pi — never through the chat. |
+| ⌨️ **Paste-to-create** | New secrets go through a masked prompt in the user's terminal, a hidden-input dialog on the desktop when an agent starts `add`, or a masked popup in pi — never through the chat. |
 | 📄 **`inject`** | Render `{{ keyshroud://… }}` and `{{ bw://… }}` templates into `0600` config files for tools that can't read env vars (`.npmrc`, kubeconfig). |
 | 🔎 **`scan`** | Find vault values that leaked into your working tree (pre-commit friendly): text files up to 2 MB, not `.git`, `node_modules`, `dist`, `.next`, `.venv` or links. |
 | ⚡ **Fast** | The local vault answers in milliseconds, offline. With Vaultwarden: one batched `bw list items` per session instead of one `bw get` (~3 s) per secret. |
@@ -81,7 +81,7 @@ webhooks, databases. The usual options are bad:
 
 | Agent | Install | What you get |
 |---|---|---|
-| **Claude Code** | [plugin](#claude-code) | SessionStart + PostToolUse redaction hooks, skill |
+| **Claude Code** | [plugin](#claude-code) | SessionStart + PostToolUse redaction hooks, skill; [`claude-guard`](#the-guard-failed-commands-masked-too) masks failed commands too |
 | **pi / omp** | [`pi install npm:keyshroud`](#pi--omp) | env hydration, `tool_result` redaction (failed calls too), `/secret` |
 | **Codex, OpenCode, Gemini CLI, Cursor agent** | [`npx skills add dinhkarate/keyshroud`](#other-agents-with-a-shell) | skill + CLI with masked output |
 | **Claude Desktop, chat-only clients** | [`mcpServers` JSON](#mcp-clients-without-a-shell) | MCP tools with masked output |

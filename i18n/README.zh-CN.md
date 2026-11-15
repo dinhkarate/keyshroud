@@ -55,7 +55,7 @@ Coding agent 要做实际工作就需要凭据：`gh`、`npm publish`、云厂�
 
 | Agent | 安装方式 | 提供的功能 |
 |---|---|---|
-| **Claude Code** | [插件](#claude-code) | SessionStart + PostToolUse 遮蔽 hook、skill |
+| **Claude Code** | [插件](#claude-code) | SessionStart + PostToolUse 遮蔽 hook、skill；`claude-guard` 连失败的命令也遮蔽 |
 | **pi / omp** | [`pi install npm:keyshroud`](../README.md#pi--omp) | 环境变量注入、`tool_result` 遮蔽（失败的调用也包括在内）、`/secret` |
 | **Codex, OpenCode, Gemini CLI, Cursor agent** | [`npx skills add dinhkarate/keyshroud`](../README.md#other-agents-with-a-shell) | skill + 输出已遮蔽的 CLI |
 | **Claude Desktop、仅聊天的客户端** | [`mcpServers` JSON](#任意-mcp-客户端) | 输出已遮蔽的 MCP 工具 |

@@ -54,7 +54,7 @@ Agent cần credential để làm việc thật: `gh`, `npm publish`, CLI của 
 
 | Agent | Cài đặt | Có gì |
 |---|---|---|
-| **Claude Code** | plugin (xem bên dưới) | hook che output SessionStart + PostToolUse, skill |
+| **Claude Code** | plugin (xem bên dưới) | hook che output SessionStart + PostToolUse, skill; `claude-guard` che cả lệnh thất bại |
 | **pi / omp** | `pi install npm:keyshroud` | nạp env, che `tool_result` (cả lệnh lỗi), `/secret` |
 | **Codex, OpenCode, Gemini CLI, Cursor agent** | [`npx skills add dinhkarate/keyshroud`](../README.md#other-agents-with-a-shell) | skill + CLI, output đã che |
 | **Claude Desktop, client chỉ chat** | [JSON `mcpServers`](../README.md#mcp-clients-without-a-shell) | MCP tools, output đã che |

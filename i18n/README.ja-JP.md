@@ -55,7 +55,7 @@ dinhkarate
 
 | エージェント | インストール | 使える機能 |
 |---|---|---|
-| **Claude Code** | [プラグイン](#claude-code) | SessionStart + PostToolUse のマスク用フック、スキル |
+| **Claude Code** | [プラグイン](#claude-code) | SessionStart + PostToolUse のマスク用フック、スキル。`claude-guard` で失敗したコマンドもマスク |
 | **pi / omp** | [`pi install npm:keyshroud`](../README.md#pi--omp) | 環境変数への注入、`tool_result` のマスク（失敗した呼び出しも含む）、`/secret` |
 | **Codex, OpenCode, Gemini CLI, Cursor agent** | [`npx skills add dinhkarate/keyshroud`](../README.md#other-agents-with-a-shell) | スキル + 出力がマスクされる CLI |
 | **Claude Desktop、チャットのみのクライアント** | [`mcpServers` JSON](#任意の-mcp-クライアント) | 出力がマスクされる MCP ツール |

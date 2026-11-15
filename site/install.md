@@ -2,8 +2,9 @@
 
 You are an AI coding agent. The user asked you to set up keyshroud: it lets you
 run commands that need API keys while every secret value reaches you only as
-`<redacted:NAME>`. Secrets live in an encrypted vault on the user's machine, or
-in their own Vaultwarden or Bitwarden vault.
+`<redacted:NAME>`. Secrets live in an encrypted vault on the user's machine, in
+their own Vaultwarden or Bitwarden vault, or in the secret manager their team
+already runs (keyshroud reads it and never writes there).
 
 Work through the steps in order. Run the commands yourself unless a step says
 the **user** must run it. Report each result in one line.
@@ -104,6 +105,11 @@ New-Item -ItemType Directory -Force "$HOME\.agents\skills" | Out-Null
 Copy-Item -Recurse -Force "$(npm root -g)\keyshroud\skills\keyshroud" "$HOME\.agents\skills\"
 ```
 
+Claude Code on macOS or Linux, optional: the plugin's hook cannot rewrite the output of a command
+that fails. `keyshroud claude-guard` closes that gap: Claude Code then starts its shell through
+keyshroud, and everything a Bash command prints is masked. It changes `~/.claude/settings.json`
+and applies to new sessions, so tell the user about it and let them run it (`--off` undoes it).
+
 `npx skills` (the Gemini CLI and Cursor lines) needs Node.js 22.20 or newer. On an older Node,
 copy the same folder into `~/.gemini/skills/` or `~/.cursor/skills/` instead.
 
@@ -167,6 +173,21 @@ secret opens a dialog or Touch ID sheet on the user's desktop and waits; over SS
 
 Wait until the user says they are done.
 
+**The team's secret manager.** Only if the user says their secrets are in HashiCorp Vault, OpenBao,
+Infisical, 1Password, AWS, Google Cloud or Azure. keyshroud reads them where they are, read-only:
+
+```bash
+keyshroud source                                             # what is set up, which vendor CLIs were found
+keyshroud source add vault --addr https://vault.example.com  # Vault / OpenBao: uses the user's own `vault login`
+keyshroud wire --env DB_PASSWORD --item 'vault://secret/myapp/db#password'
+```
+
+1Password, AWS, Google Cloud and Azure need no setup here: keyshroud runs the vendor's CLI (`op`, `aws`,
+`gcloud`, `az`) with the sign-in it already has. Signing in to a vendor's CLI or to Vault is the
+**user's** to do. `source add vault --token` and `source add infisical --client-id ID` ask for the
+credential in a dialog; never type it yourself. Reference formats:
+https://github.com/dinhkarate/keyshroud#team-secret-managers-vault-openbao-infisical-1password-aws-google-cloud-azure
+
 ## 5. Verify
 
 ```bash
@@ -189,12 +210,18 @@ yourself.
   `secrets_run` MCP tool). Values are injected into the command's environment
   and masked as `<redacted:NAME>` in its output, even when it fails.
 - **List what is available:** `keyshroud env` (names only) or `secrets_list`.
+- **A project's scope:** a repository may have a `.keyshroud.json` that lists the only names
+  available there (`keyshroud scope` shows it). A name `outside this project's scope` is refused:
+  do not edit the file to widen it, tell the user which name the command needs.
+- **Leave to the user:** `keyshroud backup`, `restore`, `rekey`, `rm --yes` and `claude-guard`.
+  Suggest the command; do not run it.
 
 ## 7. Finish
 
 Tell the user, in two or three lines: which agent integration you installed,
 where the secrets live (`keyshroud status`), what `doctor` reported, and that from
-now on secret-using commands go through `keyshroud run`.
+now on secret-using commands go through `keyshroud run`. If they keep secrets in the local
+vault, mention `keyshroud backup` (one file under its own passphrase) once.
 
 Docs: https://github.com/dinhkarate/keyshroud#readme · Security model:
 https://github.com/dinhkarate/keyshroud#security-model

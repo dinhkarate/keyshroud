@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>keyshroud — Hide API keys from Claude Code, Codex &amp; Cursor</title>
-<meta name="description" content="Let AI coding agents use your API keys without ever seeing them. Encrypted local vault or Vaultwarden, masked output, MCP server and agent plugins. MIT.">
+<meta name="description" content="Let AI coding agents use your API keys without ever seeing them. A local encrypted vault, Vaultwarden or your team's secret manager; masked output. MIT.">
 <meta property="og:title" content="keyshroud">
 <meta property="og:description" content="Your agents use the keys. They never see them.">
 <meta property="og:url" content="https://keyshroud.dev">
@@ -19,7 +19,7 @@
   "@context": "https://schema.org",
   "@type": "SoftwareApplication",
   "name": "keyshroud",
-  "description": "Let AI coding agents use your API keys without ever seeing them. An encrypted vault on your machine (or your self-hosted Vaultwarden/Bitwarden), masked output, MCP server, Claude Code and pi plugins.",
+  "description": "Let AI coding agents use your API keys without ever seeing them. An encrypted vault on your machine, your self-hosted Vaultwarden/Bitwarden, or the secret manager your team runs (HashiCorp Vault, OpenBao, Infisical, 1Password, AWS, Google Cloud or Azure); masked output, MCP server, Claude Code and pi plugins.",
   "url": "https://keyshroud.dev/",
   "applicationCategory": "DeveloperApplication",
   "operatingSystem": "macOS, Linux, Windows",
@@ -197,7 +197,7 @@ footer a { color: var(--muted); }
   <div class="hero">
     <div>
       <h1>Your agents use the keys. They never see them.</h1>
-      <p class="lede">keyshroud keeps API keys in an encrypted vault on your machine (or your own Vaultwarden) and injects them into the commands your AI coding agent runs. Any secret value that shows up in tool output is replaced with <code>&lt;redacted:NAME&gt;</code> before the model reads it.</p>
+      <p class="lede">keyshroud keeps API keys in an encrypted vault on your machine (or your own Vaultwarden, or the secret manager your team already runs) and injects them into the commands your AI coding agent runs. Any secret value that shows up in tool output is replaced with <code>&lt;redacted:NAME&gt;</code> before the model reads it.</p>
       <div class="cta">
         <a class="btn primary" href="#quickstart">Get started</a>
         <a class="btn" href="#demo">Watch the demo</a>
@@ -412,10 +412,12 @@ document.getElementById('copy-prompt').addEventListener('click', async (e) => {
       <div class="card"><h3>Masked output</h3><p><code>keyshroud run</code> streams stdout and stderr through a redactor. A secret is never split across chunks and slips through, and masking is on by default when output isn't going to a terminal.</p></div>
       <div class="card"><h3>Hooks on tool output</h3><p>pi <code>tool_result</code> and Claude Code <code>PostToolUse</code> hooks scrub tool results, including commands the agent ran without keyshroud. Claude Code can't rewrite a failed call, so <code>keyshroud claude-guard</code> masks what every Bash command prints as it is written, failed ones included.</p></div>
       <div class="card"><h3>MCP server</h3><p>For clients without a shell, <code>keyshroud mcp</code> gives them <code>secrets_run</code>, <code>secrets_list</code> and <code>secrets_request</code>. None of them return values.</p></div>
-      <div class="card"><h3>Committable references</h3><p>Write <code>GH_TOKEN=keyshroud://GitHub token</code> in a <code>.env.refs</code> file you can commit. <code>bw://</code> references reach Vaultwarden passwords, usernames, notes, TOTP codes, URIs and custom fields. <code>vault://</code>, <code>infisical://</code>, <code>op://</code>, <code>awssecrets://</code>, <code>gcpsecrets://</code> and <code>azurekeyvault://</code> read the secret manager your team already runs, and never write to it.</p></div>
+      <div class="card"><h3>Committable references</h3><p>Write <code>GH_TOKEN=keyshroud://GitHub token</code> in a <code>.env.refs</code> file you can commit. <code>bw://</code> references reach Vaultwarden passwords, usernames, notes, TOTP codes, URIs and custom fields.</p></div>
+      <div class="card"><h3>Your team's secret manager</h3><p><code>vault://</code>, <code>infisical://</code>, <code>op://</code>, <code>awssecrets://</code>, <code>awsssm://</code>, <code>gcpsecrets://</code> and <code>azurekeyvault://</code> references read HashiCorp Vault, OpenBao, Infisical, 1Password, AWS, Google Cloud and Azure where the secrets already are. Read-only: nothing is copied, and keyshroud never writes there.</p></div>
       <div class="card"><h3>Inject &amp; scan</h3><p><code>inject</code> renders <code>{{ keyshroud://… }}</code> templates into files only you can read (mode 0600). <code>scan</code> finds leaked values in your repo before you commit.</p></div>
-      <div class="card"><h3>Local first, sync if you want</h3><p>Secrets live in an AES-256-GCM vault on your machine. <code>keyshroud backup</code> writes one file under its own passphrase that restores anywhere; for several machines, keep them in the Vaultwarden you host, or Bitwarden. No SaaS account with us, no telemetry.</p></div>
+      <div class="card"><h3>Local first, sync if you want</h3><p>Secrets live in an AES-256-GCM vault on your machine, its key in the OS keychain or behind Touch ID on a Mac. <code>keyshroud backup</code> writes one file under its own passphrase that restores anywhere; for several machines, keep them in the Vaultwarden you host, or Bitwarden. No SaaS account with us, no telemetry.</p></div>
       <div class="card"><h3>A project's own secrets</h3><p>A <code>.keyshroud.json</code> in a repo, such as <code>{ "only": ["STRIPE_*"] }</code>, narrows what <code>keyshroud run</code> and the agent get there to the names that project needs. Masking still covers every value.</p></div>
+      <div class="card"><h3>Names-only audit log</h3><p><code>audit.jsonl</code> records which names were used, when and by which command, so you can see what an agent reached for. Never a value.</p></div>
     </div>
   </div>
 </section>
@@ -444,7 +446,7 @@ document.getElementById('copy-prompt').addEventListener('click', async (e) => {
         <h3>keyshroud</h3>
         <p class="what">Your vault, masked agent output, plugins for the agents you use.</p>
         <ul>
-          <li><i class="mark y" role="img" aria-label="Yes">&#10003;</i><div><b>Keys stay with you</b><span>On your machine, or your Vaultwarden</span></div></li>
+          <li><i class="mark y" role="img" aria-label="Yes">&#10003;</i><div><b>Keys stay with you</b><span>On your machine, your Vaultwarden, or your team&#8217;s own secret manager</span></div></li>
           <li><i class="mark y" role="img" aria-label="Yes">&#10003;</i><div><b>No account needed</b><span>The local vault needs no signup</span></div></li>
           <li><i class="mark y" role="img" aria-label="Yes">&#10003;</i><div><b>Free</b><span>MIT-licensed, no telemetry</span></div></li>
           <li><i class="mark y" role="img" aria-label="Yes">&#10003;</i><div><b>Masks agent output</b><span>Every tool result, wrapped or not</span></div></li>
@@ -488,7 +490,7 @@ document.getElementById('copy-prompt').addEventListener('click', async (e) => {
       <div class="card">
         <h3>Protected</h3>
         <ul>
-          <li>Secret values entering the model's context through tool output</li>
+          <li>Secret values entering the model's context through tool output, a failed command&#8217;s included (in Claude Code, with <code>keyshroud claude-guard</code> on)</li>
           <li>Secrets at rest: the local vault is AES-256-GCM, its key in the OS keychain</li>
           <li>Secrets pasted into chat while being stored (keyshroud uses a masked prompt instead)</li>
           <li>Plaintext in agent config and <code>auth.json</code> (only references are stored)</li>
@@ -500,6 +502,8 @@ document.getElementById('copy-prompt').addEventListener('click', async (e) => {
         <ul>
           <li>A malicious or prompt-injected agent that encodes a value or sends it over the network</li>
           <li>Other programs running as your user: they can read the vault&#8217;s key from the keychain (create the vault with a passphrase to be asked instead)</li>
+          <li>In Claude Code with the guard off: what a failed command prints, unless it ran through <code>keyshroud run</code> (the hook can&#8217;t rewrite a failed call)</li>
+          <li>A project scope and the guard are defaults against accidents, not walls: a program running as you can change them</li>
           <li>Values shorter than 6 characters (not redacted, to avoid noise)</li>
         </ul>
       </div>
@@ -541,7 +545,7 @@ document.getElementById('copy-prompt').addEventListener('click', async (e) => {
 
 <div class="wrap">
   <footer>
-    <span>keyshroud &middot; MIT &middot; a local vault, or Vaultwarden and Bitwarden. Not affiliated with Anthropic or Bitwarden, Inc.</span>
+    <span>keyshroud &middot; MIT &middot; a local vault, Vaultwarden and Bitwarden, or your team&#8217;s secret manager. Not affiliated with Anthropic, Bitwarden, Inc. or any vendor named here.</span>
     <span><a href="https://github.com/dinhkarate/keyshroud">GitHub</a> &middot; <a href="https://www.npmjs.com/package/keyshroud">npm</a> &middot; <a href="https://github.com/dinhkarate/keyshroud/blob/main/SECURITY.md">Security</a></span>
   </footer>
 </div>
