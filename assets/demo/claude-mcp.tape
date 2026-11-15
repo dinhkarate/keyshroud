@@ -6,7 +6,7 @@
 #
 # Record from the repository root, as claude.tape:
 #   DEMO_API_KEY_HELPER=/path/to/print-anthropic-key vhs assets/demo/claude-mcp.tape
-# and encode site/demo-mcp.mp4, .webm and .webp with claude.tape's commands.
+# and encode site/demo-mcp.mp4, .webm and .jpg with claude.tape's commands.
 
 Output "/tmp/keyshroud-demo-mcp.mp4"
 

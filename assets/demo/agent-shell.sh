@@ -12,7 +12,8 @@
 # Claude Code signs in through DEMO_API_KEY_HELPER, an apiKeyHelper command that
 # prints an Anthropic API key. Claude Code runs it as a child process, so no key
 # is ever in this shell; the script stops if one is. A key that is not scoped to
-# a workspace also needs DEMO_ANTHROPIC_WORKSPACE_ID. The script also stops
+# a workspace also needs DEMO_ANTHROPIC_WORKSPACE_ID, and a key for a gateway that
+# speaks the Anthropic API needs DEMO_ANTHROPIC_BASE_URL. The script also stops
 # unless site/index.html quotes what this setup prints: the SessionStart text,
 # the smoke test's masked output, the secrets_run result, the API's log line and
 # the MCP entry. Everything lives in DEMO_DIR (default: a new temporary dir).
@@ -88,15 +89,15 @@ if [ "$mode" = mcp ]; then cp "$check/mcp.json" "$app/mcp.json"; fi
 cp "$repo/assets/demo/gate.mjs" "$home/.claude/gate.mjs"
 version=$(demo claude --version < /dev/null | cut -d' ' -f1)
 DEMO_MODE=$mode DEMO_REPO=$repo DEMO_APP=$app DEMO_HELPER=$DEMO_API_KEY_HELPER DEMO_VERSION=$version \
-DEMO_WORKSPACE=${DEMO_ANTHROPIC_WORKSPACE_ID:-} "$node" - "$home/.claude" <<'EOF'
+DEMO_WORKSPACE=${DEMO_ANTHROPIC_WORKSPACE_ID:-} DEMO_BASE_URL=${DEMO_ANTHROPIC_BASE_URL:-} "$node" - "$home/.claude" <<'EOF'
 const fs = require("fs");
-const { DEMO_MODE, DEMO_REPO, DEMO_APP, DEMO_HELPER, DEMO_VERSION, DEMO_WORKSPACE } = process.env;
+const { DEMO_MODE, DEMO_REPO, DEMO_APP, DEMO_HELPER, DEMO_VERSION, DEMO_WORKSPACE, DEMO_BASE_URL } = process.env;
 const dir = process.argv[2];
 const allow = DEMO_MODE === "mcp" ? ["mcp__keyshroud__secrets_run", "mcp__keyshroud__secrets_list", "mcp__keyshroud__vault_status"]
   : ["Bash(keyshroud env)", "Bash(keyshroud status)", "Bash(cat scripts/smoke.sh)", "Bash(cat ./scripts/smoke.sh)"];
 if (DEMO_MODE === "plugin") {
   for (const only of ["", "--only ACME_API_KEY "]) for (const sh of ["", "sh ", "bash "])
-    for (const script of ["scripts/smoke.sh", "./scripts/smoke.sh"]) for (const end of ["", " 2>&1"])
+    for (const script of ["scripts/smoke.sh", "./scripts/smoke.sh", `${DEMO_APP}/scripts/smoke.sh`]) for (const end of ["", " 2>&1"])
       allow.push(`Bash(keyshroud run ${only}-- ${sh}${script}${end})`);
 }
 const settings = {
@@ -104,6 +105,7 @@ const settings = {
   env: {
     CLAUDE_CODE_API_KEY_HELPER_TTL_MS: "3600000",
     ...(DEMO_WORKSPACE ? { ANTHROPIC_CUSTOM_HEADERS: `anthropic-workspace-id: ${DEMO_WORKSPACE}` } : {}),
+    ...(DEMO_BASE_URL ? { ANTHROPIC_BASE_URL: DEMO_BASE_URL } : {}),
   },
   tui: "default",
   spinnerTipsEnabled: false,

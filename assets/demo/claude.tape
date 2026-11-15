@@ -7,10 +7,12 @@
 # Record from the repository root. Claude Code signs in through an apiKeyHelper
 # command, so no Anthropic key is ever in the recorded shell:
 #   DEMO_API_KEY_HELPER=/path/to/print-anthropic-key vhs assets/demo/claude.tape
+# With a key for a gateway that speaks the Anthropic API, also set
+# DEMO_ANTHROPIC_BASE_URL (for OpenRouter: https://openrouter.ai/api).
 # Then encode the site's files from the raw take:
 #   ffmpeg -i /tmp/keyshroud-demo-claude.mp4 -an -c:v libx264 -profile:v high -level:v 4.0 -preset veryslow -tune animation -crf 26 -pix_fmt yuv420p -movflags +faststart site/demo-claude.mp4
 #   ffmpeg -i /tmp/keyshroud-demo-claude.mp4 -an -c:v libsvtav1 -preset 4 -crf 50 -svtav1-params keyint=10s:scm=1 -pix_fmt yuv420p site/demo-claude.webm
-#   ffmpeg -sseof -1 -i /tmp/keyshroud-demo-claude.mp4 -frames:v 1 /tmp/poster.png && cwebp -q 80 -m 6 -sharp_yuv /tmp/poster.png -o site/demo-claude.webp
+#   ffmpeg -sseof -1 -i /tmp/keyshroud-demo-claude.mp4 -frames:v 1 -q:v 5 site/demo-claude.jpg
 
 Output "/tmp/keyshroud-demo-claude.mp4"
 

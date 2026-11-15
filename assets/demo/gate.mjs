@@ -9,7 +9,9 @@ import { resolve } from "node:path";
 
 const { tool_name: tool = "", tool_input: input = {}, cwd = "" } = JSON.parse(readFileSync(0, "utf8"));
 const command = typeof input.command === "string" ? input.command.trim() : "";
-const smoke = String.raw`(?:(?:sh|bash) )?(?:\./)?scripts/smoke\.sh`;
+// The script by its path in the project, or by its full path.
+const full = resolve(cwd, "scripts/smoke.sh").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const smoke = String.raw`(?:(?:sh|bash) )?(?:(?:\./)?scripts/smoke\.sh|${full})`;
 const shell = new RegExp(String.raw`^(?:keyshroud run (?:--only ACME_API_KEY )?-- ${smoke}(?: 2>&1)?|cat (?:\./)?scripts/smoke\.sh|keyshroud (?:env|status))$`);
 const only = (...keys) => Object.keys(input).every((key) => keys.includes(key));
 

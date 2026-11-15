@@ -426,14 +426,14 @@ curl: (22) error: 401</div>
       <div class="panel" id="demo-code">
         <h3 class="panel-title">Claude Code</h3>
         <div class="stage">
-          <video controls muted loop playsinline preload="none" width="820" height="900" poster="demo-claude.webp" aria-describedby="note-code" aria-label="Recording of a real Claude Code session. Asked to check an Acme API key with scripts/smoke.sh, Claude runs the script through keyshroud run. Its output shows the Authorization header as &lt;redacted:ACME_API_KEY&gt; and HTTP 200. Afterwards the API's log shows the full fake key, and a search of Claude Code's saved transcript finds it 0 times.">
+          <video controls muted loop playsinline preload="none" width="820" height="900" poster="demo-claude.jpg" aria-describedby="note-code" aria-label="Recording of a real Claude Code session. Asked to check an Acme API key with scripts/smoke.sh, Claude runs the script through keyshroud run. Its output shows the Authorization header as &lt;redacted:ACME_API_KEY&gt; and HTTP 200. Afterwards the API's log shows the full fake key, and a search of Claude Code's saved transcript finds it 0 times.">
             <source src="demo-claude.webm" type='video/webm; codecs="av01.0.05M.08"'>
             <source src="demo-claude.mp4" type="video/mp4">
           </video>
           <div class="proof">
             <div class="card">
               <h3>What Claude was told</h3>
-              <pre>keyshroud: vault secrets are available by name only: ACME_API_KEY, GH_TOKEN, DATABASE_URL. Run every command that uses one through `keyshroud run -- &lt;command&gt;` …</pre>
+              <pre>keyshroud: vault secrets are available by name only: ACME_API_KEY, GH_TOKEN, DATABASE_URL. Run every command that uses one through `keyshroud run --only NAME -- &lt;command&gt;` …</pre>
               <p>From the plugin&#8217;s SessionStart hook when the session starts. Names only.</p>
             </div>
             <div class="card">
@@ -450,13 +450,13 @@ curl: (22) error: 401</div>
             </div>
           </div>
         </div>
-        <p class="note" id="note-code">Recorded in November 2026 in one take with <a href="https://github.com/charmbracelet/vhs">vhs</a>, at normal speed, no cuts: Claude Code 2.1.309 with the keyshroud 0.8.0 plugin (<code>/plugin install keyshroud@keyshroud</code>). The setup runs off screen and is published: <a href="https://github.com/dinhkarate/keyshroud/blob/main/assets/demo/agent-shell.sh">agent-shell.sh</a>, <a href="https://github.com/dinhkarate/keyshroud/blob/main/assets/demo/claude.tape">claude.tape</a>. The key is fake, and the API is a local mock that accepts only that key. keyshroud keeps keys out of what Claude reads by accident; it is not a sandbox against an agent that sets out to steal one (<a href="#threat">threat model</a>).</p>
+        <p class="note" id="note-code">Recorded in November 2026 in one take with <a href="https://github.com/charmbracelet/vhs">vhs</a>, at normal speed, no cuts: Claude Code 2.1.309 (Haiku 5.5, reached through OpenRouter) with the keyshroud 0.12.1 plugin (<code>/plugin install keyshroud@keyshroud</code>). The setup runs off screen and is published: <a href="https://github.com/dinhkarate/keyshroud/blob/main/assets/demo/agent-shell.sh">agent-shell.sh</a>, <a href="https://github.com/dinhkarate/keyshroud/blob/main/assets/demo/claude.tape">claude.tape</a>. The key is fake, and the API is a local mock that accepts only that key. keyshroud keeps keys out of what Claude reads by accident; it is not a sandbox against an agent that sets out to steal one (<a href="#threat">threat model</a>).</p>
         <details data-src="demo-claude.txt"><summary>Read the session as text</summary><pre><a href="demo-claude.txt">Open the text version</a></pre></details>
       </div>
       <div class="panel" id="demo-mcp">
         <h3 class="panel-title">Over MCP</h3>
         <div class="stage">
-          <video controls muted loop playsinline preload="none" width="820" height="900" data-poster="demo-mcp.webp" aria-describedby="note-mcp" aria-label="Recording of Claude Code with its built-in tools turned off and keyshroud's MCP server as its only tools. Claude calls secrets_run with scripts/smoke.sh. The result shows exit 0, HTTP 200 and &lt;redacted:ACME_API_KEY&gt; in place of the key.">
+          <video controls muted loop playsinline preload="none" width="820" height="900" data-poster="demo-mcp.jpg" aria-describedby="note-mcp" aria-label="Recording of Claude Code with its built-in tools turned off and keyshroud's MCP server as its only tools. Claude calls secrets_run with scripts/smoke.sh. The result shows exit 0, HTTP 200 and &lt;redacted:ACME_API_KEY&gt; in place of the key.">
             <source src="demo-mcp.webm" type='video/webm; codecs="av01.0.05M.08"'>
             <source src="demo-mcp.mp4" type="video/mp4">
           </video>
@@ -479,7 +479,7 @@ curl: (22) error: 401</div>
             </div>
           </div>
         </div>
-        <p class="note" id="note-mcp">Recorded in November 2026 in Claude Code 2.1.309 with its built-in tools turned off and keyshroud&#8217;s MCP server as its only tools: the same server, tools and results Claude Desktop gets from this entry. Claude Desktop itself is not shown. Same fake key and local mock as the Claude Code take: <a href="https://github.com/dinhkarate/keyshroud/blob/main/assets/demo/claude-mcp.tape">claude-mcp.tape</a>.</p>
+        <p class="note" id="note-mcp">Recorded in November 2026 with keyshroud 0.12.1 in Claude Code 2.1.309 (Haiku 5.5, reached through OpenRouter) with its built-in tools turned off and keyshroud&#8217;s MCP server as its only tools: the same server, tools and results Claude Desktop gets from this entry. Claude Desktop itself is not shown. Same fake key and local mock as the Claude Code take: <a href="https://github.com/dinhkarate/keyshroud/blob/main/assets/demo/claude-mcp.tape">claude-mcp.tape</a>.</p>
         <details data-src="demo-mcp.txt"><summary>Read the session as text</summary><pre><a href="demo-mcp.txt">Open the text version</a></pre></details>
       </div>
       <div class="panel wide" id="demo-guard">
@@ -500,10 +500,10 @@ curl: (22) error: 401</div>
       </div>
       <div class="panel wide" id="demo-cli">
         <h3 class="panel-title">Terminal</h3>
-        <video controls muted loop playsinline preload="none" width="1120" height="540" data-poster="demo-cli.webp" aria-label="Terminal recording: keyshroud add creates the local vault and stores a GitHub token through a masked prompt; keyshroud run prints &lt;redacted:GH_TOKEN&gt; in place of the token; keyshroud scan finds the token in debug.log; auth.json holds only a keyshroud:// reference">
+        <video controls muted loop playsinline preload="none" width="1120" height="540" data-poster="demo-cli.jpg" aria-label="Terminal recording: keyshroud add creates the local vault and stores a GitHub token through a masked prompt; keyshroud run prints &lt;redacted:GH_TOKEN&gt; in place of the token; keyshroud scan finds the token in debug.log; env.json holds only a keyshroud:// reference">
           <source src="demo.mp4" type="video/mp4">
         </video>
-        <p class="note">No agent here: on a new machine, keyshroud stores a token through a masked prompt, masks it in a command&#8217;s output and finds a copy that leaked into a log. Recorded with <a href="https://github.com/charmbracelet/vhs">vhs</a> from <a href="https://github.com/dinhkarate/keyshroud/blob/main/assets/demo/demo.tape">demo.tape</a>. The token is fake.</p>
+        <p class="note">No agent here: on a new machine, keyshroud stores a token through a masked prompt, masks it in a command&#8217;s output and finds a copy that leaked into a log. Recorded in November 2026 with keyshroud 0.12.1 and <a href="https://github.com/charmbracelet/vhs">vhs</a> from <a href="https://github.com/dinhkarate/keyshroud/blob/main/assets/demo/demo.tape">demo.tape</a>. The token is fake.</p>
       </div>
     </div>
   </div>

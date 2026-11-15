@@ -5,6 +5,12 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+### Changed
+- The site's Claude Code, MCP and terminal recordings and the README's demo are new takes with
+  keyshroud 0.12.1. The demo setup (`assets/demo/agent-shell.sh`) takes `DEMO_ANTHROPIC_BASE_URL`
+  for a key from a gateway that speaks the Anthropic API, and its tool gate also lets the smoke
+  test run by its full path.
+
 ## [0.12.1] - 2026-11-15
 
 Documentation only; the code is the same as 0.12.0.
