@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claude Code · keyshroud docs</title>
+<meta name="description" content="The plugin's hooks, claude-setup, and the guard for failed commands.">
+<meta property="og:title" content="Claude Code · keyshroud docs">
+<meta property="og:description" content="The plugin's hooks, claude-setup, and the guard for failed commands.">
+<meta property="og:url" content="https://keyshroud.dev/docs/claude-code">
+<meta property="og:image" content="https://keyshroud.dev/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="canonical" href="https://keyshroud.dev/docs/claude-code">
+<link rel="alternate" type="text/markdown" href="/docs/claude-code.md">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<meta name="color-scheme" content="light dark">
+<link rel="stylesheet" href="/docs/docs.css">
+</head>
+<body>
+<header class="bar">
+  <div class="wrap">
+    <a class="brand" href="/">
+      <picture>
+        <source srcset="/logo-dark.svg" media="(prefers-color-scheme: dark)">
+        <img src="/logo.svg" alt="keyshroud">
+      </picture>
+    </a>
+    <nav>
+      <a href="/docs/" aria-current="true">Docs</a>
+      <a href="/#quickstart">Quickstart</a>
+      <a class="opt" href="/#demo">Demo</a>
+      <a class="opt" href="/#compare">Compare</a>
+      <a class="gh" href="https://github.com/dinhkarate/keyshroud">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="wrap page">
+  <details class="menu">
+    <summary>All docs</summary>
+    <nav class="side" aria-label="Docs, short screen">
+<h4>Guides</h4>
+<ul>
+<li><a href="/docs/migrate-from-dotenv">Move a project off .env</a></li>
+<li><a href="/docs/ci-and-docker">CI and Docker</a></li>
+<li><a href="/docs/rotate-a-key">Rotate a key that leaked</a></li>
+<li><a href="/docs/troubleshooting">Troubleshooting</a></li>
+</ul>
+<h4>Where secrets live</h4>
+<ul>
+<li><a href="/docs/local-vault">The local vault</a></li>
+<li><a href="/docs/vaultwarden">Vaultwarden or Bitwarden</a></li>
+<li><a href="/docs/team-secret-managers">Team secret managers</a></li>
+<li><a href="/docs/project-scope">Project scope</a></li>
+</ul>
+<h4>Agents</h4>
+<ul>
+<li><a href="/docs/claude-code" aria-current="page">Claude Code</a></li>
+<li><a href="/docs/agents">pi, omp and other agents</a></li>
+</ul>
+<h4>Reference</h4>
+<ul>
+<li><a href="/docs/cli">CLI reference</a></li>
+<li><a href="/docs/how-it-works">How it works</a></li>
+<li><a href="/docs/security">Security model</a></li>
+<li><a href="/docs/faq">FAQ</a></li>
+</ul>
+    </nav>
+  </details>
+  <nav class="side wide" aria-label="Docs">
+<h4>Guides</h4>
+<ul>
+<li><a href="/docs/migrate-from-dotenv">Move a project off .env</a></li>
+<li><a href="/docs/ci-and-docker">CI and Docker</a></li>
+<li><a href="/docs/rotate-a-key">Rotate a key that leaked</a></li>
+<li><a href="/docs/troubleshooting">Troubleshooting</a></li>
+</ul>
+<h4>Where secrets live</h4>
+<ul>
+<li><a href="/docs/local-vault">The local vault</a></li>
+<li><a href="/docs/vaultwarden">Vaultwarden or Bitwarden</a></li>
+<li><a href="/docs/team-secret-managers">Team secret managers</a></li>
+<li><a href="/docs/project-scope">Project scope</a></li>
+</ul>
+<h4>Agents</h4>
+<ul>
+<li><a href="/docs/claude-code" aria-current="page">Claude Code</a></li>
+<li><a href="/docs/agents">pi, omp and other agents</a></li>
+</ul>
+<h4>Reference</h4>
+<ul>
+<li><a href="/docs/cli">CLI reference</a></li>
+<li><a href="/docs/how-it-works">How it works</a></li>
+<li><a href="/docs/security">Security model</a></li>
+<li><a href="/docs/faq">FAQ</a></li>
+</ul>
+  </nav>
+  <main>
+<article>
+<h1>Claude Code</h1>
+<p>Install the CLI, then the plugin (redaction hooks + skill):</p>
+<pre data-lang="bash"><code>npm install -g keyshroud</code></pre>
+<pre data-lang="text"><code>/plugin marketplace add dinhkarate/keyshroud
+/plugin install keyshroud@keyshroud</code></pre>
+<p>What you get:</p>
+<ul>
+<li><strong>SessionStart hook</strong> — refreshes the redaction index and tells Claude which
+secret <em>names</em> exist. It never asks for a master password or passphrase: with a
+locked vault it tells Claude to ask you to run <code>keyshroud unlock</code>.</li>
+<li><strong>PostToolUse hook</strong> — rewrites any successful tool result that contains a
+wired value or the vault session token to <code>&lt;redacted:NAME&gt;</code> using Claude
+Code&#39;s <code>updatedToolOutput</code> (tested with Claude Code 2.1.296).
+<strong>Limit:</strong> when a command fails, Claude Code fires <code>PostToolUseFailure</code>, which
+cannot rewrite output. The skill and session context therefore tell Claude to
+run every secret-using command through <code>keyshroud run</code>, which masks inside
+the process regardless of the exit code; the guard below covers the commands
+that are not run that way.</li>
+<li><strong>Skill</strong> — teaches Claude to use names and references, never values.</li>
+</ul>
+<p>Claude uses the CLI from its Bash tool, so the plugin adds no MCP server (since
+0.6.1). To add one anyway: <code>claude mcp add keyshroud -- keyshroud mcp</code>.</p>
+<p>The plugin calls <code>keyshroud</code> from <code>PATH</code>. If Claude Code is launched from a GUI
+that doesn&#39;t see your npm/nvm bin directory, run <code>keyshroud link-cli</code> (links it
+into <code>~/.local/bin</code>) and make sure that directory is on the GUI&#39;s <code>PATH</code>.</p>
+<p>To give Bash commands the secrets as env vars, start Claude through keyshroud:</p>
+<pre data-lang="bash"><code>keyshroud run -- claude</code></pre>
+<p>Use a vault item as Claude Code&#39;s own API key (<code>apiKeyHelper</code>):</p>
+<pre data-lang="bash"><code>keyshroud claude-setup --item &quot;Anthropic API key&quot; --ttl-ms 600000</code></pre>
+<p>It backs up <code>settings.json</code> first and refuses to replace an existing helper
+without <code>--force</code>.</p>
+<h2 id="the-guard-failed-commands-masked-too"><a class="anchor" href="#the-guard-failed-commands-masked-too">The guard: failed commands masked too</a></h2>
+<pre data-lang="bash"><code>keyshroud claude-guard          # on (macOS, Linux); takes effect in new Claude Code sessions
+keyshroud claude-guard --off</code></pre>
+<p>With the guard on, Claude Code starts its shell through keyshroud (<code>CLAUDE_CODE_SHELL</code> in
+<code>~/.claude/settings.json</code> points at a small launcher in <code>~/.config/keyshroud/guard/</code>). Each Bash
+command runs in your real bash or zsh with the same arguments; what it prints passes through a
+masking process on its way to Claude Code, so a wired value becomes <code>&lt;redacted:NAME&gt;</code> whether the
+command succeeds, fails or is interrupted, and whether or not it was run through <code>keyshroud run</code>.
+The exit status, the order of stdout and stderr, the working directory and background jobs behave as
+before; a command costs about 0.2 s more.</p>
+<p><strong>What it knows.</strong> The guard knows values the way the hook does: from the fingerprint index, never
+from the vault, so it never asks for anything and masks nothing before an index exists. It covers the
+Bash tool; the <code>PostToolUse</code> hook stays on for the other tools.</p>
+<p><strong>When it cannot mask, the command does not run.</strong></p>
+<ul>
+<li>If its pipes or the masking process cannot be started, the command is not run (exit 126, with the
+reason) rather than run unmasked.</li>
+<li>If the masking process stops while a command runs, the shell and what it started are told to end,
+and killed after two seconds. That is as good as the list of processes it can get: one that has cut
+itself loose from the shell is not found, and if the list cannot be had at that moment the guard
+stops what it knows of and says that the rest may still run (the list comes from <code>/proc</code> or the
+system&#39;s <code>ps</code>; a machine with neither runs nothing through the guard).</li>
+<li>If the settings cannot be read, the launcher does not take that for off: the command is not run.</li>
+</ul>
+<p><strong>On and off.</strong> The settings alone say whether the guard is on: a launcher looks there before each
+command, so sessions that were started while it was on keep working after <code>--off</code> (their launcher then
+only starts the shell), and mask again after <code>claude-guard</code>. <code>--off</code> restores what the setting was.
+<code>--shell PATH</code> picks the bash or zsh it stands in for (default: the one Claude Code was set to use,
+else your <code>$SHELL</code>). <code>keyshroud doctor</code> shows <code>claude guard=on|off</code>.</p>
+<p><strong>Limit.</strong> A value of several lines that is printed with a pause between its lines is masked by its
+runs of 20 characters or more only.</p>
+</article>
+<p class="edit"><a href="https://github.com/dinhkarate/keyshroud/blob/main/docs/claude-code.md">Edit this page on GitHub</a> · <a href="/docs/claude-code.md">Markdown</a></p>
+<div class="steps"><a class="prev" rel="prev" href="/docs/project-scope"><span>Previous</span>Project scope</a><a class="next" rel="next" href="/docs/agents"><span>Next</span>pi, omp and other agents</a></div>
+  </main>
+</div>
+<footer>
+  <div class="wrap">
+    <p>keyshroud · MIT · <a href="https://github.com/dinhkarate/keyshroud">GitHub</a> · <a href="https://www.npmjs.com/package/keyshroud">npm</a> · <a href="/llms.txt">llms.txt</a> · Not affiliated with Anthropic, Bitwarden, Inc. or any vendor named here.</p>
+  </div>
+</footer>
+<script src="/docs/docs.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Troubleshooting · keyshroud docs</title>
+<meta name="description" content="Unresolved names, a locked vault, a value that printed unmasked.">
+<meta property="og:title" content="Troubleshooting · keyshroud docs">
+<meta property="og:description" content="Unresolved names, a locked vault, a value that printed unmasked.">
+<meta property="og:url" content="https://keyshroud.dev/docs/troubleshooting">
+<meta property="og:image" content="https://keyshroud.dev/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="canonical" href="https://keyshroud.dev/docs/troubleshooting">
+<link rel="alternate" type="text/markdown" href="/docs/troubleshooting.md">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<meta name="color-scheme" content="light dark">
+<link rel="stylesheet" href="/docs/docs.css">
+</head>
+<body>
+<header class="bar">
+  <div class="wrap">
+    <a class="brand" href="/">
+      <picture>
+        <source srcset="/logo-dark.svg" media="(prefers-color-scheme: dark)">
+        <img src="/logo.svg" alt="keyshroud">
+      </picture>
+    </a>
+    <nav>
+      <a href="/docs/" aria-current="true">Docs</a>
+      <a href="/#quickstart">Quickstart</a>
+      <a class="opt" href="/#demo">Demo</a>
+      <a class="opt" href="/#compare">Compare</a>
+      <a class="gh" href="https://github.com/dinhkarate/keyshroud">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="wrap page">
+  <details class="menu">
+    <summary>All docs</summary>
+    <nav class="side" aria-label="Docs, short screen">
+<h4>Guides</h4>
+<ul>
+<li><a href="/docs/migrate-from-dotenv">Move a project off .env</a></li>
+<li><a href="/docs/ci-and-docker">CI and Docker</a></li>
+<li><a href="/docs/rotate-a-key">Rotate a key that leaked</a></li>
+<li><a href="/docs/troubleshooting" aria-current="page">Troubleshooting</a></li>
+</ul>
+<h4>Where secrets live</h4>
+<ul>
+<li><a href="/docs/local-vault">The local vault</a></li>
+<li><a href="/docs/vaultwarden">Vaultwarden or Bitwarden</a></li>
+<li><a href="/docs/team-secret-managers">Team secret managers</a></li>
+<li><a href="/docs/project-scope">Project scope</a></li>
+</ul>
+<h4>Agents</h4>
+<ul>
+<li><a href="/docs/claude-code">Claude Code</a></li>
+<li><a href="/docs/agents">pi, omp and other agents</a></li>
+</ul>
+<h4>Reference</h4>
+<ul>
+<li><a href="/docs/cli">CLI reference</a></li>
+<li><a href="/docs/how-it-works">How it works</a></li>
+<li><a href="/docs/security">Security model</a></li>
+<li><a href="/docs/faq">FAQ</a></li>
+</ul>
+    </nav>
+  </details>
+  <nav class="side wide" aria-label="Docs">
+<h4>Guides</h4>
+<ul>
+<li><a href="/docs/migrate-from-dotenv">Move a project off .env</a></li>
+<li><a href="/docs/ci-and-docker">CI and Docker</a></li>
+<li><a href="/docs/rotate-a-key">Rotate a key that leaked</a></li>
+<li><a href="/docs/troubleshooting" aria-current="page">Troubleshooting</a></li>
+</ul>
+<h4>Where secrets live</h4>
+<ul>
+<li><a href="/docs/local-vault">The local vault</a></li>
+<li><a href="/docs/vaultwarden">Vaultwarden or Bitwarden</a></li>
+<li><a href="/docs/team-secret-managers">Team secret managers</a></li>
+<li><a href="/docs/project-scope">Project scope</a></li>
+</ul>
+<h4>Agents</h4>
+<ul>
+<li><a href="/docs/claude-code">Claude Code</a></li>
+<li><a href="/docs/agents">pi, omp and other agents</a></li>
+</ul>
+<h4>Reference</h4>
+<ul>
+<li><a href="/docs/cli">CLI reference</a></li>
+<li><a href="/docs/how-it-works">How it works</a></li>
+<li><a href="/docs/security">Security model</a></li>
+<li><a href="/docs/faq">FAQ</a></li>
+</ul>
+  </nav>
+  <main>
+<article>
+<h1>Troubleshooting</h1>
+<p>Start with <code>keyshroud doctor</code>. It prints which vault is in use, whether it is open, every wired name
+and whether it resolves, and the state of the Claude Code pieces. Names only, never a value.</p>
+<pre data-lang="text"><code>backend=local (/home/you/.config/keyshroud/backend says local)
+local vault=~/.config/keyshroud/vault.json key=keychain status=unlocked items=12
+/home/you/.config/keyshroud/env.json GH_TOKEN resolved=yes
+redact index=present
+apiKeyHelper wired=no
+claude guard=off</code></pre>
+<p>A line that says <code>status=locked</code> or <code>resolved=no</code> is the place to look.</p>
+<h2 id="a-secret-does-not-resolve"><a class="anchor" href="#a-secret-does-not-resolve">A secret does not resolve</a></h2>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Message</th>
+<th>What it means</th>
+<th>Fix</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>Secret unresolved: NAME is not wired</code> (exit <code>4</code>)</td>
+<td>No variable of that name points at a vault item</td>
+<td><code>keyshroud list</code> to see what is wired; <code>keyshroud add --env NAME --item &quot;Item&quot;</code> or <code>keyshroud wire --env NAME --item &quot;Item&quot;</code></td>
+</tr>
+<tr>
+<td><code>Secret unresolved: NAME is outside this project&#39;s scope (…/.keyshroud.json)</code> (exit <code>4</code>)</td>
+<td>A <a href="/docs/project-scope">project scope</a> in this directory leaves that name out</td>
+<td>Run the command where the name belongs, or widen the scope yourself: <code>keyshroud scope --only &#39;…&#39;</code>. An agent should ask you, not edit the file</td>
+</tr>
+<tr>
+<td><code>keyshroud: unresolved (names only): NAME</code></td>
+<td>A reference in <code>--env-file</code> points at an item that does not exist here; the command still runs, without that variable</td>
+<td>Check the item&#39;s name in <code>.env.refs</code> against <code>keyshroud list</code>; a teammate&#39;s vault may not have it yet</td>
+</tr>
+<tr>
+<td><code>keyshroud: unresolved (names only): NAME (The local vault is locked: …)</code></td>
+<td>The vault could not be opened, so the command ran without that variable</td>
+<td>See the next section</td>
+</tr>
+<tr>
+<td><code>Ambiguous vault item name: NAME</code> (exit <code>4</code>)</td>
+<td>Two items share that name</td>
+<td>Rename one of them in the vault</td>
+</tr>
+</tbody></table>
+</div>
+<h2 id="the-vault-is-locked"><a class="anchor" href="#the-vault-is-locked">The vault is locked</a></h2>
+<p>A keychain, Secret Service or DPAPI vault opens by itself. A passphrase or Touch ID vault, and
+Vaultwarden, have sessions of 30 minutes:</p>
+<ul>
+<li><strong>In a terminal</strong>, the command asks again.</li>
+<li><strong>From an agent on your desktop</strong>, a dialog opens. If you cancel it, the command still starts, without
+the secrets, and keyshroud prints <code>unresolved (names only): NAME (Cancelled)</code>. No second dialog opens
+for 30 seconds, and the agent should not ask again by itself.</li>
+<li><strong>Over SSH or without a display</strong>, no dialog can open: the same line says
+<code>The local vault is locked: run `keyshroud unlock` in a terminal</code>. Do that, then run the command again.
+<code>No terminal and no dialog here (SSH or no display)</code> from <code>add</code> or <code>rotate</code> is the same situation:
+run it in a terminal, or pipe the value with <code>--stdin</code>.</li>
+<li><strong><code>keyshroud status</code> exits <code>3</code></strong> while the vault is locked, which is handy in a script.</li>
+<li><strong><code>The Linux keyring is locked</code></strong>: you are logged in over SSH without a desktop session. Unlock the
+keyring, or give that machine a passphrase vault: <code>keyshroud rekey --to passphrase</code>.</li>
+<li><strong>Windows over SSH, <code>Access is denied</code></strong>: a key-based SSH login carries no Windows password, so DPAPI
+refuses. Use the desktop or RDP session, or a passphrase vault.</li>
+</ul>
+<h2 id="a-value-was-printed-unmasked"><a class="anchor" href="#a-value-was-printed-unmasked">A value was printed unmasked</a></h2>
+<p>Check these in order:</p>
+<ol>
+<li><strong>You ran it in your own terminal.</strong> <code>keyshroud run</code> passes a terminal through untouched and masks
+when the output goes to an agent, a pipe or CI. <code>--mask</code> forces it.</li>
+<li><strong>The command failed, in Claude Code, and the guard is off.</strong> Claude Code&#39;s hook cannot rewrite the
+output of a failed command. Run secret-using commands through <code>keyshroud run</code>, or turn on
+<a href="/docs/claude-code#the-guard-failed-commands-masked-too">the guard</a>: <code>keyshroud claude-guard</code>.</li>
+<li><strong>The agent has no hook.</strong> Only Claude Code and pi/omp mask commands you did not wrap. In Codex,
+Cursor, OpenCode and Gemini CLI, masking happens inside <code>keyshroud run</code>.</li>
+<li><strong>The value is not in the vault.</strong> keyshroud masks the values it holds. A key that lives only in a
+<code>.env</code> file is unknown to it: <a href="/docs/migrate-from-dotenv">move it</a>.</li>
+<li><strong>The value was changed on the way out.</strong> Masking is exact-match: a part of the value, base64 or
+another encoding of it is not recognised. Values shorter than 6 characters are never masked.</li>
+<li><strong>You rotated it.</strong> After <code>keyshroud rotate</code>, the old value is no longer known; see
+<a href="/docs/rotate-a-key">rotate a key</a>.</li>
+</ol>
+<p>If none of these fit, that is a bug worth reporting: see <a href="https://github.com/dinhkarate/keyshroud/blob/main/SECURITY.md">SECURITY.md</a>.</p>
+<h2 id="claude-code"><a class="anchor" href="#claude-code">Claude Code</a></h2>
+<ul>
+<li><strong>Nothing happens after installing or updating the plugin.</strong> Hooks load when a session starts:
+restart Claude Code. The hooks call the <code>keyshroud</code> on your <code>PATH</code>, so <code>keyshroud --version</code> in a
+terminal tells you which version they run.</li>
+<li><strong>The agent does not know my secrets&#39; names.</strong> The SessionStart hook lists the wired names that are
+in scope for the directory the session started in. <code>keyshroud env</code> shows the same list.</li>
+<li><strong>With the guard on, a command exits <code>126</code> without running.</strong> The guard could not start its masking
+process or read Claude Code&#39;s settings, and it does not run a command it cannot mask. The message
+says which. <code>keyshroud claude-guard --off</code> turns it off; sessions that are open keep working.</li>
+<li><strong>The guard is on but old sessions are not masked.</strong> It takes effect in sessions started after
+<code>keyshroud claude-guard</code>.</li>
+</ul>
+<h2 id="vaultwarden-and-bitwarden"><a class="anchor" href="#vaultwarden-and-bitwarden">Vaultwarden and Bitwarden</a></h2>
+<ul>
+<li><strong><code>bw login</code> prints <code>KeyIdBackfillError</code>.</strong> <code>bw</code> 2026.9 and later call an endpoint that Vaultwarden
+added in 1.37.4. The login is saved anyway; update Vaultwarden to make the error go away.</li>
+<li><strong>A copied <code>bw</code> data directory logged the original out.</strong> A copy shares one refresh token with the
+original, and the server accepts each token once. Do not copy that directory between machines: sign
+in on each one with <code>keyshroud setup --registered</code>.</li>
+<li>More in <a href="/docs/vaultwarden">Vaultwarden or Bitwarden</a>.</li>
+</ul>
+<h2 id="team-secret-managers"><a class="anchor" href="#team-secret-managers">Team secret managers</a></h2>
+<p>Exit <code>3</code> from a <code>vault://</code>, <code>op://</code>, <code>awssecrets://</code> or similar reference means the source did not
+accept the sign-in: the token expired, or the vendor CLI is logged out. <code>keyshroud source</code> lists what
+is set up and which CLIs it found; sign in the way you normally do (<code>op signin</code>, <code>aws sso login</code>,
+<code>gcloud auth login</code>, <code>az login</code>) and run the command again. Details per source:
+<a href="/docs/team-secret-managers">team secret managers</a>.</p>
+<h2 id="still-stuck"><a class="anchor" href="#still-stuck">Still stuck</a></h2>
+<p>Open an issue at <a href="https://github.com/dinhkarate/keyshroud/issues">https://github.com/dinhkarate/keyshroud/issues</a> with the output of
+<code>keyshroud doctor</code> and <code>keyshroud --version</code>. Both print names only, so they are safe to paste.</p>
+</article>
+<p class="edit"><a href="https://github.com/dinhkarate/keyshroud/blob/main/docs/troubleshooting.md">Edit this page on GitHub</a> · <a href="/docs/troubleshooting.md">Markdown</a></p>
+<div class="steps"><a class="prev" rel="prev" href="/docs/rotate-a-key"><span>Previous</span>Rotate a key that leaked</a><a class="next" rel="next" href="/docs/local-vault"><span>Next</span>The local vault</a></div>
+  </main>
+  <nav class="toc" aria-label="On this page">
+<h4>On this page</h4>
+<ul>
+<li><a href="#a-secret-does-not-resolve">A secret does not resolve</a></li>
+<li><a href="#the-vault-is-locked">The vault is locked</a></li>
+<li><a href="#a-value-was-printed-unmasked">A value was printed unmasked</a></li>
+<li><a href="#claude-code">Claude Code</a></li>
+<li><a href="#vaultwarden-and-bitwarden">Vaultwarden and Bitwarden</a></li>
+<li><a href="#team-secret-managers">Team secret managers</a></li>
+<li><a href="#still-stuck">Still stuck</a></li>
+</ul>
+  </nav>
+</div>
+<footer>
+  <div class="wrap">
+    <p>keyshroud · MIT · <a href="https://github.com/dinhkarate/keyshroud">GitHub</a> · <a href="https://www.npmjs.com/package/keyshroud">npm</a> · <a href="/llms.txt">llms.txt</a> · Not affiliated with Anthropic, Bitwarden, Inc. or any vendor named here.</p>
+  </div>
+</footer>
+<script src="/docs/docs.js" defer></script>
+</body>
+</html>

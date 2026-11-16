@@ -8,4 +8,5 @@
 - Keep TypeScript erasable-only so Node.js `>=22.18.0` can run `src/` directly; the published CLI runs from compiled `dist/` and must keep working on the oldest Node in `engines` (18.19; CI checks it).
 - No `Co-authored-by` trailer or "co-authored with" line for an AI in commits or PR descriptions; CI rejects them.
 - Run `npm run check` (typecheck, tests against the fake `bw`, build) before committing.
+- `site/docs/` is built from the public pages of `docs/`: after changing one, run `npm run site` and commit the result (the tests fail when it is stale). A new public page also needs its `!docs/<page>.md` line in `.gitignore`, a row in `scripts/build-site-docs.mjs` and a URL in `site/sitemap.xml`.
 - Review `npm pack --dry-run` before `npm publish`.

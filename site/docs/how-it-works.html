@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How it works · keyshroud docs</title>
+<meta name="description" content="Wiring, unlocking, resolving, injecting, redacting.">
+<meta property="og:title" content="How it works · keyshroud docs">
+<meta property="og:description" content="Wiring, unlocking, resolving, injecting, redacting.">
+<meta property="og:url" content="https://keyshroud.dev/docs/how-it-works">
+<meta property="og:image" content="https://keyshroud.dev/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="canonical" href="https://keyshroud.dev/docs/how-it-works">
+<link rel="alternate" type="text/markdown" href="/docs/how-it-works.md">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<meta name="color-scheme" content="light dark">
+<link rel="stylesheet" href="/docs/docs.css">
+</head>
+<body>
+<header class="bar">
+  <div class="wrap">
+    <a class="brand" href="/">
+      <picture>
+        <source srcset="/logo-dark.svg" media="(prefers-color-scheme: dark)">
+        <img src="/logo.svg" alt="keyshroud">
+      </picture>
+    </a>
+    <nav>
+      <a href="/docs/" aria-current="true">Docs</a>
+      <a href="/#quickstart">Quickstart</a>
+      <a class="opt" href="/#demo">Demo</a>
+      <a class="opt" href="/#compare">Compare</a>
+      <a class="gh" href="https://github.com/dinhkarate/keyshroud">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="wrap page">
+  <details class="menu">
+    <summary>All docs</summary>
+    <nav class="side" aria-label="Docs, short screen">
+<h4>Guides</h4>
+<ul>
+<li><a href="/docs/migrate-from-dotenv">Move a project off .env</a></li>
+<li><a href="/docs/ci-and-docker">CI and Docker</a></li>
+<li><a href="/docs/rotate-a-key">Rotate a key that leaked</a></li>
+<li><a href="/docs/troubleshooting">Troubleshooting</a></li>
+</ul>
+<h4>Where secrets live</h4>
+<ul>
+<li><a href="/docs/local-vault">The local vault</a></li>
+<li><a href="/docs/vaultwarden">Vaultwarden or Bitwarden</a></li>
+<li><a href="/docs/team-secret-managers">Team secret managers</a></li>
+<li><a href="/docs/project-scope">Project scope</a></li>
+</ul>
+<h4>Agents</h4>
+<ul>
+<li><a href="/docs/claude-code">Claude Code</a></li>
+<li><a href="/docs/agents">pi, omp and other agents</a></li>
+</ul>
+<h4>Reference</h4>
+<ul>
+<li><a href="/docs/cli">CLI reference</a></li>
+<li><a href="/docs/how-it-works" aria-current="page">How it works</a></li>
+<li><a href="/docs/security">Security model</a></li>
+<li><a href="/docs/faq">FAQ</a></li>
+</ul>
+    </nav>
+  </details>
+  <nav class="side wide" aria-label="Docs">
+<h4>Guides</h4>
+<ul>
+<li><a href="/docs/migrate-from-dotenv">Move a project off .env</a></li>
+<li><a href="/docs/ci-and-docker">CI and Docker</a></li>
+<li><a href="/docs/rotate-a-key">Rotate a key that leaked</a></li>
+<li><a href="/docs/troubleshooting">Troubleshooting</a></li>
+</ul>
+<h4>Where secrets live</h4>
+<ul>
+<li><a href="/docs/local-vault">The local vault</a></li>
+<li><a href="/docs/vaultwarden">Vaultwarden or Bitwarden</a></li>
+<li><a href="/docs/team-secret-managers">Team secret managers</a></li>
+<li><a href="/docs/project-scope">Project scope</a></li>
+</ul>
+<h4>Agents</h4>
+<ul>
+<li><a href="/docs/claude-code">Claude Code</a></li>
+<li><a href="/docs/agents">pi, omp and other agents</a></li>
+</ul>
+<h4>Reference</h4>
+<ul>
+<li><a href="/docs/cli">CLI reference</a></li>
+<li><a href="/docs/how-it-works" aria-current="page">How it works</a></li>
+<li><a href="/docs/security">Security model</a></li>
+<li><a href="/docs/faq">FAQ</a></li>
+</ul>
+  </nav>
+  <main>
+<article>
+<h1>How it works</h1>
+<pre><code>              ┌──────────────────────────── your machine ─────────────────────────────┐
+              │  vault.json ◄── key: keychain · Secret Service · DPAPI · passphrase   │
+              │      │                                                                │
+              │      ▼                                                                │
+ Vaultwarden ◄┼─bw─ keyshroud ── resolves keyshroud:// and bw:// refs ──► command's env   │
+ (optional)   │      ▲                                                   │            │
+              │      └──── redactor ◄──── stdout / stderr ◄──────────────┘            │
+              │                │ &lt;redacted:NAME&gt;                                      │
+              └────────────────┼──────────────────────────────────────────────────────┘
+                               ▼
+                  agent transcript / LLM provider</code></pre>
+<ol>
+<li><strong>Wiring.</strong> A secret is wired by <em>name</em>: <code>GH_TOKEN → keyshroud://GitHub token</code> (or
+<code>bw://GitHub CLI token</code>). Wiring lives in <code>~/.config/keyshroud/env.json</code> and in project <code>.env.refs</code>
+files. When pi or omp is installed (<code>~/.pi/agent</code>, <code>~/.omp/agent</code> exists), a name is also
+written to its <code>auth.json</code>, where pi/omp run the <code>!keyshroud get &#39;…&#39;</code> entries on their own
+(<code>--target pi|omp|both</code> writes there in any case). keyshroud writes only names and references to
+these files, so what it wrote is safe to read. A key that you or pi put into <code>auth.json</code> as plain
+text is still there: keyshroud masks it in output like a vault value, but cannot take it out of
+the file. Every reference in these files is masked as well, whatever a command injects of it
+(a <code>bw://</code> one when the command has the bw vault open already: keyshroud does not unlock bw,
+renew its session or ask for one for a value nobody asked for). An entry that cannot be read
+is left out by itself.</li>
+<li><strong>Unlock.</strong> The local vault&#39;s key comes from the OS keychain, or from a passphrase session that
+ends after 30 minutes. Vaultwarden: keyshroud asks for the master password (or reads one you
+stored in the OS keychain); the session token is cached in <code>~/.config/keyshroud/session</code>
+(<code>0600</code>) and locked again after 30 minutes.</li>
+<li><strong>Resolve.</strong> <code>keyshroud://</code> references are read from the vault file; <code>bw://</code> references resolve
+from one <code>bw list items</code> snapshot held in memory for <code>KEYSHROUD_CACHE_TTL_MS</code> (default 1 h).</li>
+<li><strong>Inject.</strong> Values go into the child process environment — never into argv
+or tool results (<code>inject</code> writes <code>0600</code> files only when you ask it to).</li>
+<li><strong>Redact.</strong> In-process (<code>run</code>, MCP, pi/omp) output passes through a redactor
+that knows every wired value, the session token or vault key, and every value in
+the vault. Out-of-process Claude Code hooks use a keyed-HMAC
+fingerprint index (<code>redact-index.json</code>, <code>0600</code>) of wired values, values you
+printed with <code>get</code>, <code>inject</code> or <code>api-key</code>, and the session token or key only,
+so they never hold plaintext or fingerprint the rest of your vault.</li>
+</ol>
+</article>
+<p class="edit"><a href="https://github.com/dinhkarate/keyshroud/blob/main/docs/how-it-works.md">Edit this page on GitHub</a> · <a href="/docs/how-it-works.md">Markdown</a></p>
+<div class="steps"><a class="prev" rel="prev" href="/docs/cli"><span>Previous</span>CLI reference</a><a class="next" rel="next" href="/docs/security"><span>Next</span>Security model</a></div>
+  </main>
+</div>
+<footer>
+  <div class="wrap">
+    <p>keyshroud · MIT · <a href="https://github.com/dinhkarate/keyshroud">GitHub</a> · <a href="https://www.npmjs.com/package/keyshroud">npm</a> · <a href="/llms.txt">llms.txt</a> · Not affiliated with Anthropic, Bitwarden, Inc. or any vendor named here.</p>
+  </div>
+</footer>
+<script src="/docs/docs.js" defer></script>
+</body>
+</html>

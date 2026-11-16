@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The local vault · keyshroud docs</title>
+<meta name="description" content="Key modes, Touch ID, sessions, backup and restore.">
+<meta property="og:title" content="The local vault · keyshroud docs">
+<meta property="og:description" content="Key modes, Touch ID, sessions, backup and restore.">
+<meta property="og:url" content="https://keyshroud.dev/docs/local-vault">
+<meta property="og:image" content="https://keyshroud.dev/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="canonical" href="https://keyshroud.dev/docs/local-vault">
+<link rel="alternate" type="text/markdown" href="/docs/local-vault.md">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<meta name="color-scheme" content="light dark">
+<link rel="stylesheet" href="/docs/docs.css">
+</head>
+<body>
+<header class="bar">
+  <div class="wrap">
+    <a class="brand" href="/">
+      <picture>
+        <source srcset="/logo-dark.svg" media="(prefers-color-scheme: dark)">
+        <img src="/logo.svg" alt="keyshroud">
+      </picture>
+    </a>
+    <nav>
+      <a href="/docs/" aria-current="true">Docs</a>
+      <a href="/#quickstart">Quickstart</a>
+      <a class="opt" href="/#demo">Demo</a>
+      <a class="opt" href="/#compare">Compare</a>
+      <a class="gh" href="https://github.com/dinhkarate/keyshroud">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="wrap page">
+  <details class="menu">
+    <summary>All docs</summary>
+    <nav class="side" aria-label="Docs, short screen">
+<h4>Guides</h4>
+<ul>
+<li><a href="/docs/migrate-from-dotenv">Move a project off .env</a></li>
+<li><a href="/docs/ci-and-docker">CI and Docker</a></li>
+<li><a href="/docs/rotate-a-key">Rotate a key that leaked</a></li>
+<li><a href="/docs/troubleshooting">Troubleshooting</a></li>
+</ul>
+<h4>Where secrets live</h4>
+<ul>
+<li><a href="/docs/local-vault" aria-current="page">The local vault</a></li>
+<li><a href="/docs/vaultwarden">Vaultwarden or Bitwarden</a></li>
+<li><a href="/docs/team-secret-managers">Team secret managers</a></li>
+<li><a href="/docs/project-scope">Project scope</a></li>
+</ul>
+<h4>Agents</h4>
+<ul>
+<li><a href="/docs/claude-code">Claude Code</a></li>
+<li><a href="/docs/agents">pi, omp and other agents</a></li>
+</ul>
+<h4>Reference</h4>
+<ul>
+<li><a href="/docs/cli">CLI reference</a></li>
+<li><a href="/docs/how-it-works">How it works</a></li>
+<li><a href="/docs/security">Security model</a></li>
+<li><a href="/docs/faq">FAQ</a></li>
+</ul>
+    </nav>
+  </details>
+  <nav class="side wide" aria-label="Docs">
+<h4>Guides</h4>
+<ul>
+<li><a href="/docs/migrate-from-dotenv">Move a project off .env</a></li>
+<li><a href="/docs/ci-and-docker">CI and Docker</a></li>
+<li><a href="/docs/rotate-a-key">Rotate a key that leaked</a></li>
+<li><a href="/docs/troubleshooting">Troubleshooting</a></li>
+</ul>
+<h4>Where secrets live</h4>
+<ul>
+<li><a href="/docs/local-vault" aria-current="page">The local vault</a></li>
+<li><a href="/docs/vaultwarden">Vaultwarden or Bitwarden</a></li>
+<li><a href="/docs/team-secret-managers">Team secret managers</a></li>
+<li><a href="/docs/project-scope">Project scope</a></li>
+</ul>
+<h4>Agents</h4>
+<ul>
+<li><a href="/docs/claude-code">Claude Code</a></li>
+<li><a href="/docs/agents">pi, omp and other agents</a></li>
+</ul>
+<h4>Reference</h4>
+<ul>
+<li><a href="/docs/cli">CLI reference</a></li>
+<li><a href="/docs/how-it-works">How it works</a></li>
+<li><a href="/docs/security">Security model</a></li>
+<li><a href="/docs/faq">FAQ</a></li>
+</ul>
+  </nav>
+  <main>
+<article>
+<h1>The local vault</h1>
+<p><code>~/.config/keyshroud/vault.json</code> holds every item, encrypted with AES-256-GCM under one random
+256-bit key. Item names are encrypted too; the file is <code>0600</code>. Where the key lives depends on the machine:</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Machine</th>
+<th>Key</th>
+<th>Unlocking</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>macOS</td>
+<td>login keychain, entry <code>keyshroud-vault-&lt;id&gt;</code></td>
+<td>none</td>
+</tr>
+<tr>
+<td>macOS with <code>KEYSHROUD_VAULT_KEY=secure-enclave</code> (or <code>keyshroud rekey --to secure-enclave</code>)</td>
+<td>wrapped to a key in the Mac&#39;s Secure Enclave</td>
+<td>Touch ID (or the Mac&#39;s password) when a command needs a secret; a session ends after 30 minutes</td>
+</tr>
+<tr>
+<td>Linux with a desktop keyring and systemd</td>
+<td>Secret Service (<code>secret-tool</code>; found with <code>busctl</code>)</td>
+<td>none</td>
+</tr>
+<tr>
+<td>Windows</td>
+<td>DPAPI, bound to your Windows account</td>
+<td>none</td>
+</tr>
+<tr>
+<td>Docker, servers, SSH with a locked keyring, Linux without systemd</td>
+<td>derived from a passphrase (scrypt)</td>
+<td><code>keyshroud unlock</code>; a session ends after 30 minutes</td>
+</tr>
+</tbody></table>
+</div>
+<p>The key mode is chosen once, when the vault is created. To be asked for a passphrase on any machine,
+create it with <code>KEYSHROUD_VAULT_KEY=passphrase keyshroud unlock</code> in a terminal (typed twice, at least
+12 characters). When a session has ended, a command that needs a secret asks again: a masked prompt in
+a terminal, a dialog on the desktop, and over SSH it tells you to run <code>keyshroud unlock</code>.</p>
+<p>A Touch ID vault needs the Xcode Command Line Tools once (<code>xcode-select --install</code>): keyshroud builds
+a small helper from <code>src/touchid.swift</code> on first use, which takes a few seconds. The sheet appears for
+any caller that may ask (the CLI, <code>secrets_run</code>, Claude Code&#39;s apiKeyHelper); for this vault hooks,
+<code>status</code> and <code>doctor</code> never ask (with Vaultwarden they renew a session from a stored master
+password, which asks if you set that keychain entry to ask, and after bw has logged itself out they
+log in again once you approve a Touch ID sheet), and over SSH it tells you to run <code>keyshroud unlock</code> at the Mac. <code>keyshroud rekey</code>
+moves a vault between key types (a new key and vault id each time); run <code>rekey --to passphrase</code> before
+moving to another Mac.</p>
+<p>Nothing can recover a lost key or a forgotten passphrase, and the vault belongs to one machine:
+<code>vault.json</code> copied elsewhere does not open without its key, which stays in this machine&#39;s key store.</p>
+<h2 id="backup-and-restore"><a class="anchor" href="#backup-and-restore">Backup and restore</a></h2>
+<pre data-lang="bash"><code>keyshroud backup                           # asks for a new passphrase, writes ./keyshroud-backup-&lt;date&gt;.json
+keyshroud restore keyshroud-backup-….json  # what it would add; --yes does it</code></pre>
+<p><code>backup</code> (in a terminal) copies every item of the local vault into one file in the vault&#39;s own format,
+sealed under a passphrase you choose now (at least 12 characters, typed twice), not under this
+machine&#39;s key: it opens anywhere. It first proves the vault&#39;s current key the way <code>rekey</code> does (a
+passphrase vault asks for its passphrase, a Touch ID vault for Touch ID; an open session is not enough),
+never writes over a file that is there (<code>--out FILE</code> names another), and the file is <code>0600</code>. Keep it
+somewhere that is not this machine. Nothing can recover its passphrase.</p>
+<p><code>restore FILE</code> (in a terminal) asks for that passphrase and prints a plan of names: items the local
+vault lacks are added, items it holds with the same value are left alone, and an item that has another
+value here is kept as it is unless you add <code>--replace</code>. Nothing changes until <code>--yes</code>. The variable an
+item was stored for (<code>add --env NAME</code>) is wired to it again when nothing is wired under that name, so
+on a new machine <code>keyshroud restore FILE --yes</code> is the whole move; the vault it creates there gets
+that machine&#39;s own key. Items in Vaultwarden, the servers of the sources and their sign-ins are not
+part of a backup. For the same secrets on several machines at once, use Vaultwarden or Bitwarden.</p>
+</article>
+<p class="edit"><a href="https://github.com/dinhkarate/keyshroud/blob/main/docs/local-vault.md">Edit this page on GitHub</a> · <a href="/docs/local-vault.md">Markdown</a></p>
+<div class="steps"><a class="prev" rel="prev" href="/docs/troubleshooting"><span>Previous</span>Troubleshooting</a><a class="next" rel="next" href="/docs/vaultwarden"><span>Next</span>Vaultwarden or Bitwarden</a></div>
+  </main>
+</div>
+<footer>
+  <div class="wrap">
+    <p>keyshroud · MIT · <a href="https://github.com/dinhkarate/keyshroud">GitHub</a> · <a href="https://www.npmjs.com/package/keyshroud">npm</a> · <a href="/llms.txt">llms.txt</a> · Not affiliated with Anthropic, Bitwarden, Inc. or any vendor named here.</p>
+  </div>
+</footer>
+<script src="/docs/docs.js" defer></script>
+</body>
+</html>

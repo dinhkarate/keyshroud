@@ -5,6 +5,15 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+### Added
+- **Four guides** in `docs/`: move a project off `.env`, CI and Docker (a passphrase vault in a
+  GitHub Actions job, a Docker build with a BuildKit secret, a container), rotate a key that
+  leaked, and troubleshooting. The commands in them were run against made-up values first.
+- **The docs are on the site**: <https://keyshroud.dev/docs/>, built from the same Markdown by
+  `npm run site` (`scripts/build-site-docs.mjs`). Each page also has a Markdown copy at
+  `/docs/<page>.md`, which `llms.txt` links to. The build stops on a link to a page or heading
+  that does not exist, and the tests fail when `site/docs/` is stale.
+
 ### Changed
 - The site's Claude Code, MCP and terminal recordings and the README's demo are new takes with
   keyshroud 0.12.1. The demo setup (`assets/demo/agent-shell.sh`) takes `DEMO_ANTHROPIC_BASE_URL`

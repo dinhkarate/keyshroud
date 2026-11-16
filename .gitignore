@@ -23,3 +23,7 @@ docs/*
 !docs/how-it-works.md
 !docs/security.md
 !docs/faq.md
+!docs/migrate-from-dotenv.md
+!docs/ci-and-docker.md
+!docs/rotate-a-key.md
+!docs/troubleshooting.md

@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Documentation · keyshroud docs</title>
+<meta name="description" content="Guides and reference for keyshroud: the local vault, Vaultwarden, team secret managers, Claude Code and other agents, the CLI and the security model.">
+<meta property="og:title" content="Documentation · keyshroud docs">
+<meta property="og:description" content="Guides and reference for keyshroud: the local vault, Vaultwarden, team secret managers, Claude Code and other agents, the CLI and the security model.">
+<meta property="og:url" content="https://keyshroud.dev/docs/">
+<meta property="og:image" content="https://keyshroud.dev/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="canonical" href="https://keyshroud.dev/docs/">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<meta name="color-scheme" content="light dark">
+<link rel="stylesheet" href="/docs/docs.css">
+</head>
+<body>
+<header class="bar">
+  <div class="wrap">
+    <a class="brand" href="/">
+      <picture>
+        <source srcset="/logo-dark.svg" media="(prefers-color-scheme: dark)">
+        <img src="/logo.svg" alt="keyshroud">
+      </picture>
+    </a>
+    <nav>
+      <a href="/docs/" aria-current="page">Docs</a>
+      <a href="/#quickstart">Quickstart</a>
+      <a class="opt" href="/#demo">Demo</a>
+      <a class="opt" href="/#compare">Compare</a>
+      <a class="gh" href="https://github.com/dinhkarate/keyshroud">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="wrap page">
+  <details class="menu">
+    <summary>All docs</summary>
+    <nav class="side" aria-label="Docs, short screen">
+<h4>Guides</h4>
+<ul>
+<li><a href="/docs/migrate-from-dotenv">Move a project off .env</a></li>
+<li><a href="/docs/ci-and-docker">CI and Docker</a></li>
+<li><a href="/docs/rotate-a-key">Rotate a key that leaked</a></li>
+<li><a href="/docs/troubleshooting">Troubleshooting</a></li>
+</ul>
+<h4>Where secrets live</h4>
+<ul>
+<li><a href="/docs/local-vault">The local vault</a></li>
+<li><a href="/docs/vaultwarden">Vaultwarden or Bitwarden</a></li>
+<li><a href="/docs/team-secret-managers">Team secret managers</a></li>
+<li><a href="/docs/project-scope">Project scope</a></li>
+</ul>
+<h4>Agents</h4>
+<ul>
+<li><a href="/docs/claude-code">Claude Code</a></li>
+<li><a href="/docs/agents">pi, omp and other agents</a></li>
+</ul>
+<h4>Reference</h4>
+<ul>
+<li><a href="/docs/cli">CLI reference</a></li>
+<li><a href="/docs/how-it-works">How it works</a></li>
+<li><a href="/docs/security">Security model</a></li>
+<li><a href="/docs/faq">FAQ</a></li>
+</ul>
+    </nav>
+  </details>
+  <nav class="side wide" aria-label="Docs">
+<h4>Guides</h4>
+<ul>
+<li><a href="/docs/migrate-from-dotenv">Move a project off .env</a></li>
+<li><a href="/docs/ci-and-docker">CI and Docker</a></li>
+<li><a href="/docs/rotate-a-key">Rotate a key that leaked</a></li>
+<li><a href="/docs/troubleshooting">Troubleshooting</a></li>
+</ul>
+<h4>Where secrets live</h4>
+<ul>
+<li><a href="/docs/local-vault">The local vault</a></li>
+<li><a href="/docs/vaultwarden">Vaultwarden or Bitwarden</a></li>
+<li><a href="/docs/team-secret-managers">Team secret managers</a></li>
+<li><a href="/docs/project-scope">Project scope</a></li>
+</ul>
+<h4>Agents</h4>
+<ul>
+<li><a href="/docs/claude-code">Claude Code</a></li>
+<li><a href="/docs/agents">pi, omp and other agents</a></li>
+</ul>
+<h4>Reference</h4>
+<ul>
+<li><a href="/docs/cli">CLI reference</a></li>
+<li><a href="/docs/how-it-works">How it works</a></li>
+<li><a href="/docs/security">Security model</a></li>
+<li><a href="/docs/faq">FAQ</a></li>
+</ul>
+  </nav>
+  <main>
+<article>
+<h1>Documentation</h1>
+<p>New here? The <a href="/#quickstart">quickstart</a> takes about a minute: <code>npm install -g keyshroud</code>, add one secret, run a command through <code>keyshroud run</code>. To have an agent do the setup, give it <a href="/install.md">the agent setup guide</a>.</p>
+<h2>Guides</h2>
+<div class="cards">
+<a class="card" href="/docs/migrate-from-dotenv"><b>Move a project off .env</b><span>Import the values into the vault, commit .env.refs, delete the plaintext.</span></a>
+<a class="card" href="/docs/ci-and-docker"><b>CI and Docker</b><span>A passphrase vault in GitHub Actions, in a Docker build and in a container.</span></a>
+<a class="card" href="/docs/rotate-a-key"><b>Rotate a key that leaked</b><span>Find the copies, store the new value, and what picks it up.</span></a>
+<a class="card" href="/docs/troubleshooting"><b>Troubleshooting</b><span>Unresolved names, a locked vault, a value that printed unmasked.</span></a>
+</div>
+<h2>Where secrets live</h2>
+<div class="cards">
+<a class="card" href="/docs/local-vault"><b>The local vault</b><span>Key modes, Touch ID, sessions, backup and restore.</span></a>
+<a class="card" href="/docs/vaultwarden"><b>Vaultwarden or Bitwarden</b><span>Sync between machines, sessions, a separate agent account.</span></a>
+<a class="card" href="/docs/team-secret-managers"><b>Team secret managers</b><span>HashiCorp Vault, OpenBao, Infisical, 1Password, AWS, Google Cloud, Azure.</span></a>
+<a class="card" href="/docs/project-scope"><b>Project scope</b><span>.keyshroud.json: which names a project may use.</span></a>
+</div>
+<h2>Agents</h2>
+<div class="cards">
+<a class="card" href="/docs/claude-code"><b>Claude Code</b><span>The plugin's hooks, claude-setup, and the guard for failed commands.</span></a>
+<a class="card" href="/docs/agents"><b>pi, omp and other agents</b><span>The pi/omp extension, the skill, the MCP server.</span></a>
+</div>
+<h2>Reference</h2>
+<div class="cards">
+<a class="card" href="/docs/cli"><b>CLI reference</b><span>Every command, reference form, exit code and environment variable.</span></a>
+<a class="card" href="/docs/how-it-works"><b>How it works</b><span>Wiring, unlocking, resolving, injecting, redacting.</span></a>
+<a class="card" href="/docs/security"><b>Security model</b><span>The guarantees we test for, and the known limits.</span></a>
+<a class="card" href="/docs/faq"><b>FAQ</b><span>Short answers: servers, CI, Windows, upgrading.</span></a>
+</div>
+</article>
+  </main>
+</div>
+<footer>
+  <div class="wrap">
+    <p>keyshroud · MIT · <a href="https://github.com/dinhkarate/keyshroud">GitHub</a> · <a href="https://www.npmjs.com/package/keyshroud">npm</a> · <a href="/llms.txt">llms.txt</a> · Not affiliated with Anthropic, Bitwarden, Inc. or any vendor named here.</p>
+  </div>
+</footer>
+<script src="/docs/docs.js" defer></script>
+</body>
+</html>

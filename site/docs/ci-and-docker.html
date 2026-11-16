@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CI and Docker · keyshroud docs</title>
+<meta name="description" content="A passphrase vault in GitHub Actions, in a Docker build and in a container.">
+<meta property="og:title" content="CI and Docker · keyshroud docs">
+<meta property="og:description" content="A passphrase vault in GitHub Actions, in a Docker build and in a container.">
+<meta property="og:url" content="https://keyshroud.dev/docs/ci-and-docker">
+<meta property="og:image" content="https://keyshroud.dev/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="canonical" href="https://keyshroud.dev/docs/ci-and-docker">
+<link rel="alternate" type="text/markdown" href="/docs/ci-and-docker.md">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<meta name="color-scheme" content="light dark">
+<link rel="stylesheet" href="/docs/docs.css">
+</head>
+<body>
+<header class="bar">
+  <div class="wrap">
+    <a class="brand" href="/">
+      <picture>
+        <source srcset="/logo-dark.svg" media="(prefers-color-scheme: dark)">
+        <img src="/logo.svg" alt="keyshroud">
+      </picture>
+    </a>
+    <nav>
+      <a href="/docs/" aria-current="true">Docs</a>
+      <a href="/#quickstart">Quickstart</a>
+      <a class="opt" href="/#demo">Demo</a>
+      <a class="opt" href="/#compare">Compare</a>
+      <a class="gh" href="https://github.com/dinhkarate/keyshroud">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="wrap page">
+  <details class="menu">
+    <summary>All docs</summary>
+    <nav class="side" aria-label="Docs, short screen">
+<h4>Guides</h4>
+<ul>
+<li><a href="/docs/migrate-from-dotenv">Move a project off .env</a></li>
+<li><a href="/docs/ci-and-docker" aria-current="page">CI and Docker</a></li>
+<li><a href="/docs/rotate-a-key">Rotate a key that leaked</a></li>
+<li><a href="/docs/troubleshooting">Troubleshooting</a></li>
+</ul>
+<h4>Where secrets live</h4>
+<ul>
+<li><a href="/docs/local-vault">The local vault</a></li>
+<li><a href="/docs/vaultwarden">Vaultwarden or Bitwarden</a></li>
+<li><a href="/docs/team-secret-managers">Team secret managers</a></li>
+<li><a href="/docs/project-scope">Project scope</a></li>
+</ul>
+<h4>Agents</h4>
+<ul>
+<li><a href="/docs/claude-code">Claude Code</a></li>
+<li><a href="/docs/agents">pi, omp and other agents</a></li>
+</ul>
+<h4>Reference</h4>
+<ul>
+<li><a href="/docs/cli">CLI reference</a></li>
+<li><a href="/docs/how-it-works">How it works</a></li>
+<li><a href="/docs/security">Security model</a></li>
+<li><a href="/docs/faq">FAQ</a></li>
+</ul>
+    </nav>
+  </details>
+  <nav class="side wide" aria-label="Docs">
+<h4>Guides</h4>
+<ul>
+<li><a href="/docs/migrate-from-dotenv">Move a project off .env</a></li>
+<li><a href="/docs/ci-and-docker" aria-current="page">CI and Docker</a></li>
+<li><a href="/docs/rotate-a-key">Rotate a key that leaked</a></li>
+<li><a href="/docs/troubleshooting">Troubleshooting</a></li>
+</ul>
+<h4>Where secrets live</h4>
+<ul>
+<li><a href="/docs/local-vault">The local vault</a></li>
+<li><a href="/docs/vaultwarden">Vaultwarden or Bitwarden</a></li>
+<li><a href="/docs/team-secret-managers">Team secret managers</a></li>
+<li><a href="/docs/project-scope">Project scope</a></li>
+</ul>
+<h4>Agents</h4>
+<ul>
+<li><a href="/docs/claude-code">Claude Code</a></li>
+<li><a href="/docs/agents">pi, omp and other agents</a></li>
+</ul>
+<h4>Reference</h4>
+<ul>
+<li><a href="/docs/cli">CLI reference</a></li>
+<li><a href="/docs/how-it-works">How it works</a></li>
+<li><a href="/docs/security">Security model</a></li>
+<li><a href="/docs/faq">FAQ</a></li>
+</ul>
+  </nav>
+  <main>
+<article>
+<h1>CI and Docker</h1>
+<p>A CI job or a Docker build has no keychain and nobody to type a passphrase. The pattern is the same
+everywhere: an encrypted vault file travels with the job, and the CI&#39;s own secret store holds one
+thing, the passphrase that opens it. The job&#39;s log shows <code>&lt;redacted:NAME&gt;</code> wherever a value is printed.</p>
+<p>If your CI already injects secrets as environment variables and no agent runs there, you may not need
+keyshroud in CI at all. This guide is for when you want one <code>.env.refs</code> to work on laptops and in CI
+alike, or masked logs.</p>
+<h2 id="1-create-a-vault-for-ci"><a class="anchor" href="#1-create-a-vault-for-ci">1. Create a vault for CI</a></h2>
+<p>On your machine, in a terminal. A directory of its own keeps it apart from your personal vault:</p>
+<pre data-lang="bash"><code>export KEYSHROUD_CONFIG_DIR=~/.config/keyshroud-ci
+KEYSHROUD_VAULT_KEY=passphrase keyshroud unlock      # choose a passphrase: 12+ characters, typed twice
+keyshroud add --env DEPLOY_TOKEN --item &quot;ci DEPLOY_TOKEN&quot;
+keyshroud add --env NPM_TOKEN --item &quot;ci NPM_TOKEN&quot;
+unset KEYSHROUD_CONFIG_DIR</code></pre>
+<p>Then put two things in place:</p>
+<ul>
+<li><strong><code>vault.json</code></strong> from that directory goes into the repository (or an artifact). It is encrypted
+with AES-256-GCM under a key derived from the passphrase, item names included. Copy only that
+file, none of the others beside it:
+<code>mkdir -p ci &amp;&amp; cp ~/.config/keyshroud-ci/vault.json ci/vault.json</code></li>
+<li><strong>The passphrase</strong> goes into the CI&#39;s secret store as <code>KEYSHROUD_PASSPHRASE</code>.</li>
+</ul>
+<p>And a <code>.env.refs</code> in the repository that names the items:</p>
+<pre data-lang="dotenv"><code>DEPLOY_TOKEN=keyshroud://ci DEPLOY_TOKEN
+NPM_TOKEN=keyshroud://ci NPM_TOKEN</code></pre>
+<p>To add or rotate a secret later, do it in that directory again and commit the new <code>vault.json</code>.</p>
+<h2 id="2-in-the-job"><a class="anchor" href="#2-in-the-job">2. In the job</a></h2>
+<pre data-lang="bash"><code>npm i -g keyshroud
+mkdir -p ~/.config/keyshroud &amp;&amp; cp ci/vault.json ~/.config/keyshroud/
+printf '%s' &quot;$KEYSHROUD_PASSPHRASE&quot; | keyshroud unlock --stdin   # a session of 30 minutes
+keyshroud run --env-file .env.refs -- npm run deploy</code></pre>
+<p><code>unlock --stdin</code> only opens an existing passphrase vault; a new passphrase is always chosen in a
+terminal. <code>keyshroud run</code> does not hand <code>KEYSHROUD_PASSPHRASE</code> on to the command it starts, and masks
+its value in the output like any other secret.</p>
+<h3 id="github-actions"><a class="anchor" href="#github-actions">GitHub Actions</a></h3>
+<pre data-lang="yaml"><code>jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with: { node-version: 22 }
+      - run: npm i -g keyshroud
+      - name: Open the vault
+        env:
+          KEYSHROUD_PASSPHRASE: ${{ secrets.KEYSHROUD_PASSPHRASE }}
+        run: |
+          mkdir -p ~/.config/keyshroud &amp;&amp; cp ci/vault.json ~/.config/keyshroud/
+          printf '%s' &quot;$KEYSHROUD_PASSPHRASE&quot; | keyshroud unlock --stdin
+      - run: keyshroud run --env-file .env.refs -- npm run deploy</code></pre>
+<p>Later steps in the same job use the open session; they do not need the passphrase again. A job that
+runs longer than 30 minutes before it needs a secret unlocks again at that point, or sets
+<code>KEYSHROUD_SESSION_TTL_MS</code> higher.</p>
+<h2 id="docker-builds"><a class="anchor" href="#docker-builds">Docker builds</a></h2>
+<p>Pass the passphrase as a BuildKit secret, so it is in no layer and no <code>docker history</code>, and open,
+use and lock the vault inside one <code>RUN</code>:</p>
+<pre data-lang="dockerfile"><code># syntax=docker/dockerfile:1
+FROM node:22-slim
+RUN npm i -g keyshroud
+WORKDIR /app
+COPY . .
+RUN --mount=type=secret,id=keyshroud_passphrase \
+    mkdir -p ~/.config/keyshroud &amp;&amp; cp ci/vault.json ~/.config/keyshroud/ &amp;&amp; \
+    keyshroud unlock --stdin &lt; /run/secrets/keyshroud_passphrase &amp;&amp; \
+    keyshroud run --env-file .env.refs -- npm run build &amp;&amp; \
+    keyshroud lock</code></pre>
+<pre data-lang="bash"><code>docker build --secret id=keyshroud_passphrase,env=KEYSHROUD_PASSPHRASE .</code></pre>
+<p><code>keyshroud lock</code> at the end matters: an open session is a file beside the vault, and without the lock
+it would be saved in that layer. A value your build writes into its own output (a bundled API key, a
+generated config) is in the image regardless: keyshroud masks what is printed, not what is built.</p>
+<h2 id="a-container-at-run-time"><a class="anchor" href="#a-container-at-run-time">A container at run time</a></h2>
+<p>A container is a new machine: it has no keychain, so the vault there is a passphrase vault. Mount the
+vault file, pass the passphrase the way your platform passes secrets, and start the service through
+keyshroud:</p>
+<pre data-lang="bash"><code>printf '%s' &quot;$KEYSHROUD_PASSPHRASE&quot; | keyshroud unlock --stdin &amp;&amp; exec keyshroud run --env-file .env.refs -- node server.js</code></pre>
+<h2 id="a-server-you-reach-over-ssh"><a class="anchor" href="#a-server-you-reach-over-ssh">A server you reach over SSH</a></h2>
+<p>Create a passphrase vault there and run <code>keyshroud unlock --unattended</code> once in a terminal: that
+session has no time limit, until <code>keyshroud lock</code>.</p>
+<h2 id="limits"><a class="anchor" href="#limits">Limits</a></h2>
+<ul>
+<li>Anyone who has both <code>vault.json</code> and the passphrase has every secret in it. Keep a CI vault small:
+only what the jobs need, not a copy of your own vault.</li>
+<li>A fork&#39;s pull request does not get your CI secrets, so it cannot open the vault. That is what you want.</li>
+<li>These steps are checked on Linux (a GitHub-style job and a real <code>docker build</code>). They are not
+tested on Windows runners.</li>
+</ul>
+</article>
+<p class="edit"><a href="https://github.com/dinhkarate/keyshroud/blob/main/docs/ci-and-docker.md">Edit this page on GitHub</a> · <a href="/docs/ci-and-docker.md">Markdown</a></p>
+<div class="steps"><a class="prev" rel="prev" href="/docs/migrate-from-dotenv"><span>Previous</span>Move a project off .env</a><a class="next" rel="next" href="/docs/rotate-a-key"><span>Next</span>Rotate a key that leaked</a></div>
+  </main>
+  <nav class="toc" aria-label="On this page">
+<h4>On this page</h4>
+<ul>
+<li><a href="#1-create-a-vault-for-ci">1. Create a vault for CI</a></li>
+<li><a href="#2-in-the-job">2. In the job</a></li>
+<li><a href="#docker-builds">Docker builds</a></li>
+<li><a href="#a-container-at-run-time">A container at run time</a></li>
+<li><a href="#a-server-you-reach-over-ssh">A server you reach over SSH</a></li>
+<li><a href="#limits">Limits</a></li>
+</ul>
+  </nav>
+</div>
+<footer>
+  <div class="wrap">
+    <p>keyshroud · MIT · <a href="https://github.com/dinhkarate/keyshroud">GitHub</a> · <a href="https://www.npmjs.com/package/keyshroud">npm</a> · <a href="/llms.txt">llms.txt</a> · Not affiliated with Anthropic, Bitwarden, Inc. or any vendor named here.</p>
+  </div>
+</footer>
+<script src="/docs/docs.js" defer></script>
+</body>
+</html>

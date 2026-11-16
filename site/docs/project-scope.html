@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Project scope · keyshroud docs</title>
+<meta name="description" content=".keyshroud.json: which names a project may use.">
+<meta property="og:title" content="Project scope · keyshroud docs">
+<meta property="og:description" content=".keyshroud.json: which names a project may use.">
+<meta property="og:url" content="https://keyshroud.dev/docs/project-scope">
+<meta property="og:image" content="https://keyshroud.dev/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="canonical" href="https://keyshroud.dev/docs/project-scope">
+<link rel="alternate" type="text/markdown" href="/docs/project-scope.md">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<meta name="color-scheme" content="light dark">
+<link rel="stylesheet" href="/docs/docs.css">
+</head>
+<body>
+<header class="bar">
+  <div class="wrap">
+    <a class="brand" href="/">
+      <picture>
+        <source srcset="/logo-dark.svg" media="(prefers-color-scheme: dark)">
+        <img src="/logo.svg" alt="keyshroud">
+      </picture>
+    </a>
+    <nav>
+      <a href="/docs/" aria-current="true">Docs</a>
+      <a href="/#quickstart">Quickstart</a>
+      <a class="opt" href="/#demo">Demo</a>
+      <a class="opt" href="/#compare">Compare</a>
+      <a class="gh" href="https://github.com/dinhkarate/keyshroud">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="wrap page">
+  <details class="menu">
+    <summary>All docs</summary>
+    <nav class="side" aria-label="Docs, short screen">
+<h4>Guides</h4>
+<ul>
+<li><a href="/docs/migrate-from-dotenv">Move a project off .env</a></li>
+<li><a href="/docs/ci-and-docker">CI and Docker</a></li>
+<li><a href="/docs/rotate-a-key">Rotate a key that leaked</a></li>
+<li><a href="/docs/troubleshooting">Troubleshooting</a></li>
+</ul>
+<h4>Where secrets live</h4>
+<ul>
+<li><a href="/docs/local-vault">The local vault</a></li>
+<li><a href="/docs/vaultwarden">Vaultwarden or Bitwarden</a></li>
+<li><a href="/docs/team-secret-managers">Team secret managers</a></li>
+<li><a href="/docs/project-scope" aria-current="page">Project scope</a></li>
+</ul>
+<h4>Agents</h4>
+<ul>
+<li><a href="/docs/claude-code">Claude Code</a></li>
+<li><a href="/docs/agents">pi, omp and other agents</a></li>
+</ul>
+<h4>Reference</h4>
+<ul>
+<li><a href="/docs/cli">CLI reference</a></li>
+<li><a href="/docs/how-it-works">How it works</a></li>
+<li><a href="/docs/security">Security model</a></li>
+<li><a href="/docs/faq">FAQ</a></li>
+</ul>
+    </nav>
+  </details>
+  <nav class="side wide" aria-label="Docs">
+<h4>Guides</h4>
+<ul>
+<li><a href="/docs/migrate-from-dotenv">Move a project off .env</a></li>
+<li><a href="/docs/ci-and-docker">CI and Docker</a></li>
+<li><a href="/docs/rotate-a-key">Rotate a key that leaked</a></li>
+<li><a href="/docs/troubleshooting">Troubleshooting</a></li>
+</ul>
+<h4>Where secrets live</h4>
+<ul>
+<li><a href="/docs/local-vault">The local vault</a></li>
+<li><a href="/docs/vaultwarden">Vaultwarden or Bitwarden</a></li>
+<li><a href="/docs/team-secret-managers">Team secret managers</a></li>
+<li><a href="/docs/project-scope" aria-current="page">Project scope</a></li>
+</ul>
+<h4>Agents</h4>
+<ul>
+<li><a href="/docs/claude-code">Claude Code</a></li>
+<li><a href="/docs/agents">pi, omp and other agents</a></li>
+</ul>
+<h4>Reference</h4>
+<ul>
+<li><a href="/docs/cli">CLI reference</a></li>
+<li><a href="/docs/how-it-works">How it works</a></li>
+<li><a href="/docs/security">Security model</a></li>
+<li><a href="/docs/faq">FAQ</a></li>
+</ul>
+  </nav>
+  <main>
+<article>
+<h1>Least privilege: a project&#39;s own names</h1>
+<p>By default <code>keyshroud run</code> puts every wired secret into the command, so an agent working on one
+project can use the tokens of all the others. A scope narrows that for a directory:</p>
+<pre data-lang="bash"><code>cd ~/code/shop
+keyshroud scope --only 'STRIPE_*,GH_TOKEN'   # writes ./.keyshroud.json
+keyshroud scope                              # what is in scope here, and how many names are not</code></pre>
+<pre data-lang="json"><code>{ &quot;only&quot;: [&quot;STRIPE_*&quot;, &quot;GH_TOKEN&quot;] }</code></pre>
+<p>In that directory and below it (the nearest <code>.keyshroud.json</code> going up decides):</p>
+<ul>
+<li><code>keyshroud run</code>, <code>secrets_run</code>, <code>env</code>, <code>env --shell</code> and pi/omp&#39;s shell get only the names in
+scope; <code>run</code> and <code>secrets_run</code> do not pass a wired name outside it on, not even from the
+environment the agent was started with.</li>
+<li><code>run --only NAME</code>, <code>get NAME</code> and <code>secrets_run</code> with <code>only</code> refuse a name outside the scope, and
+say so.</li>
+<li>The names Claude Code is told at session start, and <code>secrets_list</code>, are the ones in scope.</li>
+<li>Masking is not narrowed: a value outside the scope that turns up in output is still masked (a
+name wired to a <a href="/docs/team-secret-managers">team secret manager</a>
+from the moment its value has been read there: masking never contacts a source by itself).</li>
+<li><code>secrets_run</code> takes the scope of the directory its command runs in (<code>cwd</code>; through a link, the
+directory it leads to), <code>secrets_list</code> the one of the directory the MCP server was started in.</li>
+<li><code>add</code> and <code>wire</code> say when the name they just wired is outside the scope, so you can add it there.</li>
+</ul>
+<p>The file holds names and patterns only (<code>*</code> stands for any run of characters), so it can be committed;
+a teammate&#39;s machine applies it to whatever they have wired under those names. A file that cannot be
+read as a scope (also a link to a file that is gone) puts nothing in scope and says why, instead of
+falling back to everything or to a scope further up. References
+(<code>--env-file .env.refs</code>, <code>get keyshroud://Item</code>) are not narrowed: they already name what they want.
+A scope is a default against accidents, not a wall: see the <a href="/docs/security">security model</a>.</p>
+</article>
+<p class="edit"><a href="https://github.com/dinhkarate/keyshroud/blob/main/docs/project-scope.md">Edit this page on GitHub</a> · <a href="/docs/project-scope.md">Markdown</a></p>
+<div class="steps"><a class="prev" rel="prev" href="/docs/team-secret-managers"><span>Previous</span>Team secret managers</a><a class="next" rel="next" href="/docs/claude-code"><span>Next</span>Claude Code</a></div>
+  </main>
+</div>
+<footer>
+  <div class="wrap">
+    <p>keyshroud · MIT · <a href="https://github.com/dinhkarate/keyshroud">GitHub</a> · <a href="https://www.npmjs.com/package/keyshroud">npm</a> · <a href="/llms.txt">llms.txt</a> · Not affiliated with Anthropic, Bitwarden, Inc. or any vendor named here.</p>
+  </div>
+</footer>
+<script src="/docs/docs.js" defer></script>
+</body>
+</html>

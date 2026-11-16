@@ -489,8 +489,14 @@ Thêm, gồm CI, Docker và nâng cấp từ 0.7: [docs/faq.md](../docs/faq.md).
 
 ## Tài liệu
 
+Các trang này cũng có ở [keyshroud.dev/docs](https://keyshroud.dev/docs/), dễ đọc hơn.
+
 | | |
 |---|---|
+| [Chuyển một project khỏi `.env`](../docs/migrate-from-dotenv.md) | Hướng dẫn: `import`, `.env.refs`, xoá bản plaintext, đồng đội cần làm gì |
+| [CI và Docker](../docs/ci-and-docker.md) | Hướng dẫn: vault dùng passphrase trong GitHub Actions, trong Docker build và trong container |
+| [Đổi một key đã bị lộ](../docs/rotate-a-key.md) | Hướng dẫn: tìm các bản sao, thay giá trị, những gì tự nhận giá trị mới |
+| [Xử lý sự cố](../docs/troubleshooting.md) | Tên không phân giải được, vault bị khoá, giá trị in ra mà không được che |
 | [Vault cục bộ](../docs/local-vault.md) | Chế độ khoá, Touch ID, session, sao lưu và khôi phục |
 | [Vaultwarden hoặc Bitwarden](../docs/vaultwarden.md) | Thiết lập đồng bộ, session, một tài khoản agent riêng, quay lại vault cục bộ |
 | [Secret manager của team](../docs/team-secret-managers.md) | Vault, OpenBao, Infisical, 1Password, AWS, Google Cloud, Azure |
@@ -500,7 +506,7 @@ Thêm, gồm CI, Docker và nâng cấp từ 0.7: [docs/faq.md](../docs/faq.md).
 | [Tham chiếu CLI](../docs/cli.md) | Mọi lệnh, dạng tham chiếu, exit code và biến môi trường |
 | [Cách hoạt động](../docs/how-it-works.md) | Nối, mở khoá, phân giải, inject, che |
 | [Mô hình bảo mật](../docs/security.md) | Các bảo đảm chúng tôi test, và giới hạn đã biết |
-| [Hỏi đáp](../docs/faq.md) | CI và Docker, Windows, nâng cấp, xử lý sự cố |
+| [Hỏi đáp](../docs/faq.md) | Windows, nâng cấp, các câu trả lời ngắn |
 | [Hướng dẫn cài cho agent](https://keyshroud.dev/install.md) | Hướng dẫn từng bước viết cho AI agent |
 
 Các trang trong docs/ đều bằng tiếng Anh.

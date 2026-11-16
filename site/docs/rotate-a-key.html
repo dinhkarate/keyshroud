@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rotate a key that leaked · keyshroud docs</title>
+<meta name="description" content="Find the copies, store the new value, and what picks it up.">
+<meta property="og:title" content="Rotate a key that leaked · keyshroud docs">
+<meta property="og:description" content="Find the copies, store the new value, and what picks it up.">
+<meta property="og:url" content="https://keyshroud.dev/docs/rotate-a-key">
+<meta property="og:image" content="https://keyshroud.dev/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="canonical" href="https://keyshroud.dev/docs/rotate-a-key">
+<link rel="alternate" type="text/markdown" href="/docs/rotate-a-key.md">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<meta name="color-scheme" content="light dark">
+<link rel="stylesheet" href="/docs/docs.css">
+</head>
+<body>
+<header class="bar">
+  <div class="wrap">
+    <a class="brand" href="/">
+      <picture>
+        <source srcset="/logo-dark.svg" media="(prefers-color-scheme: dark)">
+        <img src="/logo.svg" alt="keyshroud">
+      </picture>
+    </a>
+    <nav>
+      <a href="/docs/" aria-current="true">Docs</a>
+      <a href="/#quickstart">Quickstart</a>
+      <a class="opt" href="/#demo">Demo</a>
+      <a class="opt" href="/#compare">Compare</a>
+      <a class="gh" href="https://github.com/dinhkarate/keyshroud">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="wrap page">
+  <details class="menu">
+    <summary>All docs</summary>
+    <nav class="side" aria-label="Docs, short screen">
+<h4>Guides</h4>
+<ul>
+<li><a href="/docs/migrate-from-dotenv">Move a project off .env</a></li>
+<li><a href="/docs/ci-and-docker">CI and Docker</a></li>
+<li><a href="/docs/rotate-a-key" aria-current="page">Rotate a key that leaked</a></li>
+<li><a href="/docs/troubleshooting">Troubleshooting</a></li>
+</ul>
+<h4>Where secrets live</h4>
+<ul>
+<li><a href="/docs/local-vault">The local vault</a></li>
+<li><a href="/docs/vaultwarden">Vaultwarden or Bitwarden</a></li>
+<li><a href="/docs/team-secret-managers">Team secret managers</a></li>
+<li><a href="/docs/project-scope">Project scope</a></li>
+</ul>
+<h4>Agents</h4>
+<ul>
+<li><a href="/docs/claude-code">Claude Code</a></li>
+<li><a href="/docs/agents">pi, omp and other agents</a></li>
+</ul>
+<h4>Reference</h4>
+<ul>
+<li><a href="/docs/cli">CLI reference</a></li>
+<li><a href="/docs/how-it-works">How it works</a></li>
+<li><a href="/docs/security">Security model</a></li>
+<li><a href="/docs/faq">FAQ</a></li>
+</ul>
+    </nav>
+  </details>
+  <nav class="side wide" aria-label="Docs">
+<h4>Guides</h4>
+<ul>
+<li><a href="/docs/migrate-from-dotenv">Move a project off .env</a></li>
+<li><a href="/docs/ci-and-docker">CI and Docker</a></li>
+<li><a href="/docs/rotate-a-key" aria-current="page">Rotate a key that leaked</a></li>
+<li><a href="/docs/troubleshooting">Troubleshooting</a></li>
+</ul>
+<h4>Where secrets live</h4>
+<ul>
+<li><a href="/docs/local-vault">The local vault</a></li>
+<li><a href="/docs/vaultwarden">Vaultwarden or Bitwarden</a></li>
+<li><a href="/docs/team-secret-managers">Team secret managers</a></li>
+<li><a href="/docs/project-scope">Project scope</a></li>
+</ul>
+<h4>Agents</h4>
+<ul>
+<li><a href="/docs/claude-code">Claude Code</a></li>
+<li><a href="/docs/agents">pi, omp and other agents</a></li>
+</ul>
+<h4>Reference</h4>
+<ul>
+<li><a href="/docs/cli">CLI reference</a></li>
+<li><a href="/docs/how-it-works">How it works</a></li>
+<li><a href="/docs/security">Security model</a></li>
+<li><a href="/docs/faq">FAQ</a></li>
+</ul>
+  </nav>
+  <main>
+<article>
+<h1>Rotate a key that leaked</h1>
+<p>A key was pasted into a chat, printed by a command, or committed. Masking cannot take it back: the
+copy that left is out. The fix is a new key. keyshroud makes that a one-line change, because every
+config file, <code>.env.refs</code> and agent holds the name, not the value.</p>
+<h2 id="1-find-the-copies-first"><a class="anchor" href="#1-find-the-copies-first">1. Find the copies first</a></h2>
+<p>Do this before you rotate. <code>scan</code> and <code>redact</code> look for the values the vault holds now, so once the
+item has the new value they no longer recognise the old one.</p>
+<pre data-lang="bash"><code>keyshroud scan .                       # files in this project
+keyshroud scan ~/logs ./dist debug.log # or any other paths</code></pre>
+<pre data-lang="text"><code>debug.log:2 GH_TOKEN
+1 leaked secret value(s) found</code></pre>
+<p>It prints file, line and name, never the value, and exits <code>1</code> when it finds something. Delete or
+clean those files. For a log you want to keep:</p>
+<pre data-lang="bash"><code>keyshroud redact &lt; debug.log &gt; debug.clean.log</code></pre>
+<h2 id="2-make-a-new-key-at-the-provider"><a class="anchor" href="#2-make-a-new-key-at-the-provider">2. Make a new key at the provider</a></h2>
+<p>Revoke the old key where it was issued (GitHub, Stripe, your cloud console) and create a new one.
+keyshroud cannot do this part: only the provider can make the old key stop working.</p>
+<h2 id="3-store-the-new-value"><a class="anchor" href="#3-store-the-new-value">3. Store the new value</a></h2>
+<pre data-lang="bash"><code>keyshroud rotate --item &quot;GitHub token&quot;</code></pre>
+<p>Type or paste it into the masked prompt. When an agent runs the command, a hidden-input dialog opens
+on your desktop instead, so the value still never goes through the chat. Over SSH, pipe it:
+<code>pbpaste | ssh host keyshroud rotate --item &quot;GitHub token&quot; --stdin</code>.</p>
+<p>Not sure of the item&#39;s name? <code>keyshroud list</code> shows items and the variables wired to them, names only.</p>
+<h2 id="4-nothing-else-to-change"><a class="anchor" href="#4-nothing-else-to-change">4. Nothing else to change</a></h2>
+<p>The name stays wired to the same item, so <code>keyshroud run</code>, <code>.env.refs</code> files, the MCP server and the
+hooks use the new value from the next command on. Check it:</p>
+<pre data-lang="bash"><code>keyshroud run --only GH_TOKEN -- gh auth status</code></pre>
+<p>A process that was already running (a dev server, an agent started with <code>keyshroud run -- claude</code>)
+keeps the old value in its environment until you restart it.</p>
+<h2 id="if-it-is-in-git-history"><a class="anchor" href="#if-it-is-in-git-history">If it is in git history</a></h2>
+<p><code>scan</code> reads the working tree, not old commits. A value that was committed is public the moment the
+repository is, and rewriting history does not undo copies that were already cloned. Rotate first, then
+clean the history if you want to (<code>git filter-repo</code>), in that order.</p>
+<h2 id="where-the-value-lives-elsewhere"><a class="anchor" href="#where-the-value-lives-elsewhere">Where the value lives elsewhere</a></h2>
+<ul>
+<li><strong>Vaultwarden or Bitwarden</strong>: <code>keyshroud rotate --item &quot;bw://GitHub token&quot;</code> writes the new value as
+the item&#39;s password there, and other machines get it on their next sync.</li>
+<li><strong>A team secret manager</strong> (<code>vault://</code>, <code>op://</code>, <code>awssecrets://</code>, …): keyshroud only reads those.
+Rotate the secret in that system; keyshroud picks up the new value on the next read
+(a long-running process keeps what it read for up to an hour, see <code>KEYSHROUD_CACHE_TTL_MS</code> in the
+<a href="/docs/cli#configuration">CLI reference</a>).</li>
+</ul>
+</article>
+<p class="edit"><a href="https://github.com/dinhkarate/keyshroud/blob/main/docs/rotate-a-key.md">Edit this page on GitHub</a> · <a href="/docs/rotate-a-key.md">Markdown</a></p>
+<div class="steps"><a class="prev" rel="prev" href="/docs/ci-and-docker"><span>Previous</span>CI and Docker</a><a class="next" rel="next" href="/docs/troubleshooting"><span>Next</span>Troubleshooting</a></div>
+  </main>
+  <nav class="toc" aria-label="On this page">
+<h4>On this page</h4>
+<ul>
+<li><a href="#1-find-the-copies-first">1. Find the copies first</a></li>
+<li><a href="#2-make-a-new-key-at-the-provider">2. Make a new key at the provider</a></li>
+<li><a href="#3-store-the-new-value">3. Store the new value</a></li>
+<li><a href="#4-nothing-else-to-change">4. Nothing else to change</a></li>
+<li><a href="#if-it-is-in-git-history">If it is in git history</a></li>
+<li><a href="#where-the-value-lives-elsewhere">Where the value lives elsewhere</a></li>
+</ul>
+  </nav>
+</div>
+<footer>
+  <div class="wrap">
+    <p>keyshroud · MIT · <a href="https://github.com/dinhkarate/keyshroud">GitHub</a> · <a href="https://www.npmjs.com/package/keyshroud">npm</a> · <a href="/llms.txt">llms.txt</a> · Not affiliated with Anthropic, Bitwarden, Inc. or any vendor named here.</p>
+  </div>
+</footer>
+<script src="/docs/docs.js" defer></script>
+</body>
+</html>

@@ -46,6 +46,7 @@ keyshroud run --env-file .env.refs -- npm test
 `KEYSHROUD_PASSPHRASE` is the name keyshroud knows the passphrase by: commands started by `run` do not
 receive that variable, and its value is masked in their output. A
 server you reach over SSH can instead run `keyshroud unlock --unattended` there once (no time limit).
+The whole walk-through, with a GitHub Actions job and a Dockerfile, is in [CI and Docker](ci-and-docker.md).
 
 **Can the agent still use the key?** Yes. The command gets the real value; only the text
 the model reads is masked.

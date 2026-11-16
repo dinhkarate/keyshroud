@@ -489,8 +489,14 @@ More, including CI, Docker and upgrading from 0.7: [docs/faq.md](docs/faq.md).
 
 ## Documentation
 
+The same pages, easier to read, are at [keyshroud.dev/docs](https://keyshroud.dev/docs/).
+
 | | |
 |---|---|
+| [Move a project off `.env`](docs/migrate-from-dotenv.md) | Guide: `import`, `.env.refs`, deleting the plaintext, what teammates do |
+| [CI and Docker](docs/ci-and-docker.md) | Guide: a passphrase vault in GitHub Actions, a Docker build and a container |
+| [Rotate a key that leaked](docs/rotate-a-key.md) | Guide: find the copies, replace the value, what picks it up |
+| [Troubleshooting](docs/troubleshooting.md) | Unresolved names, a locked vault, a value that printed unmasked |
 | [The local vault](docs/local-vault.md) | Key modes, Touch ID, sessions, backup and restore |
 | [Vaultwarden or Bitwarden](docs/vaultwarden.md) | Sync setup, sessions, a separate agent account, moving back to the local vault |
 | [Team secret managers](docs/team-secret-managers.md) | Vault, OpenBao, Infisical, 1Password, AWS, Google Cloud, Azure |
@@ -500,7 +506,7 @@ More, including CI, Docker and upgrading from 0.7: [docs/faq.md](docs/faq.md).
 | [CLI reference](docs/cli.md) | Every command, reference form, exit code and environment variable |
 | [How it works](docs/how-it-works.md) | Wiring, unlocking, resolving, injecting, redacting |
 | [Security model](docs/security.md) | Guarantees we test for, and known limits |
-| [FAQ](docs/faq.md) | CI and Docker, Windows, upgrading, troubleshooting |
+| [FAQ](docs/faq.md) | Windows, upgrading, short answers |
 | [Agent setup guide](https://keyshroud.dev/install.md) | Step-by-step install written for AI agents |
 
 ## Development

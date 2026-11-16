@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pi, omp and other agents · keyshroud docs</title>
+<meta name="description" content="The pi/omp extension, the skill, the MCP server.">
+<meta property="og:title" content="pi, omp and other agents · keyshroud docs">
+<meta property="og:description" content="The pi/omp extension, the skill, the MCP server.">
+<meta property="og:url" content="https://keyshroud.dev/docs/agents">
+<meta property="og:image" content="https://keyshroud.dev/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="canonical" href="https://keyshroud.dev/docs/agents">
+<link rel="alternate" type="text/markdown" href="/docs/agents.md">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<meta name="color-scheme" content="light dark">
+<link rel="stylesheet" href="/docs/docs.css">
+</head>
+<body>
+<header class="bar">
+  <div class="wrap">
+    <a class="brand" href="/">
+      <picture>
+        <source srcset="/logo-dark.svg" media="(prefers-color-scheme: dark)">
+        <img src="/logo.svg" alt="keyshroud">
+      </picture>
+    </a>
+    <nav>
+      <a href="/docs/" aria-current="true">Docs</a>
+      <a href="/#quickstart">Quickstart</a>
+      <a class="opt" href="/#demo">Demo</a>
+      <a class="opt" href="/#compare">Compare</a>
+      <a class="gh" href="https://github.com/dinhkarate/keyshroud">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="wrap page">
+  <details class="menu">
+    <summary>All docs</summary>
+    <nav class="side" aria-label="Docs, short screen">
+<h4>Guides</h4>
+<ul>
+<li><a href="/docs/migrate-from-dotenv">Move a project off .env</a></li>
+<li><a href="/docs/ci-and-docker">CI and Docker</a></li>
+<li><a href="/docs/rotate-a-key">Rotate a key that leaked</a></li>
+<li><a href="/docs/troubleshooting">Troubleshooting</a></li>
+</ul>
+<h4>Where secrets live</h4>
+<ul>
+<li><a href="/docs/local-vault">The local vault</a></li>
+<li><a href="/docs/vaultwarden">Vaultwarden or Bitwarden</a></li>
+<li><a href="/docs/team-secret-managers">Team secret managers</a></li>
+<li><a href="/docs/project-scope">Project scope</a></li>
+</ul>
+<h4>Agents</h4>
+<ul>
+<li><a href="/docs/claude-code">Claude Code</a></li>
+<li><a href="/docs/agents" aria-current="page">pi, omp and other agents</a></li>
+</ul>
+<h4>Reference</h4>
+<ul>
+<li><a href="/docs/cli">CLI reference</a></li>
+<li><a href="/docs/how-it-works">How it works</a></li>
+<li><a href="/docs/security">Security model</a></li>
+<li><a href="/docs/faq">FAQ</a></li>
+</ul>
+    </nav>
+  </details>
+  <nav class="side wide" aria-label="Docs">
+<h4>Guides</h4>
+<ul>
+<li><a href="/docs/migrate-from-dotenv">Move a project off .env</a></li>
+<li><a href="/docs/ci-and-docker">CI and Docker</a></li>
+<li><a href="/docs/rotate-a-key">Rotate a key that leaked</a></li>
+<li><a href="/docs/troubleshooting">Troubleshooting</a></li>
+</ul>
+<h4>Where secrets live</h4>
+<ul>
+<li><a href="/docs/local-vault">The local vault</a></li>
+<li><a href="/docs/vaultwarden">Vaultwarden or Bitwarden</a></li>
+<li><a href="/docs/team-secret-managers">Team secret managers</a></li>
+<li><a href="/docs/project-scope">Project scope</a></li>
+</ul>
+<h4>Agents</h4>
+<ul>
+<li><a href="/docs/claude-code">Claude Code</a></li>
+<li><a href="/docs/agents" aria-current="page">pi, omp and other agents</a></li>
+</ul>
+<h4>Reference</h4>
+<ul>
+<li><a href="/docs/cli">CLI reference</a></li>
+<li><a href="/docs/how-it-works">How it works</a></li>
+<li><a href="/docs/security">Security model</a></li>
+<li><a href="/docs/faq">FAQ</a></li>
+</ul>
+  </nav>
+  <main>
+<article>
+<h1>pi, omp and other agents</h1>
+<h2 id="pi--omp"><a class="anchor" href="#pi--omp">pi / omp</a></h2>
+<pre data-lang="bash"><code>pi install npm:keyshroud</code></pre>
+<p>The extension:</p>
+<ul>
+<li>hydrates wired secrets into the agent&#39;s environment before provider auth
+resolves, so <code>$CUSTOM_KEY</code> provider references work at startup;</li>
+<li>redacts every tool result, successful or failed, through the <code>tool_result</code>
+hook (wired values, the session token or vault key, and every password in the vault): its text,
+and the details and structured data a tool returns beside it. What a tool streams while it is
+still running is shown as it is; its result is masked;</li>
+<li>masks the output of a <code>!command</code> you type as it arrives, so the masked text is what pi shows,
+saves and later summarizes (through pi&#39;s own shell, the one your own pi settings name: a shell
+that only a project&#39;s settings name is not used for a masked <code>!command</code>; in a host
+without it, or when another extension runs your <code>!commands</code>, only what is sent to the model with
+a turn is masked). A value is masked before pi&#39;s environment holds it;</li>
+<li>with a passphrase vault, takes its values out of the agent&#39;s environment once the
+session ends or you run <code>keyshroud lock</code>, checked before every tool and <code>!command</code>;</li>
+<li>adds <code>/secret</code> (describe → confirm name → masked paste), <code>/vault_add</code>,
+<code>/vault_wire</code>, <code>/vault_rotate</code>, <code>/vault_status</code>, and the <code>vault_add_secret</code> /
+<code>vault_status</code> tools.</li>
+</ul>
+<p><code>/secret</code> can ask a local OpenAI-compatible model to propose the item and
+variable names. Only your description is sent — never the value:</p>
+<pre data-lang="bash"><code>export KEYSHROUD_PLANNER_URL=http://127.0.0.1:8080/v1/chat/completions
+export KEYSHROUD_PLANNER_MODEL=qwen3-4b</code></pre>
+<p>Without a planner, names are derived from the description and you can edit them.</p>
+<h2 id="other-agents-with-a-shell"><a class="anchor" href="#other-agents-with-a-shell">Other agents with a shell</a></h2>
+<p>Codex, OpenCode, Gemini CLI, Cursor&#39;s agent and anything else that can run commands: install the
+CLI and the skill, which teaches the agent to run secret-using commands as <code>keyshroud run -- …</code>
+and to store new secrets with <code>keyshroud add</code>:</p>
+<pre data-lang="bash"><code>npm install -g keyshroud
+npx skills add dinhkarate/keyshroud</code></pre>
+<p><code>npx skills</code> needs Node.js 22.20+. On an older Node, copy the skill that comes with the CLI;
+Codex and OpenCode read <code>~/.agents/skills</code>:</p>
+<pre data-lang="bash"><code>mkdir -p ~/.agents/skills &amp;&amp; cp -R &quot;$(npm root -g)/keyshroud/skills/keyshroud&quot; ~/.agents/skills/</code></pre>
+<h2 id="mcp-clients-without-a-shell"><a class="anchor" href="#mcp-clients-without-a-shell">MCP clients without a shell</a></h2>
+<p>Claude Desktop, chat-only clients, or an agent you do not allow to run commands. Any client that
+speaks MCP over stdio:</p>
+<pre data-lang="json"><code>{ &quot;mcpServers&quot;: { &quot;keyshroud&quot;: { &quot;command&quot;: &quot;keyshroud&quot;, &quot;args&quot;: [&quot;mcp&quot;] } } }</code></pre>
+<p>Codex, if you want MCP there too: <code>codex mcp add keyshroud -- keyshroud mcp</code>. Non-interactive <code>codex exec</code> refuses MCP calls that need approval; allow keyshroud&#39;s tools explicitly:</p>
+<pre data-lang="toml"><code># ~/.codex/config.toml
+[mcp_servers.keyshroud.tools.secrets_run]
+approval_mode = &quot;approve&quot;</code></pre>
+<p>OpenCode: <code>opencode mcp add keyshroud -- keyshroud mcp</code>.</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>Does</th>
+<th>Returns</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>secrets_list</code></td>
+<td>Lists wired names (+ optional <code>env_file</code>)</td>
+<td>resolved / unresolved names</td>
+</tr>
+<tr>
+<td><code>secrets_run</code></td>
+<td>Runs a shell command with secrets injected (<code>only</code>, <code>env_file</code>, <code>cwd</code>, <code>timeout_ms</code>)</td>
+<td>exit code + masked stdout/stderr</td>
+</tr>
+<tr>
+<td><code>secrets_request</code></td>
+<td>Opens a hidden-input dialog on the user&#39;s desktop and stores the value</td>
+<td><code>created … verified=yes</code>, or a <code>keyshroud add …</code> command for <em>their</em> terminal when no dialog can be shown</td>
+</tr>
+<tr>
+<td><code>vault_status</code></td>
+<td>Which vault, lock state, item count</td>
+<td>status line</td>
+</tr>
+</tbody></table>
+</div>
+</article>
+<p class="edit"><a href="https://github.com/dinhkarate/keyshroud/blob/main/docs/agents.md">Edit this page on GitHub</a> · <a href="/docs/agents.md">Markdown</a></p>
+<div class="steps"><a class="prev" rel="prev" href="/docs/claude-code"><span>Previous</span>Claude Code</a><a class="next" rel="next" href="/docs/cli"><span>Next</span>CLI reference</a></div>
+  </main>
+  <nav class="toc" aria-label="On this page">
+<h4>On this page</h4>
+<ul>
+<li><a href="#pi--omp">pi / omp</a></li>
+<li><a href="#other-agents-with-a-shell">Other agents with a shell</a></li>
+<li><a href="#mcp-clients-without-a-shell">MCP clients without a shell</a></li>
+</ul>
+  </nav>
+</div>
+<footer>
+  <div class="wrap">
+    <p>keyshroud · MIT · <a href="https://github.com/dinhkarate/keyshroud">GitHub</a> · <a href="https://www.npmjs.com/package/keyshroud">npm</a> · <a href="/llms.txt">llms.txt</a> · Not affiliated with Anthropic, Bitwarden, Inc. or any vendor named here.</p>
+  </div>
+</footer>
+<script src="/docs/docs.js" defer></script>
+</body>
+</html>

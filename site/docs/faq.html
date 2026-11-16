@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FAQ · keyshroud docs</title>
+<meta name="description" content="Short answers: servers, CI, Windows, upgrading.">
+<meta property="og:title" content="FAQ · keyshroud docs">
+<meta property="og:description" content="Short answers: servers, CI, Windows, upgrading.">
+<meta property="og:url" content="https://keyshroud.dev/docs/faq">
+<meta property="og:image" content="https://keyshroud.dev/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="canonical" href="https://keyshroud.dev/docs/faq">
+<link rel="alternate" type="text/markdown" href="/docs/faq.md">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<meta name="color-scheme" content="light dark">
+<link rel="stylesheet" href="/docs/docs.css">
+</head>
+<body>
+<header class="bar">
+  <div class="wrap">
+    <a class="brand" href="/">
+      <picture>
+        <source srcset="/logo-dark.svg" media="(prefers-color-scheme: dark)">
+        <img src="/logo.svg" alt="keyshroud">
+      </picture>
+    </a>
+    <nav>
+      <a href="/docs/" aria-current="true">Docs</a>
+      <a href="/#quickstart">Quickstart</a>
+      <a class="opt" href="/#demo">Demo</a>
+      <a class="opt" href="/#compare">Compare</a>
+      <a class="gh" href="https://github.com/dinhkarate/keyshroud">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="wrap page">
+  <details class="menu">
+    <summary>All docs</summary>
+    <nav class="side" aria-label="Docs, short screen">
+<h4>Guides</h4>
+<ul>
+<li><a href="/docs/migrate-from-dotenv">Move a project off .env</a></li>
+<li><a href="/docs/ci-and-docker">CI and Docker</a></li>
+<li><a href="/docs/rotate-a-key">Rotate a key that leaked</a></li>
+<li><a href="/docs/troubleshooting">Troubleshooting</a></li>
+</ul>
+<h4>Where secrets live</h4>
+<ul>
+<li><a href="/docs/local-vault">The local vault</a></li>
+<li><a href="/docs/vaultwarden">Vaultwarden or Bitwarden</a></li>
+<li><a href="/docs/team-secret-managers">Team secret managers</a></li>
+<li><a href="/docs/project-scope">Project scope</a></li>
+</ul>
+<h4>Agents</h4>
+<ul>
+<li><a href="/docs/claude-code">Claude Code</a></li>
+<li><a href="/docs/agents">pi, omp and other agents</a></li>
+</ul>
+<h4>Reference</h4>
+<ul>
+<li><a href="/docs/cli">CLI reference</a></li>
+<li><a href="/docs/how-it-works">How it works</a></li>
+<li><a href="/docs/security">Security model</a></li>
+<li><a href="/docs/faq" aria-current="page">FAQ</a></li>
+</ul>
+    </nav>
+  </details>
+  <nav class="side wide" aria-label="Docs">
+<h4>Guides</h4>
+<ul>
+<li><a href="/docs/migrate-from-dotenv">Move a project off .env</a></li>
+<li><a href="/docs/ci-and-docker">CI and Docker</a></li>
+<li><a href="/docs/rotate-a-key">Rotate a key that leaked</a></li>
+<li><a href="/docs/troubleshooting">Troubleshooting</a></li>
+</ul>
+<h4>Where secrets live</h4>
+<ul>
+<li><a href="/docs/local-vault">The local vault</a></li>
+<li><a href="/docs/vaultwarden">Vaultwarden or Bitwarden</a></li>
+<li><a href="/docs/team-secret-managers">Team secret managers</a></li>
+<li><a href="/docs/project-scope">Project scope</a></li>
+</ul>
+<h4>Agents</h4>
+<ul>
+<li><a href="/docs/claude-code">Claude Code</a></li>
+<li><a href="/docs/agents">pi, omp and other agents</a></li>
+</ul>
+<h4>Reference</h4>
+<ul>
+<li><a href="/docs/cli">CLI reference</a></li>
+<li><a href="/docs/how-it-works">How it works</a></li>
+<li><a href="/docs/security">Security model</a></li>
+<li><a href="/docs/faq" aria-current="page">FAQ</a></li>
+</ul>
+  </nav>
+  <main>
+<article>
+<h1>FAQ</h1>
+<p><strong>Do I need Vaultwarden?</strong> No. Secrets live in an encrypted file on your machine by default.
+Vaultwarden (or the official Bitwarden cloud) is optional: use it to have the same secrets on several
+machines, or a copy on a server.</p>
+<p><strong>Do secrets leave my machine?</strong> Not with the local vault. With Vaultwarden or Bitwarden, only between
+<code>bw</code> and your server; with a <a href="/docs/team-secret-managers">source</a>,
+only from that server to your machine. keyshroud has no backend of its own and sends no telemetry; values go into the
+environment of the command you run.</p>
+<p><strong>I used keyshroud 0.7. What changes?</strong> Nothing. A machine with a <code>bw</code> login, keyshroud&#39;s files, wired
+<code>bw://</code> or <code>!bw</code> entries, <code>BW_SESSION</code>, or the master password in the keychain keeps Vaultwarden as the
+default and writes that down in <code>~/.config/keyshroud/backend</code>. Only a machine where none of these exist
+looks new and gets the local vault; set <code>KEYSHROUD_BACKEND=bw</code> there if it should not.</p>
+<p><strong>How do I leave Vaultwarden?</strong> <code>keyshroud migrate --to local</code>: see
+<a href="/docs/vaultwarden#moving-back-to-the-local-vault">moving back to the local vault</a>.</p>
+<p><strong>How do I back up the local vault?</strong> <code>keyshroud backup</code> writes one file sealed under a passphrase you
+choose, and <code>keyshroud restore FILE --yes</code> brings its items and their wiring back on any machine
+(<a href="/docs/local-vault#backup-and-restore">Backup and restore</a>). A plain copy of <code>vault.json</code> is not a backup: it opens only
+with its key, which stays in this machine&#39;s key store. For the same secrets on several machines at
+once, use Vaultwarden or Bitwarden.</p>
+<p><strong>Can a project get only its own secrets?</strong> Yes: <code>keyshroud scope --only &#39;STRIPE_*,GH_TOKEN&#39;</code> in the
+repo writes a <code>.keyshroud.json</code> that narrows <code>run</code>, <code>env</code> and what the agents are told there to those
+names (<a href="/docs/project-scope">Least privilege: a project&#39;s own names</a>).</p>
+<p><strong>We use HashiCorp Vault (or AWS, 1Password, …) at work. Do I have to move the secrets?</strong> No.
+keyshroud reads them where they are: see <a href="/docs/team-secret-managers">team secret managers</a>.
+It never writes to those systems, and what your account may read there is still decided by their policies.</p>
+<p><strong>Can I use it in CI or a Docker build?</strong> Yes, with a passphrase vault. Create it once in a terminal
+(<code>KEYSHROUD_VAULT_KEY=passphrase keyshroud unlock</code>), add the secrets, and copy <code>vault.json</code> into the job
+(it is encrypted, so it can live in the repository or an artifact). Keep only the passphrase in the CI&#39;s
+secret store, then:</p>
+<pre data-lang="bash"><code>mkdir -p ~/.config/keyshroud &amp;&amp; cp vault.json ~/.config/keyshroud/
+printf '%s' &quot;$KEYSHROUD_PASSPHRASE&quot; | keyshroud unlock --stdin   # a session of 30 minutes
+keyshroud run --env-file .env.refs -- npm test</code></pre>
+<p><code>--stdin</code> only opens an existing passphrase vault; a new passphrase is always chosen in a terminal.
+<code>KEYSHROUD_PASSPHRASE</code> is the name keyshroud knows the passphrase by: commands started by <code>run</code> do not
+receive that variable, and its value is masked in their output. A
+server you reach over SSH can instead run <code>keyshroud unlock --unattended</code> there once (no time limit).
+The whole walk-through, with a GitHub Actions job and a Dockerfile, is in <a href="/docs/ci-and-docker">CI and Docker</a>.</p>
+<p><strong>Can the agent still use the key?</strong> Yes. The command gets the real value; only the text
+the model reads is masked.</p>
+<p><strong>Is this a sandbox?</strong> No. It stops <em>accidental</em> disclosure. A hostile or prompt-injected
+agent can still exfiltrate a value it can use — see the <a href="/docs/security">security model</a>.</p>
+<p><strong>Doesn&#39;t Claude Code do this itself?</strong> Partly, and differently. Claude Code can deny reads of
+files such as <code>.env</code> (<code>permissions.deny</code>), strip credential-like variables from the processes it
+starts (<code>CLAUDE_CODE_SUBPROCESS_ENV_SCRUB</code>), and its sandbox can show a command a placeholder for a
+credential and put the real value on requests to hosts you allow (<code>sandbox.credentials</code> with
+<code>&quot;mode&quot;: &quot;mask&quot;</code>: opt-in, for sandboxed Bash commands, and it needs the sandbox&#39;s TLS termination,
+which Claude Code&#39;s documentation calls experimental). It has no secret store and does not rewrite
+what a tool prints. keyshroud is the store, works the same across agents, covers secrets that are
+not sent over HTTP (a database password, a signing key), and masks output. The two combine: the
+sandbox for the credentials it can keep out of the shell, keyshroud for the rest. (As of Claude
+Code&#39;s documentation on 2026-11-15.)</p>
+<p><strong>Why not just <code>.gitignore</code> my <code>.env</code>?</strong> That stops commits, not reads. Agents read <code>.env</code>
+to debug, and whatever they read goes to the model provider.</p>
+<p><strong>Does it work on Windows?</strong> Yes, tested on Windows 10 with Node 22. The local vault keeps its key
+with DPAPI, bound to your Windows account. <code>bw</code> and other npm CLIs (<code>.cmd</code> shims) run without a shell,
+the unlock dialog is a small PowerShell window, and sessions end after 30 minutes like elsewhere. Files in
+<code>%USERPROFILE%\.config\keyshroud</code> are protected by your profile&#39;s ACL (you, SYSTEM, Administrators), not
+by <code>0600</code>. One gap: over an SSH session with a terminal (<code>ssh -t</code>), Windows ends the lock timer when the
+SSH session closes, so that session ends on the next keyshroud call instead. There is no keychain support
+for the Vaultwarden master password on Windows: keyshroud asks for it (<code>migrate</code> too, in a terminal;
+it is not tested there). pi <code>auth.json</code> entries of the <code>!command</code> form and the <code>apiKeyHelper</code> that
+<code>claude-setup</code> writes need <code>/bin/sh</code>: for those, run keyshroud and the agent inside WSL (Git Bash beside
+a native Windows Node is not enough).
+DPAPI may be refused over SSH with a key (<code>Access is denied</code>): such a login carries no Windows
+password. keyshroud says so; run the command in the desktop or RDP session, or give a machine used only
+over SSH a passphrase vault (<code>keyshroud rekey --to passphrase</code>).</p>
+<p><strong><code>bw login</code> prints <code>KeyIdBackfillError</code>?</strong> <code>bw</code> 2026.9 and later call an endpoint that Vaultwarden
+added in 1.37.4 (<a href="https://github.com/dani-garcia/vaultwarden/issues/7750">vaultwarden#7750</a>). The login
+is saved anyway (<code>bw status</code> says <code>locked</code>), and <code>keyshroud setup</code> and the API-key login carry on by
+themselves. Update Vaultwarden to 1.37.4 or later to make the error go away.</p>
+</article>
+<p class="edit"><a href="https://github.com/dinhkarate/keyshroud/blob/main/docs/faq.md">Edit this page on GitHub</a> · <a href="/docs/faq.md">Markdown</a></p>
+<div class="steps"><a class="prev" rel="prev" href="/docs/security"><span>Previous</span>Security model</a><span></span></div>
+  </main>
+</div>
+<footer>
+  <div class="wrap">
+    <p>keyshroud · MIT · <a href="https://github.com/dinhkarate/keyshroud">GitHub</a> · <a href="https://www.npmjs.com/package/keyshroud">npm</a> · <a href="/llms.txt">llms.txt</a> · Not affiliated with Anthropic, Bitwarden, Inc. or any vendor named here.</p>
+  </div>
+</footer>
+<script src="/docs/docs.js" defer></script>
+</body>
+</html>

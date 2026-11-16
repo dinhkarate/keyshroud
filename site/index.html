@@ -308,7 +308,7 @@ footer .legal { border-top: 1px solid var(--line); padding-top: 20px; max-width:
       <a class="opt" href="#agents">Agents</a>
       <a class="opt" href="#compare">Compare</a>
       <a class="opt" href="#threat">Security</a>
-      <a class="opt" href="https://github.com/dinhkarate/keyshroud#documentation">Docs</a>
+      <a class="opt" href="/docs/">Docs</a>
       <a class="gh" href="https://github.com/dinhkarate/keyshroud">GitHub</a>
     </nav>
   </div>
@@ -406,7 +406,7 @@ curl: (22) error: 401</div>
       <div class="card"><span class="tag">2 · inject</span><h3>The command gets the value</h3><p><code>keyshroud run -- &lt;command&gt;</code> reads what the command needs from the vault and starts it with those variables set.</p></div>
       <div class="card"><span class="tag">3 · redact</span><h3>The model gets the name</h3><p>Output streams through a redactor. Hooks in Claude Code and pi mask tool results of commands you did not wrap, too.</p></div>
     </div>
-    <p class="note">More detail, with the pieces and what each one touches: <a href="https://github.com/dinhkarate/keyshroud/blob/main/docs/how-it-works.md">how it works</a>.</p>
+    <p class="note">More detail, with the pieces and what each one touches: <a href="/docs/how-it-works">how it works</a>.</p>
   </div>
 </section>
 
@@ -559,7 +559,7 @@ curl: (22) error: 401</div>
           <li>Touch ID on a Mac, or a passphrase, if you want to be asked</li>
           <li><code>keyshroud backup</code> writes one file that restores anywhere</li>
         </ul>
-        <a class="more" href="https://github.com/dinhkarate/keyshroud/blob/main/docs/local-vault.md">The local vault →</a>
+        <a class="more" href="/docs/local-vault">The local vault →</a>
       </div>
       <div class="card">
         <span class="tag">Several machines</span>
@@ -571,7 +571,7 @@ curl: (22) error: 401</div>
           <li>A separate account for agents, so they never open your whole vault</li>
           <li>Machines that used keyshroud 0.7 keep Vaultwarden</li>
         </ul>
-        <a class="more" href="https://github.com/dinhkarate/keyshroud/blob/main/docs/vaultwarden.md">Sync setup →</a>
+        <a class="more" href="/docs/vaultwarden">Sync setup →</a>
       </div>
       <div class="card">
         <span class="tag">Your team&#8217;s</span>
@@ -583,7 +583,7 @@ curl: (22) error: 401</div>
           <li>Uses the sign-in you already have</li>
           <li>Masked in output like any other secret</li>
         </ul>
-        <a class="more" href="https://github.com/dinhkarate/keyshroud/blob/main/docs/team-secret-managers.md">Team secret managers →</a>
+        <a class="more" href="/docs/team-secret-managers">Team secret managers →</a>
       </div>
     </div>
   </div>
@@ -614,11 +614,11 @@ curl: (22) error: 401</div>
     <h2>Works with your agent</h2>
     <p class="sub">One vault, every coding agent you use. Setup for each is in the docs. Watch it in <a href="#demo-code">Claude Code</a> and over <a href="#demo-mcp">MCP</a>.</p>
     <div class="grid c3">
-      <a class="agent" href="https://github.com/dinhkarate/keyshroud#claude-code"><span class="via">Plugin</span><b>Claude Code</b><span>SessionStart and PostToolUse hooks mask tool results, a shell guard masks failed commands too; a skill teaches Claude the CLI.</span></a>
-      <a class="agent" href="https://github.com/dinhkarate/keyshroud#pi--omp"><span class="via">Extension</span><b>pi / omp</b><span>Hydrates env before provider auth and masks every tool result, failed ones too.</span></a>
-      <a class="agent" href="https://github.com/dinhkarate/keyshroud#other-agents-with-a-shell"><span class="via">Skill</span><b>Codex, OpenCode, Gemini CLI, Cursor</b><span><code>npx skills add dinhkarate/keyshroud</code>, then the agent uses the CLI.</span></a>
-      <a class="agent" href="https://github.com/dinhkarate/keyshroud#mcp-clients-without-a-shell"><span class="via">MCP</span><b>Claude Desktop &amp; chat clients</b><span>One <code>mcpServers</code> entry. <code>secrets_run</code> returns masked output.</span></a>
-      <a class="agent" href="https://github.com/dinhkarate/keyshroud#quickstart"><span class="via">CLI</span><b>Any shell or CI</b><span><code>keyshroud run -- &lt;cmd&gt;</code> injects env and masks stdout/stderr.</span></a>
+      <a class="agent" href="/docs/claude-code"><span class="via">Plugin</span><b>Claude Code</b><span>SessionStart and PostToolUse hooks mask tool results, a shell guard masks failed commands too; a skill teaches Claude the CLI.</span></a>
+      <a class="agent" href="/docs/agents#pi--omp"><span class="via">Extension</span><b>pi / omp</b><span>Hydrates env before provider auth and masks every tool result, failed ones too.</span></a>
+      <a class="agent" href="/docs/agents#other-agents-with-a-shell"><span class="via">Skill</span><b>Codex, OpenCode, Gemini CLI, Cursor</b><span><code>npx skills add dinhkarate/keyshroud</code>, then the agent uses the CLI.</span></a>
+      <a class="agent" href="/docs/agents#mcp-clients-without-a-shell"><span class="via">MCP</span><b>Claude Desktop &amp; chat clients</b><span>One <code>mcpServers</code> entry. <code>secrets_run</code> returns masked output.</span></a>
+      <a class="agent" href="/docs/cli"><span class="via">CLI</span><b>Any shell or CI</b><span><code>keyshroud run -- &lt;cmd&gt;</code> injects env and masks stdout/stderr.</span></a>
       <a class="agent" href="/install.md"><span class="via">Setup guide</span><b>Let the agent install it</b><span><code>install.md</code> is written for agents: what to run, and what to leave to you.</span></a>
     </div>
   </div>
@@ -637,7 +637,7 @@ curl: (22) error: 401</div>
 <pre><span class="p">$</span> keyshroud scope --only 'DB_*,ACME_*'
 <span class="p">$</span> keyshroud run --only GH_TOKEN -- gh auth status
 <span class="d">Secret unresolved: GH_TOKEN is outside this project's scope (~/acme-app/.keyshroud.json)</span></pre>
-        <p class="note"><a href="https://github.com/dinhkarate/keyshroud/blob/main/docs/project-scope.md">Project scope →</a></p>
+        <p class="note"><a href="/docs/project-scope">Project scope →</a></p>
       </div>
       <div class="card">
         <span class="tag">Per command</span>
@@ -693,7 +693,7 @@ curl: (22) error: 401</div>
   <div class="wrap">
     <p class="kicker">Security</p>
     <h2>An honest threat model</h2>
-    <p class="sub">Redaction is defense in depth, not a sandbox. Every guarantee we test for and every known limit is in the <a href="https://github.com/dinhkarate/keyshroud/blob/main/docs/security.md">security model</a>.</p>
+    <p class="sub">Redaction is defense in depth, not a sandbox. Every guarantee we test for and every known limit is in the <a href="/docs/security">security model</a>.</p>
     <div class="duo">
       <div class="card">
         <h3>Protected</h3>
@@ -723,7 +723,7 @@ curl: (22) error: 401</div>
   <div class="wrap">
     <p class="kicker">FAQ</p>
     <h2>Questions people ask first</h2>
-    <p class="sub">The long list, with CI, Docker, Windows and upgrading, is in the <a href="https://github.com/dinhkarate/keyshroud/blob/main/docs/faq.md">FAQ</a>.</p>
+    <p class="sub">The long list, with CI, Docker, Windows and upgrading, is in the <a href="/docs/faq">FAQ</a>.</p>
     <details><summary>Do I need Vaultwarden or any server?</summary><p>No. Secrets live in an encrypted file on your machine by default, with its key in the OS keychain. Vaultwarden or Bitwarden is optional, for the same secrets on several machines.</p></details>
     <details><summary>Can the agent still use the key?</summary><p>Yes. The command gets the real value in its environment; only the text the model reads is masked.</p></details>
     <details><summary>Is this a sandbox?</summary><p>No. It stops accidental disclosure. A hostile or prompt-injected agent can still send a value it can use somewhere else; for that threat use an egress proxy with placeholder credentials and keep a human approving commands.</p></details>
@@ -741,7 +741,7 @@ curl: (22) error: 401</div>
     <div class="get"><span><b>$</b>npm i -g keyshroud</span><button type="button" class="copy" data-copy="npm i -g keyshroud">Copy</button></div>
     <div class="cta">
       <a class="btn primary" href="#quickstart">Get started free</a>
-      <a class="btn" href="https://github.com/dinhkarate/keyshroud#readme">Read the docs</a>
+      <a class="btn" href="/docs/">Read the docs</a>
     </div>
     <p class="tiny">No account · No telemetry · MIT</p>
   </div>
@@ -757,20 +757,24 @@ curl: (22) error: 401</div>
       <div>
         <h4>Docs</h4>
         <ul>
-          <li><a href="https://github.com/dinhkarate/keyshroud#quickstart">Quickstart</a></li>
-          <li><a href="https://github.com/dinhkarate/keyshroud/blob/main/docs/cli.md">CLI reference</a></li>
-          <li><a href="https://github.com/dinhkarate/keyshroud/blob/main/docs/claude-code.md">Claude Code</a></li>
-          <li><a href="https://github.com/dinhkarate/keyshroud/blob/main/docs/agents.md">Other agents</a></li>
+          <li><a href="#quickstart">Quickstart</a></li>
+          <li><a href="/docs/">All docs</a></li>
+          <li><a href="/docs/migrate-from-dotenv">Move off .env</a></li>
+          <li><a href="/docs/ci-and-docker">CI and Docker</a></li>
+          <li><a href="/docs/troubleshooting">Troubleshooting</a></li>
+          <li><a href="/docs/cli">CLI reference</a></li>
+          <li><a href="/docs/claude-code">Claude Code</a></li>
+          <li><a href="/docs/agents">Other agents</a></li>
           <li><a href="/install.md">Agent setup guide</a></li>
         </ul>
       </div>
       <div>
         <h4>Vaults</h4>
         <ul>
-          <li><a href="https://github.com/dinhkarate/keyshroud/blob/main/docs/local-vault.md">Local vault</a></li>
-          <li><a href="https://github.com/dinhkarate/keyshroud/blob/main/docs/vaultwarden.md">Vaultwarden, Bitwarden</a></li>
-          <li><a href="https://github.com/dinhkarate/keyshroud/blob/main/docs/team-secret-managers.md">Team secret managers</a></li>
-          <li><a href="https://github.com/dinhkarate/keyshroud/blob/main/docs/project-scope.md">Project scope</a></li>
+          <li><a href="/docs/local-vault">Local vault</a></li>
+          <li><a href="/docs/vaultwarden">Vaultwarden, Bitwarden</a></li>
+          <li><a href="/docs/team-secret-managers">Team secret managers</a></li>
+          <li><a href="/docs/project-scope">Project scope</a></li>
         </ul>
       </div>
       <div>
@@ -779,7 +783,7 @@ curl: (22) error: 401</div>
           <li><a href="https://github.com/dinhkarate/keyshroud">GitHub</a></li>
           <li><a href="https://www.npmjs.com/package/keyshroud">npm</a></li>
           <li><a href="https://github.com/dinhkarate/keyshroud/blob/main/CHANGELOG.md">Changelog</a></li>
-          <li><a href="https://github.com/dinhkarate/keyshroud/blob/main/docs/security.md">Security model</a></li>
+          <li><a href="/docs/security">Security model</a></li>
           <li><a href="https://github.com/dinhkarate/keyshroud/blob/main/SECURITY.md">Report a vulnerability</a></li>
         </ul>
       </div>

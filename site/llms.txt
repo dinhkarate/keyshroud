@@ -21,20 +21,25 @@ Key facts for agents:
 
 - [Agent setup guide](https://keyshroud.dev/install.md): step-by-step install for AI agents
 - [README](https://github.com/dinhkarate/keyshroud#readme): features, supported agents, quickstart
-- [Claude Code plugin](https://github.com/dinhkarate/keyshroud/blob/main/docs/claude-code.md): hooks, skill, the guard
-- [pi / omp extension](https://github.com/dinhkarate/keyshroud#pi--omp)
-- [Other agents with a shell](https://github.com/dinhkarate/keyshroud#other-agents-with-a-shell): Codex, OpenCode, Gemini CLI, Cursor (skill + CLI)
-- [MCP clients without a shell](https://github.com/dinhkarate/keyshroud#mcp-clients-without-a-shell): Claude Desktop and chat-only clients
-- [CLI reference](https://github.com/dinhkarate/keyshroud/blob/main/docs/cli.md): every command, reference forms, exit codes, environment variables
-- [Security model](https://github.com/dinhkarate/keyshroud/blob/main/docs/security.md): what keyshroud does and does not protect against
-- [How it works](https://github.com/dinhkarate/keyshroud/blob/main/docs/how-it-works.md)
-- [FAQ](https://github.com/dinhkarate/keyshroud/blob/main/docs/faq.md): CI and Docker, Windows, upgrading, troubleshooting
-- [Local vault](https://github.com/dinhkarate/keyshroud/blob/main/docs/local-vault.md): where the key lives on each OS
-- [Sync with Vaultwarden](https://github.com/dinhkarate/keyshroud/blob/main/docs/vaultwarden.md): self-host Vaultwarden or use Bitwarden cloud for several machines
-- [Team secret managers](https://github.com/dinhkarate/keyshroud/blob/main/docs/team-secret-managers.md): reference formats, sign-in and limits for each source
-- [Project scope](https://github.com/dinhkarate/keyshroud/blob/main/docs/project-scope.md): `.keyshroud.json`
-- [The guard](https://github.com/dinhkarate/keyshroud#the-guard-failed-commands-masked-too): failed commands masked in Claude Code
-- [Backup and restore](https://github.com/dinhkarate/keyshroud/blob/main/docs/local-vault.md#backup-and-restore)
+- [Docs index](https://keyshroud.dev/docs/): every page below as HTML; the links here are the Markdown copies
+- [Move a project off .env](https://keyshroud.dev/docs/migrate-from-dotenv.md): `keyshroud import`, `.env.refs`, deleting the plaintext
+- [CI and Docker](https://keyshroud.dev/docs/ci-and-docker.md): a passphrase vault in a CI job, a Docker build (BuildKit secret) and a container
+- [Rotate a key that leaked](https://keyshroud.dev/docs/rotate-a-key.md): `scan` first, then `rotate`
+- [Troubleshooting](https://keyshroud.dev/docs/troubleshooting.md): unresolved names, a locked vault, a value that printed unmasked
+- [Claude Code plugin](https://keyshroud.dev/docs/claude-code.md): hooks, skill, the guard
+- [pi / omp extension](https://keyshroud.dev/docs/agents.md#pi--omp)
+- [Other agents with a shell](https://keyshroud.dev/docs/agents.md#other-agents-with-a-shell): Codex, OpenCode, Gemini CLI, Cursor (skill + CLI)
+- [MCP clients without a shell](https://keyshroud.dev/docs/agents.md#mcp-clients-without-a-shell): Claude Desktop and chat-only clients
+- [CLI reference](https://keyshroud.dev/docs/cli.md): every command, reference forms, exit codes, environment variables
+- [Security model](https://keyshroud.dev/docs/security.md): what keyshroud does and does not protect against
+- [How it works](https://keyshroud.dev/docs/how-it-works.md)
+- [FAQ](https://keyshroud.dev/docs/faq.md): servers, Windows, upgrading
+- [Local vault](https://keyshroud.dev/docs/local-vault.md): where the key lives on each OS
+- [Sync with Vaultwarden](https://keyshroud.dev/docs/vaultwarden.md): self-host Vaultwarden or use Bitwarden cloud for several machines
+- [Team secret managers](https://keyshroud.dev/docs/team-secret-managers.md): reference formats, sign-in and limits for each source
+- [Project scope](https://keyshroud.dev/docs/project-scope.md): `.keyshroud.json`
+- [The guard](https://keyshroud.dev/docs/claude-code.md#the-guard-failed-commands-masked-too): failed commands masked in Claude Code
+- [Backup and restore](https://keyshroud.dev/docs/local-vault.md#backup-and-restore)
 
 ## Optional
 

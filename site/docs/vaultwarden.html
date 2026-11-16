@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vaultwarden or Bitwarden · keyshroud docs</title>
+<meta name="description" content="Sync between machines, sessions, a separate agent account.">
+<meta property="og:title" content="Vaultwarden or Bitwarden · keyshroud docs">
+<meta property="og:description" content="Sync between machines, sessions, a separate agent account.">
+<meta property="og:url" content="https://keyshroud.dev/docs/vaultwarden">
+<meta property="og:image" content="https://keyshroud.dev/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="canonical" href="https://keyshroud.dev/docs/vaultwarden">
+<link rel="alternate" type="text/markdown" href="/docs/vaultwarden.md">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<meta name="color-scheme" content="light dark">
+<link rel="stylesheet" href="/docs/docs.css">
+</head>
+<body>
+<header class="bar">
+  <div class="wrap">
+    <a class="brand" href="/">
+      <picture>
+        <source srcset="/logo-dark.svg" media="(prefers-color-scheme: dark)">
+        <img src="/logo.svg" alt="keyshroud">
+      </picture>
+    </a>
+    <nav>
+      <a href="/docs/" aria-current="true">Docs</a>
+      <a href="/#quickstart">Quickstart</a>
+      <a class="opt" href="/#demo">Demo</a>
+      <a class="opt" href="/#compare">Compare</a>
+      <a class="gh" href="https://github.com/dinhkarate/keyshroud">GitHub</a>
+    </nav>
+  </div>
+</header>
+<div class="wrap page">
+  <details class="menu">
+    <summary>All docs</summary>
+    <nav class="side" aria-label="Docs, short screen">
+<h4>Guides</h4>
+<ul>
+<li><a href="/docs/migrate-from-dotenv">Move a project off .env</a></li>
+<li><a href="/docs/ci-and-docker">CI and Docker</a></li>
+<li><a href="/docs/rotate-a-key">Rotate a key that leaked</a></li>
+<li><a href="/docs/troubleshooting">Troubleshooting</a></li>
+</ul>
+<h4>Where secrets live</h4>
+<ul>
+<li><a href="/docs/local-vault">The local vault</a></li>
+<li><a href="/docs/vaultwarden" aria-current="page">Vaultwarden or Bitwarden</a></li>
+<li><a href="/docs/team-secret-managers">Team secret managers</a></li>
+<li><a href="/docs/project-scope">Project scope</a></li>
+</ul>
+<h4>Agents</h4>
+<ul>
+<li><a href="/docs/claude-code">Claude Code</a></li>
+<li><a href="/docs/agents">pi, omp and other agents</a></li>
+</ul>
+<h4>Reference</h4>
+<ul>
+<li><a href="/docs/cli">CLI reference</a></li>
+<li><a href="/docs/how-it-works">How it works</a></li>
+<li><a href="/docs/security">Security model</a></li>
+<li><a href="/docs/faq">FAQ</a></li>
+</ul>
+    </nav>
+  </details>
+  <nav class="side wide" aria-label="Docs">
+<h4>Guides</h4>
+<ul>
+<li><a href="/docs/migrate-from-dotenv">Move a project off .env</a></li>
+<li><a href="/docs/ci-and-docker">CI and Docker</a></li>
+<li><a href="/docs/rotate-a-key">Rotate a key that leaked</a></li>
+<li><a href="/docs/troubleshooting">Troubleshooting</a></li>
+</ul>
+<h4>Where secrets live</h4>
+<ul>
+<li><a href="/docs/local-vault">The local vault</a></li>
+<li><a href="/docs/vaultwarden" aria-current="page">Vaultwarden or Bitwarden</a></li>
+<li><a href="/docs/team-secret-managers">Team secret managers</a></li>
+<li><a href="/docs/project-scope">Project scope</a></li>
+</ul>
+<h4>Agents</h4>
+<ul>
+<li><a href="/docs/claude-code">Claude Code</a></li>
+<li><a href="/docs/agents">pi, omp and other agents</a></li>
+</ul>
+<h4>Reference</h4>
+<ul>
+<li><a href="/docs/cli">CLI reference</a></li>
+<li><a href="/docs/how-it-works">How it works</a></li>
+<li><a href="/docs/security">Security model</a></li>
+<li><a href="/docs/faq">FAQ</a></li>
+</ul>
+  </nav>
+  <main>
+<article>
+<h1>Sync across machines: Vaultwarden or Bitwarden</h1>
+<p>Keep the secrets in Vaultwarden or Bitwarden instead to have them on several machines; <code>run</code>, the
+hooks, the MCP server and everything else work the same, through the Bitwarden CLI.</p>
+<p><strong>Get a vault</strong> — pick one:</p>
+<ul>
+<li><strong>Self-host Vaultwarden</strong> (free, your server): follow
+<a href="https://github.com/dinhkarate/keyshroud/tree/main/examples/vaultwarden#readme">examples/vaultwarden</a> — Docker Compose + Caddy with automatic HTTPS,
+from an empty VPS to <code>keyshroud doctor</code>, plus backups and hardening.</li>
+<li><strong>Bitwarden cloud</strong> (free account, no server): sign up at <a href="https://bitwarden.com">bitwarden.com</a>
+and skip <code>bw config server</code> below (EU accounts: <code>bw config server https://vault.bitwarden.eu</code>).</li>
+</ul>
+<pre data-lang="bash"><code>npm install -g @bitwarden/cli
+
+# 1. Point bw at your server and log in once
+bw config server https://vault.example.com
+bw login
+
+# 2. Make it the default for new items (keyshroud:// items keep working)
+mkdir -p ~/.config/keyshroud &amp;&amp; echo bw &gt; ~/.config/keyshroud/backend
+
+# 3. Unlock for 30 minutes (asks for the master password, which is not stored)
+keyshroud unlock
+
+# 4. Check everything
+keyshroud doctor</code></pre>
+<p>keyshroud picks the default once per machine and writes it to <code>~/.config/keyshroud/backend</code>:
+Vaultwarden when it finds a <code>bw</code> login or anything keyshroud 0.7 left behind, so upgrades change
+nothing; the local vault otherwise. <code>KEYSHROUD_BACKEND=local|bw</code> overrides it, and <code>keyshroud setup</code>
+switches to Vaultwarden by itself. References name their vault, so <code>keyshroud://…</code> and <code>bw://…</code> items work
+side by side, and <code>--item keyshroud://Name</code> or <code>--item bw://Name</code> picks one for a single item.</p>
+<p>keyshroud never stores the master password unless you do. When Vaultwarden is locked
+and a command needs a secret, it asks: a masked prompt in a terminal, a native dialog
+on the desktop (so an agent&#39;s command waits for you), and over SSH it tells you to run
+<code>keyshroud unlock</code>. A session ends after 30 minutes (<code>KEYSHROUD_SESSION_TTL_MS</code>): a timer
+runs <code>bw lock</code>, so a copied session token stops working too. On a host nobody sits at,
+<code>keyshroud unlock --unattended</code> asks once, in a terminal only, and opens a session without an end.</p>
+<p>To unlock without being asked, store the master password in the OS keychain
+(<code>security add-generic-password -a &quot;$USER&quot; -s vaultwarden-master-password -w</code>, or
+<code>secret-tool store</code> on Linux; after <code>setup</code> the entry is <code>keyshroud-master-password</code>; see the
+<a href="https://github.com/dinhkarate/keyshroud/tree/main/examples/vaultwarden#optional-unlock-without-being-asked">vault setup guide</a>). Any program running
+as you can then read it, agents included. Windows has no keychain support for it.</p>
+<h2 id="least-privilege-a-separate-agent-account"><a class="anchor" href="#least-privilege-a-separate-agent-account">Least privilege: a separate agent account</a></h2>
+<p>With the steps above, an unlocked session opens your whole Vaultwarden vault, and an agent that
+runs <code>bw</code> as you can use it. <code>setup</code> gives keyshroud its own <code>bw</code> login on a dedicated
+account instead, which holds only the secrets agents need:</p>
+<pre data-lang="bash"><code>keyshroud setup --email you+agent@example.com   # opens the signup page, then logs in with the
+                                                 # new master password (asked, not stored);
+                                                 # no `bw config server`: Bitwarden cloud
+keyshroud migrate                                # dry run: which wired items would be copied
+keyshroud migrate --yes                          # copy them; references keep working</code></pre>
+<ul>
+<li>The agent login lives in <code>~/.config/keyshroud/bw</code> (<code>BITWARDENCLI_APPDATA_DIR</code>). Your own <code>bw</code>
+login is untouched. Its master password is not stored: keyshroud asks for it when a session
+ends and keeps only a scrypt hash, so <code>add</code> can refuse it as a secret.</li>
+<li><code>migrate</code> copies the items that wired names (and any <code>--env-file</code> / <code>--item</code>) reference, with
+the same names, then locks your personal vault again. Originals stay where they are. It asks
+for your personal master password in a terminal (or reads the keychain entry <code>vaultwarden-master-password</code>).</li>
+<li>An agent can run <code>setup</code> too. Without a terminal it opens the signup page, where you pick the
+agent account&#39;s master password yourself (save it in your password manager); then the agent
+runs <code>setup --registered</code>, which asks for it in a dialog. The password never passes through
+anything the agent can read. <code>--confirm-unlock</code> and <code>--unattended</code> need a terminal.</li>
+<li><code>--confirm-unlock</code> (macOS) stores the master password in the keychain entry
+<code>keyshroud-master-password</code> so that macOS asks you before every read, i.e. every unlock.</li>
+<li>If bw loses the login (a rejected refresh token logs it out), keyshroud on a Mac with the
+master password in the keychain asks for Touch ID and logs the agent account back in.</li>
+<li><code>--unattended</code> (hosts nobody sits at, e.g. over <code>ssh -t</code>) logs in with a session without an
+end. Unlock it again with <code>keyshroud unlock --unattended</code>.</li>
+<li>Self-hosted Vaultwarden with <code>SIGNUPS_ALLOWED=false</code>: invite the address from the admin page
+(<code>/admin</code>), or allow signups for a minute, then pass <code>--registered</code> once the account exists.</li>
+</ul>
+<h2 id="moving-back-to-the-local-vault"><a class="anchor" href="#moving-back-to-the-local-vault">Moving back to the local vault</a></h2>
+<p><code>keyshroud migrate --to local</code> shows which Vaultwarden items your wired
+names use; <code>--yes</code> copies them into the local vault, checks each copy, rewires the names and makes the
+local vault the default for new items. A field other than the password becomes an item of its own
+(<code>Sentry (field dsn)</code>). Vaultwarden keeps the originals, the previous references are saved next to the
+vault (names and references only), and <code>.env.refs</code> files keep their <code>bw://</code> references until you change
+them. Other machines that use the same Vaultwarden are not affected.</p>
+</article>
+<p class="edit"><a href="https://github.com/dinhkarate/keyshroud/blob/main/docs/vaultwarden.md">Edit this page on GitHub</a> · <a href="/docs/vaultwarden.md">Markdown</a></p>
+<div class="steps"><a class="prev" rel="prev" href="/docs/local-vault"><span>Previous</span>The local vault</a><a class="next" rel="next" href="/docs/team-secret-managers"><span>Next</span>Team secret managers</a></div>
+  </main>
+</div>
+<footer>
+  <div class="wrap">
+    <p>keyshroud · MIT · <a href="https://github.com/dinhkarate/keyshroud">GitHub</a> · <a href="https://www.npmjs.com/package/keyshroud">npm</a> · <a href="/llms.txt">llms.txt</a> · Not affiliated with Anthropic, Bitwarden, Inc. or any vendor named here.</p>
+  </div>
+</footer>
+<script src="/docs/docs.js" defer></script>
+</body>
+</html>
