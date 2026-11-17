@@ -127,7 +127,7 @@ claude guard=off</code></pre>
 </tr>
 <tr>
 <td><code>keyshroud: unresolved (names only): NAME</code></td>
-<td>A reference in <code>--env-file</code> points at an item that does not exist here; the command still runs, without that variable</td>
+<td>A reference in a <code>--refs</code> file points at an item that does not exist here; the command still runs, without that variable</td>
 <td>Check the item&#39;s name in <code>.env.refs</code> against <code>keyshroud list</code>; a teammate&#39;s vault may not have it yet</td>
 </tr>
 <tr>
@@ -144,6 +144,11 @@ claude guard=off</code></pre>
 <td><code>Ambiguous vault item name: NAME</code> (exit <code>4</code>)</td>
 <td>Two items share that name</td>
 <td>Rename one of them in the vault</td>
+</tr>
+<tr>
+<td><code>node: FILE: not found</code> (exit <code>9</code>)</td>
+<td>The file was named with <code>--env-file</code>, and Node.js 20.6 or later read that flag itself before keyshroud started</td>
+<td>Use <code>--refs FILE</code>, and check the path</td>
 </tr>
 </tbody></table>
 </div>

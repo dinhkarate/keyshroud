@@ -20,10 +20,11 @@ A line that says `status=locked` or `resolved=no` is the place to look.
 |---|---|---|
 | `Secret unresolved: NAME is not wired` (exit `4`) | No variable of that name points at a vault item | `keyshroud list` to see what is wired; `keyshroud add --env NAME --item "Item"` or `keyshroud wire --env NAME --item "Item"` |
 | `Secret unresolved: NAME is outside this project's scope (…/.keyshroud.json)` (exit `4`) | A [project scope](project-scope.md) in this directory leaves that name out | Run the command where the name belongs, or widen the scope yourself: `keyshroud scope --only '…'`. An agent should ask you, not edit the file |
-| `keyshroud: unresolved (names only): NAME` | A reference in `--env-file` points at an item that does not exist here; the command still runs, without that variable | Check the item's name in `.env.refs` against `keyshroud list`; a teammate's vault may not have it yet |
+| `keyshroud: unresolved (names only): NAME` | A reference in a `--refs` file points at an item that does not exist here; the command still runs, without that variable | Check the item's name in `.env.refs` against `keyshroud list`; a teammate's vault may not have it yet |
 | `keyshroud: unresolved (names only): NAME (The local vault is locked: …)` | The vault could not be opened, so the command ran without that variable | See the next section |
 | `Secret unresolved: NAME (…)` from `run --only NAME` (exit `3` or `4`) | The name you asked for did not resolve, so the command was not run: `3` when the vault could not be unlocked, `4` otherwise | The reason is in the brackets; fix it and run the command again |
 | `Ambiguous vault item name: NAME` (exit `4`) | Two items share that name | Rename one of them in the vault |
+| `node: FILE: not found` (exit `9`) | The file was named with `--env-file`, and Node.js 20.6 or later read that flag itself before keyshroud started | Use `--refs FILE`, and check the path |
 
 ## The vault is locked
 

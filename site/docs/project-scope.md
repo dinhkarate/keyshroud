@@ -32,5 +32,5 @@ The file holds names and patterns only (`*` stands for any run of characters), s
 a teammate's machine applies it to whatever they have wired under those names. A file that cannot be
 read as a scope (also a link to a file that is gone) puts nothing in scope and says why, instead of
 falling back to everything or to a scope further up. References
-(`--env-file .env.refs`, `get keyshroud://Item`) are not narrowed: they already name what they want.
+(`--refs .env.refs`, `get keyshroud://Item`) are not narrowed: they already name what they want.
 A scope is a default against accidents, not a wall: see the [security model](security.md).

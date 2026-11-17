@@ -43,7 +43,7 @@ To add or rotate a secret later, do it in that directory again and commit the ne
 npm i -g keyshroud
 mkdir -p ~/.config/keyshroud && cp ci/vault.json ~/.config/keyshroud/
 printf '%s' "$KEYSHROUD_PASSPHRASE" | keyshroud unlock --stdin   # a session of 30 minutes
-keyshroud run --env-file .env.refs -- npm run deploy
+keyshroud run --refs .env.refs -- npm run deploy
 ```
 
 `unlock --stdin` only opens an existing passphrase vault; a new passphrase is always chosen in a
@@ -67,7 +67,7 @@ jobs:
         run: |
           mkdir -p ~/.config/keyshroud && cp ci/vault.json ~/.config/keyshroud/
           printf '%s' "$KEYSHROUD_PASSPHRASE" | keyshroud unlock --stdin
-      - run: keyshroud run --env-file .env.refs -- npm run deploy
+      - run: keyshroud run --refs .env.refs -- npm run deploy
 ```
 
 Later steps in the same job use the open session; they do not need the passphrase again. A job that
@@ -88,7 +88,7 @@ COPY . .
 RUN --mount=type=secret,id=keyshroud_passphrase \
     mkdir -p ~/.config/keyshroud && cp ci/vault.json ~/.config/keyshroud/ && \
     keyshroud unlock --stdin < /run/secrets/keyshroud_passphrase && \
-    keyshroud run --env-file .env.refs -- npm run build && \
+    keyshroud run --refs .env.refs -- npm run build && \
     keyshroud lock
 ```
 
@@ -107,7 +107,7 @@ vault file, pass the passphrase the way your platform passes secrets, and start 
 keyshroud:
 
 ```bash
-printf '%s' "$KEYSHROUD_PASSPHRASE" | keyshroud unlock --stdin && exec keyshroud run --env-file .env.refs -- node server.js
+printf '%s' "$KEYSHROUD_PASSPHRASE" | keyshroud unlock --stdin && exec keyshroud run --refs .env.refs -- node server.js
 ```
 
 ## A server you reach over SSH

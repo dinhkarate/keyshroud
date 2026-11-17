@@ -127,7 +127,7 @@ It never writes to those systems, and what your account may read there is still 
 secret store, then:</p>
 <pre data-lang="bash"><code>mkdir -p ~/.config/keyshroud &amp;&amp; cp vault.json ~/.config/keyshroud/
 printf '%s' &quot;$KEYSHROUD_PASSPHRASE&quot; | keyshroud unlock --stdin   # a session of 30 minutes
-keyshroud run --env-file .env.refs -- npm test</code></pre>
+keyshroud run --refs .env.refs -- npm test</code></pre>
 <p><code>--stdin</code> only opens an existing passphrase vault; a new passphrase is always chosen in a terminal.
 <code>KEYSHROUD_PASSPHRASE</code> is the name keyshroud knows the passphrase by: commands started by <code>run</code> do not
 receive that variable, and its value is masked in their output. A

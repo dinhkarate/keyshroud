@@ -1,6 +1,6 @@
 {
   "name": "keyshroud",
-  "version": "0.12.2",
+  "version": "0.12.3",
   "mcpName": "io.github.dinhkarate/keyshroud",
   "description": "Let AI coding agents use your secrets without ever seeing them. Encrypted local vault, self-hosted Vaultwarden/Bitwarden, or your team's HashiCorp Vault, OpenBao, Infisical, 1Password, AWS, Google Cloud or Azure secrets; masked output, MCP server, Claude Code + pi plugins.",
   "keywords": [

@@ -84,7 +84,7 @@ async function envFile(box: Sandbox, lines: string[]): Promise<string> {
 
 // Masked output of a command that prints the named variables.
 async function printed(box: Sandbox, file: string, names: string[], env: Record<string, string> = {}): Promise<string> {
-  const run = await runCli(box, ["run", "--no-auth", "--env-file", file, "--", "sh", "-c", names.map((name) => `echo "${name}=$${name}"`).join("; ")], undefined, env);
+  const run = await runCli(box, ["run", "--no-auth", "--refs", file, "--", "sh", "-c", names.map((name) => `echo "${name}=$${name}"`).join("; ")], undefined, env);
   return run.stdout + run.stderr;
 }
 
@@ -123,7 +123,7 @@ test("vault://: KV v2 and v1 by mount/path, a field by #key or the only one, wit
     assert.match(noField.stderr, /has no field nope/);
 
     // The token is masked wherever a command prints it, in the run and by the Claude Code hook.
-    const leak = await runCli(box, ["run", "--no-auth", "--env-file", file, "--", "cat", join(box.env.HOME, ".vault-token")]);
+    const leak = await runCli(box, ["run", "--no-auth", "--refs", file, "--", "cat", join(box.env.HOME, ".vault-token")]);
     assert.equal(leak.stdout.trim(), "<redacted:VAULT_SOURCE_TOKEN>");
     const post = await runCli(box, ["hook", "claude", "post-tool-use"], JSON.stringify({ tool_response: { stdout: `${ROOT} kv1-made-up-token-0003` } }));
     assert.equal(JSON.parse(post.stdout).hookSpecificOutput.updatedToolOutput.stdout, "<redacted:VAULT_SOURCE_TOKEN> <redacted:LEGACY>");
@@ -143,7 +143,7 @@ test("vault://: an AppRole's secret id is kept in the vault, one login serves ev
 
     fake.hits.length = 0;
     const file = await envFile(box, ["DB_PASSWORD=vault://secret/app/db#password", "ONLY=vault://secret/single", "LEGACY=vault://kv1/legacy#token"]);
-    const run = await runCli(box, ["run", "--no-auth", "--env-file", file, "--", "sh", "-c", "echo $DB_PASSWORD $ONLY; echo hvs.made-up-approle-token-0005 made-up-secret-id-0006"]);
+    const run = await runCli(box, ["run", "--no-auth", "--refs", file, "--", "sh", "-c", "echo $DB_PASSWORD $ONLY; echo hvs.made-up-approle-token-0005 made-up-secret-id-0006"]);
     assert.equal(run.stdout, "<redacted:DB_PASSWORD> <redacted:ONLY>\n<redacted:VAULT_SOURCE_TOKEN> <redacted:Source vault secret id>\n");
     assert.equal(fake.paths().filter((path) => path === "POST /v1/auth/approle/login").length, 1);
     assert.ok(fake.hits.filter((hit) => hit.method === "GET").every((hit) => hit.headers["x-vault-token"] === "hvs.made-up-approle-token-0005"));
@@ -196,7 +196,7 @@ test("vault://: a token goes only to the address `source add` was given, and a f
     // Nothing the server says is passed on, whatever it repeats: the status, in keyshroud's words.
     const echoed = await runCli(box, ["get", "vault://secret/echo/x#y"]);
     assert.equal(echoed.stderr.trim(), "Secret unresolved: vault://secret/echo/x#y (vault://secret/echo/x: HTTP 500 (the server failed))");
-    const leaky = await runCli(box, ["run", "--no-auth", "--env-file", await envFile(box, ["ONLY=vault://secret/single", "BAD=vault://secret/leak/x#y"]), "--", "true"]);
+    const leaky = await runCli(box, ["run", "--no-auth", "--refs", await envFile(box, ["ONLY=vault://secret/single", "BAD=vault://secret/leak/x#y"]), "--", "true"]);
     assert.equal(leaky.stderr.trim(), "keyshroud: unresolved (names only): BAD (vault://secret/leak/x: HTTP 500 (the server failed))");
     const template = join(box.dir, "config.tpl");
     await writeFile(template, "a={{ vault://secret/single }}\nb={{ vault://secret/leak/x#y }}\n");
@@ -278,7 +278,7 @@ test("infisical://: a machine identity's client secret is kept in the vault; a s
 
     fake.hits.length = 0;
     const file = await envFile(box, ["DB_PASSWORD=infisical://proj-1/dev/DB_PASSWORD", "API_KEY=infisical://proj-1/dev/backend/api/API_KEY", "GONE=infisical://proj-1/dev/NOPE", "SHORT=infisical://proj-1/DB_PASSWORD"]);
-    const run = await runCli(box, ["run", "--no-auth", "--env-file", file, "--", "sh", "-c", `echo $DB_PASSWORD $API_KEY; echo ${TOKEN} made-up-client-secret-0012`]);
+    const run = await runCli(box, ["run", "--no-auth", "--refs", file, "--", "sh", "-c", `echo $DB_PASSWORD $API_KEY; echo ${TOKEN} made-up-client-secret-0012`]);
     assert.equal(run.stdout, "<redacted:DB_PASSWORD> <redacted:API_KEY>\n<redacted:INFISICAL_SOURCE_TOKEN> <redacted:Source infisical client secret>\n");
     assert.match(run.stderr, /unresolved \(names only\): GONE, SHORT/);
     assert.equal(fake.paths().filter((path) => path.startsWith("POST")).length, 1);

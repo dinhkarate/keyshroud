@@ -112,7 +112,7 @@ test("import writes keyshroud:// references; inject, scan, redact and hooks cove
   assert.equal(imported.code, 0, imported.stderr);
   assert.match(imported.stdout, /API_TOKEN\s+secret\s+new\s+-> keyshroud:\/\/app API_TOKEN/);
   assert.match(await readFile(join(box.dir, ".env.refs"), "utf8"), /^API_TOKEN=keyshroud:\/\/app API_TOKEN$/m);
-  const run = await runCli(box, ["run", "--env-file", ".env.refs", "--mask", "--", "sh", "-c", 'echo "$API_TOKEN $LOG_LEVEL"']);
+  const run = await runCli(box, ["run", "--refs", ".env.refs", "--mask", "--", "sh", "-c", 'echo "$API_TOKEN $LOG_LEVEL"']);
   assert.equal(run.stdout, "<redacted:API_TOKEN> debug\n", run.stderr);
   assert.equal((await runCli(box, ["inject"], "token={{ keyshroud://app API_TOKEN }}\n")).stdout, `token=${TOKEN}\n`);
   await writeFile(join(box.dir, "leak.txt"), `oops ${TOKEN}\n`);
@@ -150,10 +150,10 @@ test("rotate, wire and api-key take names or keyshroud:// references; bw referen
   await writeFile(join(box.dir, "keychain", "vaultwarden-master-password"), "master\n");
   assert.equal((await runCli(box, ["get", "bw://Old token"])).stdout, "bw-value-0001");
   await writeFile(join(box.dir, "mixed.env"), "A=keyshroud://Item A\nB=bw://Old token\nC=local://Item A\n");
-  const mixed = await runCli(box, ["run", "--env-file", "mixed.env", "--no-mask", "--", "sh", "-c", 'echo "$A $B $C"']);
+  const mixed = await runCli(box, ["run", "--refs", "mixed.env", "--no-mask", "--", "sh", "-c", 'echo "$A $B $C"']);
   assert.equal(mixed.stdout, "second-value-456 bw-value-0001 second-value-456\n", mixed.stderr);
   // The value of A is also wired as A_TOKEN; either name may label it.
-  assert.match((await runCli(box, ["run", "--env-file", "mixed.env", "--mask", "--", "sh", "-c", 'echo "$A $B"'])).stdout, /^<redacted:[A-Z_]+> <redacted:B>\n$/);
+  assert.match((await runCli(box, ["run", "--refs", "mixed.env", "--mask", "--", "sh", "-c", 'echo "$A $B"'])).stdout, /^<redacted:[A-Z_]+> <redacted:B>\n$/);
   assert.match((await runCli(box, ["status"])).stdout, /^backend=local/m);
 });
 

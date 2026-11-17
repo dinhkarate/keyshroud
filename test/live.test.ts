@@ -28,7 +28,7 @@ async function api(addr: string, method: string, path: string, headers: Record<s
 
 // Masked output of a command that prints the named variables.
 async function printed(box: Sandbox, file: string, names: string[], env: Record<string, string> = {}): Promise<string> {
-  const run = await runCli(box, ["run", "--no-auth", "--env-file", file, "--", "sh", "-c", names.map((name) => `echo "${name}=$${name}"`).join("; ")], undefined, env);
+  const run = await runCli(box, ["run", "--no-auth", "--refs", file, "--", "sh", "-c", names.map((name) => `echo "${name}=$${name}"`).join("; ")], undefined, env);
   return run.stdout + run.stderr;
 }
 
@@ -70,7 +70,7 @@ for (const addr of VAULTS) {
     assert.equal(several.code, 4);
     assert.match(several.stderr, /holds 3 fields \(.*password.*\): name one as vault:\/\/secret\/ks-\w+\/db#field/);
     // The token itself is masked wherever a command prints it.
-    const leak = await runCli(box, ["run", "--no-auth", "--env-file", refs, "--", "cat", join(box.env.HOME, ".vault-token")]);
+    const leak = await runCli(box, ["run", "--no-auth", "--refs", refs, "--", "cat", join(box.env.HOME, ".vault-token")]);
     assert.equal(leak.stdout.trim(), "<redacted:VAULT_SOURCE_TOKEN>");
 
     // AppRole: the secret id is kept in the local vault; its token reads what its policy allows.

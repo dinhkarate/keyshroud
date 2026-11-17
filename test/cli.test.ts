@@ -66,7 +66,7 @@ test("get resolves wired names and bw:// references", async () => {
 test("run injects secrets and masks them in piped output", async () => {
   const box = await wired();
   await writeFile(join(box.dir, ".env.refs"), "EXTRA=bw://npm publish\nMODE=debug\n");
-  const result = await runCli(box, ["run", "--env-file", ".env.refs", "--", "/bin/sh", "-c", "echo gh=$GH_TOKEN; echo extra=$EXTRA mode=$MODE; echo err=$NPM_TOKEN >&2; exit 7"]);
+  const result = await runCli(box, ["run", "--refs", ".env.refs", "--", "/bin/sh", "-c", "echo gh=$GH_TOKEN; echo extra=$EXTRA mode=$MODE; echo err=$NPM_TOKEN >&2; exit 7"]);
   assert.equal(result.code, 7);
   // EXTRA and NPM_TOKEN share a value; the first wired name labels it.
   assert.equal(result.stdout, "gh=<redacted:GH_TOKEN>\nextra=<redacted:NPM_TOKEN> mode=debug\n");
@@ -80,7 +80,7 @@ test("env files cannot run shell commands", async () => {
   const box = await wired();
   const marker = join(box.dir, "pwned");
   await writeFile(join(box.dir, ".env.refs"), `X=!touch ${marker}\n`);
-  const result = await runCli(box, ["run", "--no-auth", "--env-file", ".env.refs", "--", "true"]);
+  const result = await runCli(box, ["run", "--no-auth", "--refs", ".env.refs", "--", "true"]);
   assert.notEqual(result.code, 0);
   assert.match(result.stderr, /accept only bw:\/\/ references/);
   await assert.rejects(stat(marker));
@@ -99,7 +99,7 @@ test("values from env files used by run stay covered by the hook index", async (
   const box = await wired();
   await writeFile(join(box.dir, ".env.refs"), "ORG=bw://GitHub CLI token/fields/org\n");
   await runCli(box, ["hook", "claude", "session-start"], "{}");
-  assert.equal((await runCli(box, ["run", "--env-file", ".env.refs", "--", "true"])).code, 0);
+  assert.equal((await runCli(box, ["run", "--refs", ".env.refs", "--", "true"])).code, 0);
   await runCli(box, ["hook", "claude", "session-start"], "{}");
   const post = await runCli(box, ["hook", "claude", "post-tool-use"], JSON.stringify({ tool_response: { stdout: "org=acme-org" } }));
   assert.equal(JSON.parse(post.stdout).hookSpecificOutput.updatedToolOutput.stdout, "org=<redacted:ORG>");
@@ -169,7 +169,7 @@ test("run --no-mask passes values through and --only limits injection", async ()
 test("run without -- (Windows PowerShell drops it): the command starts after run's own options", async () => {
   const box = await wired();
   await writeFile(join(box.dir, ".env.refs"), "MODE=debug\n");
-  const result = await runCli(box, ["run", "--env-file", ".env.refs", "--only", "GH_TOKEN,MODE", "/bin/sh", "-c", "echo gh=$GH_TOKEN npm=$NPM_TOKEN mode=$MODE"]);
+  const result = await runCli(box, ["run", "--refs", ".env.refs", "--only", "GH_TOKEN,MODE", "/bin/sh", "-c", "echo gh=$GH_TOKEN npm=$NPM_TOKEN mode=$MODE"]);
   assert.equal(result.code, 0, result.stderr);
   assert.equal(result.stdout, "gh=<redacted:GH_TOKEN> npm= mode=debug\n");
   // An option that is not run's own still fails, and so does run with no command.
@@ -289,7 +289,7 @@ test("the dialog refuses spoofed names, the master password, a second dialog, an
 test("env files and wiring cannot set variables that change what programs load", async () => {
   const box = await wired();
   await writeFile(join(box.dir, ".env.refs"), "PATH=/tmp/evil:/usr/bin:/bin\nGH_TOKEN=bw://GitHub CLI token\n");
-  const path = await runCli(box, ["run", "--env-file", ".env.refs", "--", "sh", "-c", "echo ok"]);
+  const path = await runCli(box, ["run", "--refs", ".env.refs", "--", "sh", "-c", "echo ok"]);
   assert.notEqual(path.code, 0);
   assert.match(path.stderr, /PATH changes what programs load or run/);
   await writeFile(join(box.dir, ".env.refs"), "NODE_OPTIONS=--require ./evil.js\n");
@@ -300,6 +300,20 @@ test("env files and wiring cannot set variables that change what programs load",
   const run = await runCli(box, ["run", "--", "sh", "-c", "echo bash_env=${BASH_ENV:-unset}"]);
   assert.match(run.stdout, /bash_env=unset/);
   assert.doesNotMatch((await runCli(box, ["env"])).stdout, /BASH_ENV/);
+});
+
+test("Node.js does not read a --refs file itself; --env-file still names one", async () => {
+  const box = await wired();
+  await writeFile(join(box.dir, "evil.js"), `require("node:fs").writeFileSync(${JSON.stringify(join(box.dir, "loaded"))}, "");\n`);
+  await writeFile(join(box.dir, ".env.refs"), `NODE_OPTIONS=--require ${join(box.dir, "evil.js")}\n`);
+  const run = await runCli(box, ["run", "--no-auth", "--refs", ".env.refs", "--", "sh", "-c", "echo ok"]);
+  assert.notEqual(run.code, 0);
+  assert.match(run.stderr, /NODE_OPTIONS changes what programs load or run/);
+  assert.ok(!existsSync(join(box.dir, "loaded")));
+  await writeFile(join(box.dir, "old.refs"), "EXTRA=bw://npm publish\n");
+  await writeFile(join(box.dir, ".env.refs"), "MODE=debug\n");
+  const old = await runCli(box, ["run", "--no-auth", "--env-file", "old.refs", "--refs", ".env.refs", "--", "sh", "-c", "echo $EXTRA $MODE"]);
+  assert.equal(old.stdout, "<redacted:EXTRA> debug\n", old.stderr);
 });
 
 const DOTENV = [
@@ -345,7 +359,7 @@ test("import --yes stores secrets, writes .env.refs that run resolves, and re-ru
   assert.match(refs, /^PORT=3000$/m);
   assert.match(refs, /^# app config$/m);
   assert.equal(await readFile(join(box.dir, ".env"), "utf8"), DOTENV);
-  const run = await runCli(box, ["run", "--no-mask", "--env-file", ".env.refs", "--only", "STRIPE_SECRET_KEY,DATABASE_URL,PORT", "--", "/bin/sh", "-c", "echo $STRIPE_SECRET_KEY $DATABASE_URL $PORT"]);
+  const run = await runCli(box, ["run", "--no-mask", "--refs", ".env.refs", "--only", "STRIPE_SECRET_KEY,DATABASE_URL,PORT", "--", "/bin/sh", "-c", "echo $STRIPE_SECRET_KEY $DATABASE_URL $PORT"]);
   assert.equal(run.stdout, "sk_test_FAKE0123456789abcd postgres://app:pa55-FAKE-word@db:5432/app 3000\n", run.stderr);
   const count = (await box.vault()).items.length;
   assert.equal((await runCli(box, ["import", "--prefix", "app", "--yes"])).code, 5);
@@ -711,7 +725,7 @@ test("setup that stops before the agent login leaves the personal login in place
 test("an empty literal in an env file reaches the command and is not unresolved", async () => {
   const box = await wired();
   await writeFile(join(box.dir, ".env.refs"), "EMPTY=\nTOKEN=bw://GitHub CLI token\n");
-  const run = await runCli(box, ["run", "--no-auth", "--env-file", ".env.refs", "--", "sh", "-c", "test \"${EMPTY+set}\" = set && echo set"]);
+  const run = await runCli(box, ["run", "--no-auth", "--refs", ".env.refs", "--", "sh", "-c", "test \"${EMPTY+set}\" = set && echo set"]);
   assert.equal(run.code, 0, run.stderr);
   assert.match(run.stdout, /set/);
   assert.doesNotMatch(run.stderr, /unresolved/);
@@ -973,7 +987,7 @@ test("run: bw's own variables are never wired or injected, --only also drops the
   // The passphrase's name is reserved like bw's: neither wiring nor an env file puts it back.
   assert.equal((await runCli(box, ["wire", "--env", "KEYSHROUD_PASSPHRASE", "--item", "npm publish"])).code, 2);
   await writeFile(join(box.dir, ".env.refs"), "KEYSHROUD_PASSPHRASE=from-a-file-fake-02\n");
-  const file = await runCli(box, ["run", "--env-file", ".env.refs", "--", "/bin/sh", "-c", "echo p=${KEYSHROUD_PASSPHRASE:-none}"]);
+  const file = await runCli(box, ["run", "--refs", ".env.refs", "--", "/bin/sh", "-c", "echo p=${KEYSHROUD_PASSPHRASE:-none}"]);
   assert.notEqual(file.code, 0);
   assert.ok(!file.stdout.includes("from-a-file"));
 });
@@ -991,7 +1005,7 @@ test("a key written into auth.json itself is masked like a vault value, by run a
   // a literal that an env file overrides under the same name is still in the file, so both are masked.
   await writeAuth(box, { groq: { type: "api_key", key: "FAKE_TOKEN_123456" }, mistral: { type: "api_key", key: "MISTRAL_ENV_KEY" }, API_TOKEN: "literal-api-FAKE-000111" });
   await writeFile(join(box.dir, ".env.refs"), "API_TOKEN=bw://npm publish\n");
-  const both = await runCli(box, ["run", "--env-file", ".env.refs", "--", "echo", "FAKE_TOKEN_123456", "mistral-value-0123", "MISTRAL_ENV_KEY", "literal-api-FAKE-000111", NPM], "", { MISTRAL_ENV_KEY: "mistral-value-0123" });
+  const both = await runCli(box, ["run", "--refs", ".env.refs", "--", "echo", "FAKE_TOKEN_123456", "mistral-value-0123", "MISTRAL_ENV_KEY", "literal-api-FAKE-000111", NPM], "", { MISTRAL_ENV_KEY: "mistral-value-0123" });
   assert.equal(both.stdout, "<redacted:groq> <redacted:mistral> MISTRAL_ENV_KEY <redacted:API_TOKEN (2)> <redacted:API_TOKEN>\n", both.stderr);
 
   // A key with a variable inside it is masked as older pi reads it (the text) and as pi 1.5 does
@@ -1009,7 +1023,7 @@ test("a key written into auth.json itself is masked like a vault value, by run a
     single: { type: "api_key", key: "$ONLY_HERE", env: { ONLY_HERE: "only-here-FAKE-4567" } },
   });
   await writeFile(join(box.dir, ".env.refs"), "ORG=bw://npm publish\n");
-  const more = await runCli(box, ["run", "--env-file", ".env.refs", "--", "echo", "tpl-FAKE-$PART_ENV-end", "tpl-FAKE-middle0123-end", "acme-org", "scope-fake-0123", "FAKE-${literal$UNSET}-tail-middle0123", "FAKE-own-from-entry-0123-x", "only-here-FAKE-4567"], "", { PART_ENV: "middle0123" });
+  const more = await runCli(box, ["run", "--refs", ".env.refs", "--", "echo", "tpl-FAKE-$PART_ENV-end", "tpl-FAKE-middle0123-end", "acme-org", "scope-fake-0123", "FAKE-${literal$UNSET}-tail-middle0123", "FAKE-own-from-entry-0123-x", "only-here-FAKE-4567"], "", { PART_ENV: "middle0123" });
   assert.equal(more.stdout, "<redacted:together> <redacted:together (2)> <redacted:ORG (2)> <redacted:xai> <redacted:braces (2)> <redacted:mine (2)> <redacted:single>\n", more.stderr);
 });
 

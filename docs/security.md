@@ -66,7 +66,8 @@ the file off the machines agents work on.
   rejected, and so are variables that change what programs load or run (`PATH`,
   `NODE_OPTIONS`, `LD_*`, `DYLD_*`, `BASH_ENV`, `GIT_SSH_COMMAND`, …), which are
   also never wired or injected (the list covers the common ones, not every tool's:
-  an env file still configures the program it is used with);
+  an env file still configures the program it is used with). This holds for a file given with
+  `--refs` or to the MCP tools; `--env-file`, the flag's name before 0.12.3, is the exception below;
 - an unparseable `env.json` or `auth.json` is never overwritten;
 - a [source](team-secret-managers.md) is only
   read, at the address `source add` was given: a reference cannot name a server, the address must be
@@ -117,7 +118,11 @@ the file off the machines agents work on.
 
 - A `.env.refs` can reference **any** item in your vault, not only the ones you wired, and any secret
   your sign-in to a source may read (keep a Vault token's policy, or the machine identity's access, as
-  narrow as the work needs), so read a cloned repo's `.env.refs` before running `--env-file` with it.
+  narrow as the work needs), so read a cloned repo's `.env.refs` before running `--refs` with it.
+- `run --env-file F`, the older spelling of `--refs F`, still works, but Node.js 20.6 and later reads
+  a file named that way itself, before keyshroud starts: a `NODE_OPTIONS` line in it is applied to
+  keyshroud's own process, and keyshroud's refusal comes too late. Use `--refs`, which Node.js does
+  not know, with any file you did not write.
 - `import` decides what is secret by heuristics and keeps everything else as a literal; check its plan
   before committing `.env.refs`.
 

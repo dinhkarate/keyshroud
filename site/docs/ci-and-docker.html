@@ -126,7 +126,7 @@ NPM_TOKEN=keyshroud://ci NPM_TOKEN</code></pre>
 <pre data-lang="bash"><code>npm i -g keyshroud
 mkdir -p ~/.config/keyshroud &amp;&amp; cp ci/vault.json ~/.config/keyshroud/
 printf '%s' &quot;$KEYSHROUD_PASSPHRASE&quot; | keyshroud unlock --stdin   # a session of 30 minutes
-keyshroud run --env-file .env.refs -- npm run deploy</code></pre>
+keyshroud run --refs .env.refs -- npm run deploy</code></pre>
 <p><code>unlock --stdin</code> only opens an existing passphrase vault; a new passphrase is always chosen in a
 terminal. <code>keyshroud run</code> does not hand <code>KEYSHROUD_PASSPHRASE</code> on to the command it starts, and masks
 its value in the output like any other secret.</p>
@@ -145,7 +145,7 @@ its value in the output like any other secret.</p>
         run: |
           mkdir -p ~/.config/keyshroud &amp;&amp; cp ci/vault.json ~/.config/keyshroud/
           printf '%s' &quot;$KEYSHROUD_PASSPHRASE&quot; | keyshroud unlock --stdin
-      - run: keyshroud run --env-file .env.refs -- npm run deploy</code></pre>
+      - run: keyshroud run --refs .env.refs -- npm run deploy</code></pre>
 <p>Later steps in the same job use the open session; they do not need the passphrase again. A job that
 runs longer than 30 minutes before it needs a secret unlocks again at that point, or sets
 <code>KEYSHROUD_SESSION_TTL_MS</code> higher.</p>
@@ -160,7 +160,7 @@ COPY . .
 RUN --mount=type=secret,id=keyshroud_passphrase \
     mkdir -p ~/.config/keyshroud &amp;&amp; cp ci/vault.json ~/.config/keyshroud/ &amp;&amp; \
     keyshroud unlock --stdin &lt; /run/secrets/keyshroud_passphrase &amp;&amp; \
-    keyshroud run --env-file .env.refs -- npm run build &amp;&amp; \
+    keyshroud run --refs .env.refs -- npm run build &amp;&amp; \
     keyshroud lock</code></pre>
 <pre data-lang="bash"><code>docker build --secret id=keyshroud_passphrase,env=KEYSHROUD_PASSPHRASE .</code></pre>
 <p><code>keyshroud lock</code> at the end matters: an open session is a file beside the vault, and without the lock
@@ -170,7 +170,7 @@ generated config) is in the image regardless: keyshroud masks what is printed, n
 <p>A container is a new machine: it has no keychain, so the vault there is a passphrase vault. Mount the
 vault file, pass the passphrase the way your platform passes secrets, and start the service through
 keyshroud:</p>
-<pre data-lang="bash"><code>printf '%s' &quot;$KEYSHROUD_PASSPHRASE&quot; | keyshroud unlock --stdin &amp;&amp; exec keyshroud run --env-file .env.refs -- node server.js</code></pre>
+<pre data-lang="bash"><code>printf '%s' &quot;$KEYSHROUD_PASSPHRASE&quot; | keyshroud unlock --stdin &amp;&amp; exec keyshroud run --refs .env.refs -- node server.js</code></pre>
 <h2 id="a-server-you-reach-over-ssh"><a class="anchor" href="#a-server-you-reach-over-ssh">A server you reach over SSH</a></h2>
 <p>Create a passphrase vault there and run <code>keyshroud unlock --unattended</code> once in a terminal: that
 session has no time limit, until <code>keyshroud lock</code>.</p>

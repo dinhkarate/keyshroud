@@ -2,7 +2,7 @@
 
 ```text
 keyshroud get <ENV_NAME | keyshroud://ref | bw://ref | source ref>   print one value (for scripts; not for agents)
-keyshroud run [--env-file F]... [--only A,B] [--no-auth] [--mask|--no-mask] -- <cmd>
+keyshroud run [--refs F]... [--only A,B] [--no-auth] [--mask|--no-mask] -- <cmd>
 keyshroud inject [-i template] [-o out] [--force]
 keyshroud redact < log.txt
 keyshroud scan [paths...]
@@ -20,7 +20,7 @@ keyshroud source add vault [--addr URL] [--namespace NS] [--ca-file PEM] [--toke
 keyshroud source add infisical --client-id ID [--addr URL] [--ca-file PEM] [--stdin|--dialog]
 keyshroud source rm vault|infisical
 keyshroud setup --email EMAIL [--server URL] [--confirm-unlock | --unattended] [--registered]   (Vaultwarden)
-keyshroud migrate [--item NAME]... [--env-file F]... [--yes]                                    (Vaultwarden)
+keyshroud migrate [--item NAME]... [--refs F]... [--yes]                                        (Vaultwarden)
 keyshroud migrate --to local [--yes]                                                            (Vaultwarden -> local vault)
 keyshroud unlock [--unattended | --stdin]
 keyshroud rekey [--to keychain|secure-enclave|passphrase|dpapi]                                 (in a terminal)
@@ -53,6 +53,11 @@ the command still runs. A name you ask for with `--only` is one the command need
 resolve, the command is not run, and `run` exits `3` (the vault could not be unlocked) or `4`.
 `secrets_run` with `only` does the same.
 
+`--refs F` adds the names in a file of references (a `.env.refs`); give it more than once for several
+files. Before 0.12.3 the flag was `--env-file`. That spelling still works, so scripts keep running,
+but Node.js 20.6 and later reads a file named with `--env-file` itself, before keyshroud starts, and
+keyshroud cannot check the file first: use `--refs`, above all with a file you did not write.
+
 `add` and `rotate` read the value from a masked prompt that shows `*` per
 character. Without a terminal (an agent's shell), they open a native hidden-input
 dialog instead (`osascript` on macOS, `zenity` or `kdialog` on Linux, PowerShell on Windows), so the agent
@@ -72,7 +77,7 @@ rejected with the line number, never the value.
 ```bash
 keyshroud import                 # dry run: which names would move
 keyshroud import --yes           # store them and write .env.refs
-keyshroud run --env-file .env.refs -- npm test
+keyshroud run --refs .env.refs -- npm test
 ```
 
 **Exit codes:** `0` ok · `2` usage · `3` vault locked or unavailable, or a source that did not accept

@@ -127,7 +127,7 @@ created item=GitHub token env=GH_TOKEN targets=~/.config/keyshroud/env.json veri
 
 **"Claude Code keeps reading my `.env`."** Run `keyshroud import` to move the values into the vault
 and write a `.env.refs` with lines like `GH_TOKEN=keyshroud://myapp GH_TOKEN`, then start the agent
-with `keyshroud run --env-file .env.refs -- claude`. The plugin's hooks mask anything that still
+with `keyshroud run --refs .env.refs -- claude`. The plugin's hooks mask anything that still
 slips into a tool result.
 
 **"A failed command printed my token into the transcript."** Turn on
@@ -242,7 +242,7 @@ in CI; the `op`, `gcloud` and `az` paths against stand-in CLIs. Every option and
 |---|---|---|
 | **Claude Code** | [plugin](#claude-code) | SessionStart + PostToolUse redaction hooks, skill; [`claude-guard`](#the-guard-failed-commands-masked-too) masks failed commands too |
 | **pi / omp** | [`pi install npm:keyshroud`](#pi--omp) | env hydration, `tool_result` redaction (failed calls too), `/secret` |
-| **Codex, OpenCode, Gemini CLI, Cursor agent** | [`npx skills add dinhkarate/keyshroud`](#other-agents-with-a-shell) | skill + CLI with masked output |
+| **Codex, OpenCode, Gemini CLI, Cursor agent, Cline** | [`npx skills add dinhkarate/keyshroud`](#other-agents-with-a-shell) | skill + CLI with masked output |
 | **Claude Desktop, chat-only clients** | [`mcpServers` JSON](#mcp-clients-without-a-shell) | MCP tools with masked output |
 | **Any shell or CI** | `keyshroud run -- <cmd>` | env injection + masked output |
 
@@ -296,7 +296,7 @@ every tool result (successful or failed) and the output of `!commands` you type,
 
 ### Other agents with a shell
 
-Codex, OpenCode, Gemini CLI, Cursor's agent and anything else that can run commands: install the
+Codex, OpenCode, Gemini CLI, Cursor's agent, Cline and anything else that can run commands: install the
 CLI and the skill, which teaches the agent to run secret-using commands as `keyshroud run -- …` and
 to store new secrets with `keyshroud add`.
 
@@ -363,7 +363,7 @@ Store     keyshroud add --env NAME --item ITEM        store a new secret (masked
           keyshroud import [--yes]                    move a .env into the vault, write .env.refs
           keyshroud rotate --item ITEM                replace a value
           keyshroud wire | unwire | list | rm         manage names and items
-Use       keyshroud run [--only A,B] [--env-file F] -- <cmd>
+Use       keyshroud run [--only A,B] [--refs F] -- <cmd>
           keyshroud inject -i template -o out         render a template into a 0600 file
           keyshroud env                               the names available here
 Check     keyshroud doctor | status | scan [paths] | redact < log.txt

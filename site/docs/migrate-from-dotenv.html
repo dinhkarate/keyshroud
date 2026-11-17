@@ -122,8 +122,8 @@ PORT=3000
 # comment
 DATABASE_URL=keyshroud://my-project DATABASE_URL</code></pre>
 <h2 id="3-run-with-the-references"><a class="anchor" href="#3-run-with-the-references">3. Run with the references</a></h2>
-<pre data-lang="bash"><code>keyshroud run --env-file .env.refs -- npm test
-keyshroud run --env-file .env.refs -- npm run dev</code></pre>
+<pre data-lang="bash"><code>keyshroud run --refs .env.refs -- npm test
+keyshroud run --refs .env.refs -- npm run dev</code></pre>
 <p>The command gets the real values. Whatever it prints is masked when the output goes to an agent, a
 pipe or CI. If your <code>package.json</code> scripts load <code>.env</code> themselves (<code>dotenv</code>, <code>node --env-file=.env</code>),
 remove that and let <code>keyshroud run</code> set the environment.</p>

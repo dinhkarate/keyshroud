@@ -5,6 +5,26 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.12.3] - 2026-11-17
+
+### Security
+- **`run --refs F` replaces `run --env-file F`** (and `migrate --refs F`). Node.js 20.6 and later
+  looks for `--env-file` among the arguments of the script it runs, reads that file into the
+  process environment and applies a `NODE_OPTIONS` line in it, all before keyshroud's code starts.
+  A `.env.refs` from a cloned repository with `NODE_OPTIONS=--require ./x.js` therefore ran `x.js`
+  inside keyshroud, although keyshroud refuses that name in an env file: the refusal came after
+  Node.js had acted on it. Node.js 18 was not affected. `--refs` is a name Node.js does not know,
+  so the file reaches keyshroud unread and the refusal holds; a test runs the real CLI with such a
+  file. `--env-file` is still accepted, so scripts that use it keep working, and it stays as unsafe
+  as before with a file somebody else wrote: move to `--refs`. The documentation, the skill and
+  `import`'s hint use the new name. The MCP tools' `env_file` argument was never affected.
+
+### Changed
+- `LICENSE` names `dinhkarate` as the copyright holder, as the README and `package.json` do.
+- Cline is in the list of agents that use the skill, and in the setup guide (it reads
+  `~/.agents/skills`, like Codex and OpenCode).
+- keyshroud.dev has a `favicon.ico` and a page for addresses that do not exist.
+
 ### Removed
 - The Homebrew install that 0.12.2 announced is no longer in the README, the site or the agent
   setup guide: `npm install -g keyshroud` is the supported way to install for now. The setup guide's

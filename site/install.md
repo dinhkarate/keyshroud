@@ -86,13 +86,13 @@ Pick the line for the agent you are running in:
 | Agent | Do this |
 |---|---|
 | Claude Code | Ask the user to type `/plugin marketplace add dinhkarate/keyshroud`, then `/plugin install keyshroud@keyshroud`, then restart Claude Code. You cannot run slash commands yourself. |
-| Codex, OpenCode | Copy the skill that comes with the CLI (below) |
+| Codex, OpenCode, Cline | Copy the skill that comes with the CLI (below) |
 | Gemini CLI | `npx skills add dinhkarate/keyshroud -g -a gemini-cli -y` |
 | Cursor (agent) | `npx skills add dinhkarate/keyshroud -g -a cursor -y` |
 | pi / omp | `pi install npm:keyshroud` (or `omp install npm:keyshroud`) |
 | Claude Desktop, chat-only clients | Add the MCP JSON below to the client's settings (`~/Library/Application Support/Claude/claude_desktop_config.json` for Claude Desktop on macOS) |
 
-The skill that comes with the CLI, for Codex and OpenCode (both read `~/.agents/skills`):
+The skill that comes with the CLI, for Codex, OpenCode and Cline (all three read `~/.agents/skills`):
 
 ```bash
 mkdir -p ~/.agents/skills && cp -R "$(npm root -g)/keyshroud/skills/keyshroud" ~/.agents/skills/

@@ -39,7 +39,7 @@ secret store, then:
 ```bash
 mkdir -p ~/.config/keyshroud && cp vault.json ~/.config/keyshroud/
 printf '%s' "$KEYSHROUD_PASSPHRASE" | keyshroud unlock --stdin   # a session of 30 minutes
-keyshroud run --env-file .env.refs -- npm test
+keyshroud run --refs .env.refs -- npm test
 ```
 
 `--stdin` only opens an existing passphrase vault; a new passphrase is always chosen in a terminal.

@@ -128,7 +128,7 @@ created item=GitHub token env=GH_TOKEN targets=~/.config/keyshroud/env.json veri
 
 **「Claude Code が `.env` を読み続ける。」** `keyshroud import` を実行して値を vault に移し、
 `GH_TOKEN=keyshroud://myapp GH_TOKEN` のような行を含む `.env.refs` を書き出してから、
-`keyshroud run --env-file .env.refs -- claude` でエージェントを起動します。プラグインのフックが、
+`keyshroud run --refs .env.refs -- claude` でエージェントを起動します。プラグインのフックが、
 それでもツール結果に漏れたものをマスクします。
 
 **「失敗したコマンドがトークンを対話ログに出力した。」**
@@ -243,7 +243,7 @@ CI で実際のサーバーに対してテストされ、`op`、`gcloud`、`az` 
 |---|---|---|
 | **Claude Code** | [プラグイン](#claude-code) | SessionStart + PostToolUse のマスクフック、スキル。[`claude-guard`](#guard-失敗したコマンドもマスク) は失敗したコマンドもマスク |
 | **pi / omp** | [`pi install npm:keyshroud`](#pi--omp) | 環境変数への注入、`tool_result` のマスク（失敗した呼び出しも含む）、`/secret` |
-| **Codex、OpenCode、Gemini CLI、Cursor エージェント** | [`npx skills add dinhkarate/keyshroud`](#シェルを持つその他のエージェント) | スキル + 出力がマスクされる CLI |
+| **Codex、OpenCode、Gemini CLI、Cursor エージェント、Cline** | [`npx skills add dinhkarate/keyshroud`](#シェルを持つその他のエージェント) | スキル + 出力がマスクされる CLI |
 | **Claude Desktop、チャットのみのクライアント** | [`mcpServers` JSON](#シェルのない-mcp-クライアント) | 出力がマスクされる MCP ツール |
 | **任意のシェルや CI** | `keyshroud run -- <cmd>` | 環境変数の注入 + 出力のマスク |
 
@@ -297,7 +297,7 @@ pi install npm:keyshroud
 
 ### シェルを持つその他のエージェント
 
-Codex、OpenCode、Gemini CLI、Cursor のエージェント、その他コマンドを実行できるもの：CLI と
+Codex、OpenCode、Gemini CLI、Cursor のエージェント、Cline、その他コマンドを実行できるもの：CLI と
 スキルをインストールします。スキルは、シークレットを使うコマンドを `keyshroud run -- …` として
 実行し、新しいシークレットを `keyshroud add` で保存するようエージェントに教えます。
 
@@ -364,7 +364,7 @@ Store     keyshroud add --env NAME --item ITEM        store a new secret (masked
           keyshroud import [--yes]                    move a .env into the vault, write .env.refs
           keyshroud rotate --item ITEM                replace a value
           keyshroud wire | unwire | list | rm         manage names and items
-Use       keyshroud run [--only A,B] [--env-file F] -- <cmd>
+Use       keyshroud run [--only A,B] [--refs F] -- <cmd>
           keyshroud inject -i template -o out         render a template into a 0600 file
           keyshroud env                               the names available here
 Check     keyshroud doctor | status | scan [paths] | redact < log.txt

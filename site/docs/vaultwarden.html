@@ -150,7 +150,7 @@ keyshroud migrate --yes                          # copy them; references keep wo
 <li>The agent login lives in <code>~/.config/keyshroud/bw</code> (<code>BITWARDENCLI_APPDATA_DIR</code>). Your own <code>bw</code>
 login is untouched. Its master password is not stored: keyshroud asks for it when a session
 ends and keeps only a scrypt hash, so <code>add</code> can refuse it as a secret.</li>
-<li><code>migrate</code> copies the items that wired names (and any <code>--env-file</code> / <code>--item</code>) reference, with
+<li><code>migrate</code> copies the items that wired names (and any <code>--refs</code> / <code>--item</code>) reference, with
 the same names, then locks your personal vault again. Originals stay where they are. It asks
 for your personal master password in a terminal (or reads the keychain entry <code>vaultwarden-master-password</code>).</li>
 <li>An agent can run <code>setup</code> too. Without a terminal it opens the signup page, where you pick the

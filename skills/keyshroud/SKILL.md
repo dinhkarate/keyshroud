@@ -54,7 +54,7 @@ that file to widen it: tell the user which name the command needs and let them a
 ```bash
 keyshroud run -- gh pr list                       # all wired secrets as env vars
 keyshroud run --only GH_TOKEN -- gh pr list       # least privilege; not run if GH_TOKEN does not resolve
-keyshroud run --env-file .env.refs -- npm test    # project references
+keyshroud run --refs .env.refs -- npm test    # project references
 ```
 Inside the command, refer to `$GH_TOKEN`; keyshroud resolves it. Output is
 masked automatically when not attached to a terminal. MCP: `secrets_run`.

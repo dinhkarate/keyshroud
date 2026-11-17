@@ -28,7 +28,7 @@ Key facts for agents:
 - [Troubleshooting](https://keyshroud.dev/docs/troubleshooting.md): unresolved names, a locked vault, a value that printed unmasked
 - [Claude Code plugin](https://keyshroud.dev/docs/claude-code.md): hooks, skill, the guard
 - [pi / omp extension](https://keyshroud.dev/docs/agents.md#pi--omp)
-- [Other agents with a shell](https://keyshroud.dev/docs/agents.md#other-agents-with-a-shell): Codex, OpenCode, Gemini CLI, Cursor (skill + CLI)
+- [Other agents with a shell](https://keyshroud.dev/docs/agents.md#other-agents-with-a-shell): Codex, OpenCode, Gemini CLI, Cursor, Cline (skill + CLI)
 - [MCP clients without a shell](https://keyshroud.dev/docs/agents.md#mcp-clients-without-a-shell): Claude Desktop and chat-only clients
 - [CLI reference](https://keyshroud.dev/docs/cli.md): every command, reference forms, exit codes, environment variables
 - [Security model](https://keyshroud.dev/docs/security.md): what keyshroud does and does not protect against

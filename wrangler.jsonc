@@ -4,7 +4,7 @@
   "name": "keyshroud-site",
   "account_id": "0cf77a3eedbb9757f941c73cdfef1918",
   "compatibility_date": "2026-10-01",
-  "assets": { "directory": "./site" },
+  "assets": { "directory": "./site", "not_found_handling": "404-page" },
   "workers_dev": true,
   "routes": [{ "pattern": "keyshroud.dev", "custom_domain": true }]
 }

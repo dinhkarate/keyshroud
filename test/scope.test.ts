@@ -57,7 +57,7 @@ test("a scope narrows what run, env and get give in that directory and below it"
 
   // What is asked for by reference is not a wired name: an env file and `get` still reach it.
   await writeFile(join(box.dir, ".env.refs"), "OTHER_KEY=keyshroud://Other key\n");
-  assert.equal((await runCli(box, ["run", "--env-file", ".env.refs", "--", "sh", "-c", 'echo "other=$OTHER_KEY"'])).stdout, "other=<redacted:OTHER_KEY>\n");
+  assert.equal((await runCli(box, ["run", "--refs", ".env.refs", "--", "sh", "-c", 'echo "other=$OTHER_KEY"'])).stdout, "other=<redacted:OTHER_KEY>\n");
   assert.equal((await runCli(box, ["get", "keyshroud://Other key"])).stdout, B);
 
   // Masking is not narrowed: a value outside the scope is masked wherever it turns up.

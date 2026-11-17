@@ -124,13 +124,13 @@ variable names. Only your description is sent — never the value:</p>
 export KEYSHROUD_PLANNER_MODEL=qwen3-4b</code></pre>
 <p>Without a planner, names are derived from the description and you can edit them.</p>
 <h2 id="other-agents-with-a-shell"><a class="anchor" href="#other-agents-with-a-shell">Other agents with a shell</a></h2>
-<p>Codex, OpenCode, Gemini CLI, Cursor&#39;s agent and anything else that can run commands: install the
+<p>Codex, OpenCode, Gemini CLI, Cursor&#39;s agent, Cline and anything else that can run commands: install the
 CLI and the skill, which teaches the agent to run secret-using commands as <code>keyshroud run -- …</code>
 and to store new secrets with <code>keyshroud add</code>:</p>
 <pre data-lang="bash"><code>npm install -g keyshroud
 npx skills add dinhkarate/keyshroud</code></pre>
 <p><code>npx skills</code> needs Node.js 22.20+. On an older Node, copy the skill that comes with the CLI;
-Codex and OpenCode read <code>~/.agents/skills</code>:</p>
+Codex, OpenCode and Cline read <code>~/.agents/skills</code>:</p>
 <pre data-lang="bash"><code>mkdir -p ~/.agents/skills &amp;&amp; cp -R &quot;$(npm root -g)/keyshroud/skills/keyshroud&quot; ~/.agents/skills/</code></pre>
 <h2 id="mcp-clients-without-a-shell"><a class="anchor" href="#mcp-clients-without-a-shell">MCP clients without a shell</a></h2>
 <p>Claude Desktop, chat-only clients, or an agent you do not allow to run commands. Any client that

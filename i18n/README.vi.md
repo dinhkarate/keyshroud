@@ -127,7 +127,7 @@ created item=GitHub token env=GH_TOKEN targets=~/.config/keyshroud/env.json veri
 
 **"Claude Code cứ đọc `.env` của tôi."** Chạy `keyshroud import` để chuyển các giá trị vào vault
 và ghi một `.env.refs` với các dòng như `GH_TOKEN=keyshroud://myapp GH_TOKEN`, rồi khởi động agent
-bằng `keyshroud run --env-file .env.refs -- claude`. Hook của plugin che bất cứ thứ gì còn
+bằng `keyshroud run --refs .env.refs -- claude`. Hook của plugin che bất cứ thứ gì còn
 lọt vào một tool result.
 
 **"Một lệnh thất bại đã in token của tôi vào transcript."** Bật
@@ -242,7 +242,7 @@ server thật trong CI; các đường `op`, `gcloud` và `az` với CLI giả l
 |---|---|---|
 | **Claude Code** | [plugin](#claude-code) | Hook che SessionStart + PostToolUse, skill; [`claude-guard`](#guard-lệnh-thất-bại-cũng-được-che) che cả lệnh thất bại |
 | **pi / omp** | [`pi install npm:keyshroud`](#pi--omp) | nạp env, che `tool_result` (cả lệnh lỗi), `/secret` |
-| **Codex, OpenCode, Gemini CLI, Cursor agent** | [`npx skills add dinhkarate/keyshroud`](#agent-khác-có-shell) | skill + CLI với output đã che |
+| **Codex, OpenCode, Gemini CLI, Cursor agent, Cline** | [`npx skills add dinhkarate/keyshroud`](#agent-khác-có-shell) | skill + CLI với output đã che |
 | **Claude Desktop, client chỉ chat** | [JSON `mcpServers`](#mcp-client-không-có-shell) | MCP tool với output đã che |
 | **Shell hoặc CI bất kỳ** | `keyshroud run -- <cmd>` | inject env + output đã che |
 
@@ -296,7 +296,7 @@ mọi tool result (thành công hay thất bại) và output của các `!comman
 
 ### Agent khác có shell
 
-Codex, OpenCode, Gemini CLI, agent của Cursor và bất cứ thứ gì khác chạy được lệnh: cài
+Codex, OpenCode, Gemini CLI, agent của Cursor, Cline và bất cứ thứ gì khác chạy được lệnh: cài
 CLI và skill, thứ dạy agent chạy các lệnh dùng secret dưới dạng `keyshroud run -- …` và
 lưu secret mới bằng `keyshroud add`.
 
@@ -363,7 +363,7 @@ Store     keyshroud add --env NAME --item ITEM        store a new secret (masked
           keyshroud import [--yes]                    move a .env into the vault, write .env.refs
           keyshroud rotate --item ITEM                replace a value
           keyshroud wire | unwire | list | rm         manage names and items
-Use       keyshroud run [--only A,B] [--env-file F] -- <cmd>
+Use       keyshroud run [--only A,B] [--refs F] -- <cmd>
           keyshroud inject -i template -o out         render a template into a 0600 file
           keyshroud env                               the names available here
 Check     keyshroud doctor | status | scan [paths] | redact < log.txt

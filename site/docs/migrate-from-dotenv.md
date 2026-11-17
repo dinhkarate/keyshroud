@@ -44,8 +44,8 @@ DATABASE_URL=keyshroud://my-project DATABASE_URL
 ## 3. Run with the references
 
 ```bash
-keyshroud run --env-file .env.refs -- npm test
-keyshroud run --env-file .env.refs -- npm run dev
+keyshroud run --refs .env.refs -- npm test
+keyshroud run --refs .env.refs -- npm run dev
 ```
 
 The command gets the real values. Whatever it prints is masked when the output goes to an agent, a

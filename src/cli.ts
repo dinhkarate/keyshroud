@@ -21,7 +21,7 @@ const usage = `Usage: ${BRAND.bin} <command> [options]
 Secrets
   get <ENV_NAME | ${BRAND.refScheme}://ref | bw://ref | source ref>
                                    Print one resolved value to stdout
-  run [--env-file F]... [--only A,B] [--no-auth] [--mask|--no-mask] -- <cmd> [args]
+  run [--refs F]... [--only A,B] [--no-auth] [--mask|--no-mask] -- <cmd> [args]
                                    Run a command with secrets injected (alias: exec)
   inject [-i template] [-o out] [--force]
                                    Render {{ ${BRAND.refScheme}://ref }}, {{ bw://ref }} and {{ source ref }} placeholders
@@ -63,7 +63,7 @@ Sources (read-only: the secret managers a team runs)
 Vault (the local vault by default; bw/Vaultwarden once set up)
   setup --email EMAIL [--server URL] [--confirm-unlock | --unattended] [--registered]
                                    Give ${BRAND.name} its own bw login on a dedicated agent account
-  migrate [--item NAME]... [--env-file F]... [--yes]
+  migrate [--item NAME]... [--refs F]... [--yes]
                                    Copy the wired items from your personal vault to that account
                                    (dry run unless --yes; prints names only)
   migrate --to local [--yes]       Move every wired Vaultwarden item into the local vault and rewire
@@ -95,6 +95,9 @@ const targetPaths = core.getAuthTargets();
 function fail(message: string, code: number): never { console.error(message); process.exit(code); }
 function valueAfter(args: string[], flag: string): string | undefined { const index = args.indexOf(flag); return index >= 0 ? args[index + 1] : undefined; }
 function valuesAfter(args: string[], flag: string): string[] { return args.flatMap((arg, index) => (arg === flag && args[index + 1] !== undefined ? [args[index + 1]] : [])); }
+// The files of references a command names. --env-file is the spelling before 0.12.3, kept for scripts
+// that use it: Node.js 20.6+ reads a file named that way itself, before any of this code runs.
+function refsFiles(args: string[]): string[] { return args.flatMap((arg, index) => ((arg === "--refs" || arg === "--env-file") && args[index + 1] !== undefined ? [args[index + 1]] : [])); }
 function requireKnownFlags(args: string[], withValue: string[], bare: string[] = []): void {
   for (let i = 0; i < args.length; i++) {
     if (withValue.includes(args[i])) { if (args[i + 1] === undefined) fail(usage, 2); i++; continue; }
@@ -207,18 +210,18 @@ async function runCommand(args: string[]): Promise<void> {
   let start = separator + 1;
   if (separator < 0) {
     separator = 0;
-    while (separator < args.length && args[separator].startsWith("-")) separator += ["--env-file", "--only"].includes(args[separator]) ? 2 : 1;
+    while (separator < args.length && args[separator].startsWith("-")) separator += ["--refs", "--env-file", "--only"].includes(args[separator]) ? 2 : 1;
     start = separator;
   }
   if (!args[start]) fail(usage, 2);
   const flags = args.slice(0, separator);
   const [command, ...commandArgs] = args.slice(start);
-  requireKnownFlags(flags, ["--env-file", "--only"], ["--no-auth", "--mask", "--no-mask"]);
+  requireKnownFlags(flags, ["--refs", "--env-file", "--only"], ["--no-auth", "--mask", "--no-mask"]);
 
   // A project's scope narrows the wired names; what an env file names is asked for by name.
   const wired = flags.includes("--no-auth") ? { entries: [], outside: [], scope: null } : await core.scopedEnvEntries();
   const entries = wired.entries;
-  for (const file of valuesAfter(flags, "--env-file")) entries.push(...await core.envFileEntries(file));
+  for (const file of refsFiles(flags)) entries.push(...await core.envFileEntries(file));
   const only = valueAfter(flags, "--only")?.split(",").map((name) => name.trim()).filter(Boolean);
   const selected = only ? entries.filter((entry) => only.includes(entry.name)) : entries;
   if (only) for (const name of only) if (!selected.some((entry) => entry.name === name)) fail(`Secret unresolved: ${name} ${wired.outside.includes(name) ? outsideScope(wired.scope!) : "is not wired"}`, 4);
@@ -499,10 +502,10 @@ async function migrateLocalCommand(args: string[]): Promise<void> {
 
 async function migrateCommand(args: string[]): Promise<void> {
   if (args.includes("--to")) return migrateLocalCommand(args);
-  requireKnownFlags(args, ["--item", "--env-file"], ["--yes"]);
+  requireKnownFlags(args, ["--item", "--refs", "--env-file"], ["--yes"]);
   if (!core.OWN_BW_LOGIN) fail(`Run \`${BRAND.bin} setup\` first: migrate copies items into ${BRAND.name}'s own agent account`, 2);
   const entries = [...await core.authEnvEntries()];
-  for (const file of valuesAfter(args, "--env-file")) entries.push(...await core.envFileEntries(file));
+  for (const file of refsFiles(args)) entries.push(...await core.envFileEntries(file));
   const names = new Map<string, string>();
   for (const entry of entries) { try { const ref = parseRef(entry.raw); if (ref && !ref.scheme) names.set(ref.item.toLowerCase(), ref.item); } catch {} }
   for (const name of valuesAfter(args, "--item")) names.set(name.toLowerCase(), name);
@@ -625,7 +628,7 @@ async function importCommand(args: string[]): Promise<void> {
   await rename(tmp, out);
   await core.audit("import", toStore.map((row) => row.entry.name), "cli");
   console.log(`imported ${toStore.length} secret(s) (${created.length} new); wrote ${out}`);
-  if (!replace && from !== "-") console.log(`${from} still holds the plaintext values. Check with \`${BRAND.bin} run --env-file ${relative(process.cwd(), out) || out} -- <cmd>\`, then delete it or re-run with --replace.`);
+  if (!replace && from !== "-") console.log(`${from} still holds the plaintext values. Check with \`${BRAND.bin} run --refs ${relative(process.cwd(), out) || out} -- <cmd>\`, then delete it or re-run with --replace.`);
 }
 
 // Control and format characters in names are shown as "?".

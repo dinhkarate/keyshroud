@@ -37,7 +37,7 @@ Without a planner, names are derived from the description and you can edit them.
 
 ## Other agents with a shell
 
-Codex, OpenCode, Gemini CLI, Cursor's agent and anything else that can run commands: install the
+Codex, OpenCode, Gemini CLI, Cursor's agent, Cline and anything else that can run commands: install the
 CLI and the skill, which teaches the agent to run secret-using commands as `keyshroud run -- …`
 and to store new secrets with `keyshroud add`:
 
@@ -47,7 +47,7 @@ npx skills add dinhkarate/keyshroud
 ```
 
 `npx skills` needs Node.js 22.20+. On an older Node, copy the skill that comes with the CLI;
-Codex and OpenCode read `~/.agents/skills`:
+Codex, OpenCode and Cline read `~/.agents/skills`:
 
 ```bash
 mkdir -p ~/.agents/skills && cp -R "$(npm root -g)/keyshroud/skills/keyshroud" ~/.agents/skills/

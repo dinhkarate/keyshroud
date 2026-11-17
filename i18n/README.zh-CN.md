@@ -127,7 +127,7 @@ created item=GitHub token env=GH_TOKEN targets=~/.config/keyshroud/env.json veri
 
 **“Claude Code 总是读取我的 `.env`。”** 运行 `keyshroud import` 把值移入密钥库，
 并写出一个 `.env.refs`，其中的行像 `GH_TOKEN=keyshroud://myapp GH_TOKEN`，然后用
-`keyshroud run --env-file .env.refs -- claude` 启动智能体。插件的钩子会对任何仍然
+`keyshroud run --refs .env.refs -- claude` 启动智能体。插件的钩子会对任何仍然
 出现在工具结果中的内容脱敏。
 
 **“一条失败的命令把我的令牌打印进了对话记录。”** 启用
@@ -239,7 +239,7 @@ SENTRY_DSN=op://Engineering/Sentry/dsn
 |---|---|---|
 | **Claude Code** | [插件](#claude-code) | SessionStart + PostToolUse 脱敏钩子、技能；[`claude-guard`](#guard失败的命令也会脱敏) 也会对失败命令脱敏 |
 | **pi / omp** | [`pi install npm:keyshroud`](#pi--omp) | 环境变量注入、`tool_result` 脱敏（也包括失败调用）、`/secret` |
-| **Codex、OpenCode、Gemini CLI、Cursor 智能体** | [`npx skills add dinhkarate/keyshroud`](#其他具备-shell-的智能体) | 技能 + 输出经脱敏的 CLI |
+| **Codex、OpenCode、Gemini CLI、Cursor 智能体、Cline** | [`npx skills add dinhkarate/keyshroud`](#其他具备-shell-的智能体) | 技能 + 输出经脱敏的 CLI |
 | **Claude Desktop、纯聊天客户端** | [`mcpServers` JSON](#无-shell-的-mcp-客户端) | 输出经脱敏的 MCP 工具 |
 | **任意 Shell 或 CI** | `keyshroud run -- <cmd>` | 环境变量注入 + 输出脱敏 |
 
@@ -292,7 +292,7 @@ pi install npm:keyshroud
 
 ### 其他具备 Shell 的智能体
 
-Codex、OpenCode、Gemini CLI、Cursor 智能体，以及其他任何能运行命令的工具：安装
+Codex、OpenCode、Gemini CLI、Cursor 智能体、Cline，以及其他任何能运行命令的工具：安装
 CLI 和技能，技能会教智能体将使用密钥的命令通过 `keyshroud run -- …` 运行，并用
 `keyshroud add` 存入新密钥。
 
@@ -356,7 +356,7 @@ Store     keyshroud add --env NAME --item ITEM        store a new secret (masked
           keyshroud import [--yes]                    move a .env into the vault, write .env.refs
           keyshroud rotate --item ITEM                replace a value
           keyshroud wire | unwire | list | rm         manage names and items
-Use       keyshroud run [--only A,B] [--env-file F] -- <cmd>
+Use       keyshroud run [--only A,B] [--refs F] -- <cmd>
           keyshroud inject -i template -o out         render a template into a 0600 file
           keyshroud env                               the names available here
 Check     keyshroud doctor | status | scan [paths] | redact < log.txt

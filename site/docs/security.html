@@ -157,7 +157,8 @@ legacy <code>!bw</code> auth entries; its value is redacted from tool output);</
 rejected, and so are variables that change what programs load or run (<code>PATH</code>,
 <code>NODE_OPTIONS</code>, <code>LD_*</code>, <code>DYLD_*</code>, <code>BASH_ENV</code>, <code>GIT_SSH_COMMAND</code>, …), which are
 also never wired or injected (the list covers the common ones, not every tool&#39;s:
-an env file still configures the program it is used with);</li>
+an env file still configures the program it is used with). This holds for a file given with
+<code>--refs</code> or to the MCP tools; <code>--env-file</code>, the flag&#39;s name before 0.12.3, is the exception below;</li>
 <li>an unparseable <code>env.json</code> or <code>auth.json</code> is never overwritten;</li>
 <li>a <a href="/docs/team-secret-managers">source</a> is only
 read, at the address <code>source add</code> was given: a reference cannot name a server, the address must be
@@ -207,7 +208,11 @@ Claude Code writing the file at the same moment.</li>
 <ul>
 <li>A <code>.env.refs</code> can reference <strong>any</strong> item in your vault, not only the ones you wired, and any secret
 your sign-in to a source may read (keep a Vault token&#39;s policy, or the machine identity&#39;s access, as
-narrow as the work needs), so read a cloned repo&#39;s <code>.env.refs</code> before running <code>--env-file</code> with it.</li>
+narrow as the work needs), so read a cloned repo&#39;s <code>.env.refs</code> before running <code>--refs</code> with it.</li>
+<li><code>run --env-file F</code>, the older spelling of <code>--refs F</code>, still works, but Node.js 20.6 and later reads
+a file named that way itself, before keyshroud starts: a <code>NODE_OPTIONS</code> line in it is applied to
+keyshroud&#39;s own process, and keyshroud&#39;s refusal comes too late. Use <code>--refs</code>, which Node.js does
+not know, with any file you did not write.</li>
 <li><code>import</code> decides what is secret by heuristics and keeps everything else as a literal; check its plan
 before committing <code>.env.refs</code>.</li>
 </ul>
