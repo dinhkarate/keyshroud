@@ -136,6 +136,11 @@ claude guard=off</code></pre>
 <td>See the next section</td>
 </tr>
 <tr>
+<td><code>Secret unresolved: NAME (…)</code> from <code>run --only NAME</code> (exit <code>3</code> or <code>4</code>)</td>
+<td>The name you asked for did not resolve, so the command was not run: <code>3</code> when the vault could not be unlocked, <code>4</code> otherwise</td>
+<td>The reason is in the brackets; fix it and run the command again</td>
+</tr>
+<tr>
 <td><code>Ambiguous vault item name: NAME</code> (exit <code>4</code>)</td>
 <td>Two items share that name</td>
 <td>Rename one of them in the vault</td>
@@ -148,8 +153,9 @@ Vaultwarden, have sessions of 30 minutes:</p>
 <ul>
 <li><strong>In a terminal</strong>, the command asks again.</li>
 <li><strong>From an agent on your desktop</strong>, a dialog opens. If you cancel it, the command still starts, without
-the secrets, and keyshroud prints <code>unresolved (names only): NAME (Cancelled)</code>. No second dialog opens
-for 30 seconds, and the agent should not ask again by itself.</li>
+the secrets, and keyshroud prints <code>unresolved (names only): NAME (Cancelled)</code>; with <code>--only NAME</code> it
+does not start, and exits <code>3</code>. No second dialog opens for 30 seconds, and the agent should not ask
+again by itself.</li>
 <li><strong>Over SSH or without a display</strong>, no dialog can open: the same line says
 <code>The local vault is locked: run `keyshroud unlock` in a terminal</code>. Do that, then run the command again.
 <code>No terminal and no dialog here (SSH or no display)</code> from <code>add</code> or <code>rotate</code> is the same situation:

@@ -108,6 +108,10 @@ environment of the command you run.</p>
 <code>bw://</code> or <code>!bw</code> entries, <code>BW_SESSION</code>, or the master password in the keychain keeps Vaultwarden as the
 default and writes that down in <code>~/.config/keyshroud/backend</code>. Only a machine where none of these exist
 looks new and gets the local vault; set <code>KEYSHROUD_BACKEND=bw</code> there if it should not.</p>
+<p><strong>Can I install it with Homebrew?</strong> Yes, on macOS and Linux: <code>brew install dinhkarate/tap/keyshroud</code>. It is the same
+package as <code>npm install -g keyshroud</code>, run by Homebrew&#39;s Node, and <code>brew upgrade keyshroud</code> updates it
+(the formula follows a release within a few hours). Install it one way, not both: two <code>keyshroud</code>
+commands on the <code>PATH</code> make it unclear which one your agents call.</p>
 <p><strong>How do I leave Vaultwarden?</strong> <code>keyshroud migrate --to local</code>: see
 <a href="/docs/vaultwarden#moving-back-to-the-local-vault">moving back to the local vault</a>.</p>
 <p><strong>How do I back up the local vault?</strong> <code>keyshroud backup</code> writes one file sealed under a passphrase you

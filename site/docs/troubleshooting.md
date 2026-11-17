@@ -22,6 +22,7 @@ A line that says `status=locked` or `resolved=no` is the place to look.
 | `Secret unresolved: NAME is outside this project's scope (…/.keyshroud.json)` (exit `4`) | A [project scope](project-scope.md) in this directory leaves that name out | Run the command where the name belongs, or widen the scope yourself: `keyshroud scope --only '…'`. An agent should ask you, not edit the file |
 | `keyshroud: unresolved (names only): NAME` | A reference in `--env-file` points at an item that does not exist here; the command still runs, without that variable | Check the item's name in `.env.refs` against `keyshroud list`; a teammate's vault may not have it yet |
 | `keyshroud: unresolved (names only): NAME (The local vault is locked: …)` | The vault could not be opened, so the command ran without that variable | See the next section |
+| `Secret unresolved: NAME (…)` from `run --only NAME` (exit `3` or `4`) | The name you asked for did not resolve, so the command was not run: `3` when the vault could not be unlocked, `4` otherwise | The reason is in the brackets; fix it and run the command again |
 | `Ambiguous vault item name: NAME` (exit `4`) | Two items share that name | Rename one of them in the vault |
 
 ## The vault is locked
@@ -31,8 +32,9 @@ Vaultwarden, have sessions of 30 minutes:
 
 - **In a terminal**, the command asks again.
 - **From an agent on your desktop**, a dialog opens. If you cancel it, the command still starts, without
-  the secrets, and keyshroud prints `unresolved (names only): NAME (Cancelled)`. No second dialog opens
-  for 30 seconds, and the agent should not ask again by itself.
+  the secrets, and keyshroud prints `unresolved (names only): NAME (Cancelled)`; with `--only NAME` it
+  does not start, and exits `3`. No second dialog opens for 30 seconds, and the agent should not ask
+  again by itself.
 - **Over SSH or without a display**, no dialog can open: the same line says
   ``The local vault is locked: run `keyshroud unlock` in a terminal``. Do that, then run the command again.
   `No terminal and no dialog here (SSH or no display)` from `add` or `rotate` is the same situation:

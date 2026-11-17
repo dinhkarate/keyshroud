@@ -62,7 +62,8 @@ keyshroud は別の方法をとります：**エージェントは名前で作�
 
 ## クイックスタート
 
-**必要なもの：** Node.js ≥ 18.19。それ以外は何もいりません。
+**必要なもの：** Node.js ≥ 18.19。それ以外は何もいりません。Homebrew（macOS、Linux）では、`npm` の行の代わりに
+`brew install dinhkarate/tap/keyshroud` を使えます（Node も一緒に入ります）。
 
 ```bash
 npm install -g keyshroud
@@ -326,7 +327,8 @@ Claude Desktop、チャットのみのクライアント、またはコマンド
 既定では、`keyshroud run` はコマンドに紐付けたすべてのシークレットを渡します。絞り込む方法は 3 つです：
 
 - **コマンドごと：** `keyshroud run --only GH_TOKEN -- gh pr list` はその名前だけを注入し、
-  コマンドが継承する環境から他の紐付けた名前を除きます。
+  コマンドが継承する環境から他の紐付けた名前を除きます。その名前を解決できない場合（vault がロックされている、
+  項目が存在しない）、コマンドは実行されません。
 - **プロジェクトごと：** 以下のスコープファイル。
 - **vault ごと：** Vaultwarden の場合、`keyshroud setup` がエージェント専用のアカウントを用意します。
 

@@ -643,6 +643,10 @@ test("a passphrase protects the vault where there is no keychain; lock and the s
     assert.ok(!existsSync(join(box.configDir, "vault.session")));
     assert.match(after, /unresolved: A_TOKEN \(The local vault is locked/);
     assert.doesNotMatch(after, /value-aaaa-1111/);
+    // With `only`, the command does not run without the secret it names.
+    const named = await server.call("secrets_run", { command: "echo ran-anyway", only: ["A_TOKEN"] });
+    assert.match(named, /^unresolved: A_TOKEN \(The local vault is locked[^]*; the command was not run$/);
+    assert.doesNotMatch(named, /ran-anyway/);
     assert.match(await server.call("vault_status"), /^status=locked backend=local/);
     // Nor does a vault file edited to name a key that needs no session and given back its size
     // and mtime: what the server holds was opened with a session, and is those bytes only.
@@ -1067,10 +1071,15 @@ test("two different values under one label are both masked; the first wire makes
   assert.equal((await runCli(box, ["run", "--", "echo", "value-cccc-3333"])).stdout, "<redacted:__proto__>\n");
 
   assert.equal((await add(box, "N_TOKEN", "Nul", "abc\0def-0123456789")).code, 0);
-  const nul = await runCli(box, ["run", "--only", "N_TOKEN", "--", "sh", "-c", "echo \"[${N_TOKEN:-none}]\""]);
+  const nul = await runCli(box, ["run", "--", "sh", "-c", "echo \"[${N_TOKEN:-none}]\""]);
   assert.equal(nul.stdout, "[none]\n");
   assert.match(nul.stderr, /unresolved \(names only\): N_TOKEN/);
   assert.ok(!nul.stderr.includes("def-0123456789"));
+  // Asked for by name, it is needed: the command is not run without it.
+  const named = await runCli(box, ["run", "--only", "N_TOKEN", "--", "sh", "-c", "echo ran"]);
+  assert.deepEqual([named.code, named.stdout], [4, ""]);
+  assert.match(named.stderr, /^Secret unresolved: N_TOKEN/);
+  assert.ok(!named.stderr.includes("def-0123456789"));
 });
 
 test("neither vault's own password is stored as a secret in the other", { skip: process.platform === "win32" }, async () => {

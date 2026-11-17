@@ -31,7 +31,7 @@ const TOOLS = [
       properties: {
         command: { type: "string", description: "Shell command run with /bin/sh -c" },
         cwd: { type: "string", description: "Working directory" },
-        only: { type: "array", items: { type: "string" }, description: "Inject only these names" },
+        only: { type: "array", items: { type: "string" }, description: "Inject only these names; the command is not run when one of them does not resolve" },
         env_file: { type: "string", description: `Dotenv file of references (${BRAND.refScheme}://, bw://, vault://, awssecrets://, …) to add` },
         timeout_ms: { type: "number", description: "Kill the command after this many milliseconds (default 120000)" },
       },
@@ -96,6 +96,8 @@ async function runTool(args: Json): Promise<Json> {
   const env = await core.resolveEntries(entries);
   // Now: why a source did not answer is kept for half a minute.
   const unresolved = env.missing.length ? `unresolved: ${env.missing.join(", ")}${core.unresolvedReason(vaultError)}` : null;
+  // A name asked for with `only` is one the command needs: without it the command is not run.
+  if (args.only !== undefined && unresolved) return text(`${unresolved}; the command was not run`, true);
   await core.audit("run", Object.keys(env.secrets), "mcp");
   const redactor = createRedactor(await core.redactionValues(env.secrets));
   // So a Claude Code hook knows these values too, should another tool show one later.

@@ -230,6 +230,11 @@ test("a login the server revoked is named instead of a bare unresolved list", as
   const result = await runCli(box, ["run", "--", "true"], "", { FAKE_BW_SYNC_ERROR: "invalid_grant" });
   assert.match(result.stderr, /unresolved \(names only\): .*GH_TOKEN.*expired or was revoked/);
   assert.ok(!result.stderr.includes(GH));
+  // Named with --only, the secret is needed: the command is not run, and the exit code says the vault did not open.
+  const named = await runCli(await wired(), ["run", "--only", "GH_TOKEN", "--", "sh", "-c", "echo ran"], "", { FAKE_BW_SYNC_ERROR: "invalid_grant" });
+  assert.equal(named.stdout, "");
+  assert.match(named.stderr, /^Secret unresolved: GH_TOKEN \(.*expired or was revoked/);
+  assert.ok([3, 4].includes(named.code!), String(named.code));
 });
 
 test("add without a terminal opens a native dialog, and cancelling stores nothing", async () => {

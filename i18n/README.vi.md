@@ -61,7 +61,8 @@ bất cứ thứ gì lệnh in ra đều được che trước khi model đọc.
 
 ## Bắt đầu nhanh
 
-**Cần:** Node.js ≥ 18.19. Không gì khác.
+**Cần:** Node.js ≥ 18.19. Không gì khác. Với Homebrew (macOS, Linux), `brew install dinhkarate/tap/keyshroud`
+thay cho dòng `npm` và tự mang theo Node.
 
 ```bash
 npm install -g keyshroud
@@ -325,7 +326,8 @@ Claude Desktop, client chỉ chat, hoặc một agent bạn không cho chạy l�
 Mặc định `keyshroud run` cấp cho một lệnh mọi secret đã nối. Ba cách thu hẹp:
 
 - **Theo lệnh:** `keyshroud run --only GH_TOKEN -- gh pr list` chỉ inject tên đó, và bỏ
-  các tên đã nối khác khỏi những gì lệnh kế thừa.
+  các tên đã nối khác khỏi những gì lệnh kế thừa. Nếu tên đó không phân giải được (vault đang khoá,
+  item không tồn tại), lệnh sẽ không chạy.
 - **Theo project:** một file scope, bên dưới.
 - **Theo vault:** với Vaultwarden, `keyshroud setup` cấp cho các agent một tài khoản riêng.
 

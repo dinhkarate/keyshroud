@@ -61,7 +61,8 @@ keyshroud 采用另一种方式：**智能体使用名称，命令取得值，�
 
 ## 快速开始
 
-**环境要求：** Node.js ≥ 18.19。别的什么都不需要。
+**环境要求：** Node.js ≥ 18.19。别的什么都不需要。使用 Homebrew（macOS、Linux）时，可用 `brew install dinhkarate/tap/keyshroud`
+代替 `npm` 那一行，它会自带 Node。
 
 ```bash
 npm install -g keyshroud
@@ -320,7 +321,7 @@ Claude Desktop、纯聊天客户端，或者你不允许运行命令的智能体
 默认情况下，`keyshroud run` 会将每个已绑定的密钥交给命令。可通过三种方式限制：
 
 - **按命令：** `keyshroud run --only GH_TOKEN -- gh pr list` 只注入那个名字，并从
-  命令继承的内容里移除其他已绑定的名字。
+  命令继承的内容里移除其他已绑定的名字。如果那个名字无法解析（密钥库已锁定、条目不存在），命令不会运行。
 - **按项目：** 使用下方的作用域文件。
 - **按密钥库：** 使用 Vaultwarden 时，`keyshroud setup` 会给智能体一个专用账号。
 

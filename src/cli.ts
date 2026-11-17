@@ -230,6 +230,8 @@ async function runCommand(args: string[]): Promise<void> {
   let vaultError = "";
   try { await core.ensureUnlocked(deduped.map((entry) => entry.raw), { prompt: true }); } catch (error) { vaultError = error instanceof Error ? error.message : String(error); }
   const env = await core.resolveEntries(deduped);
+  // A name asked for with --only is one the command needs: without it the command is not run.
+  if (only && env.missing.length) fail(`Secret unresolved: ${env.missing.join(", ")}${core.unresolvedReason(vaultError)}`, vaultError ? 3 : 4);
   await core.audit("run", Object.keys(env.secrets), command);
   if (env.missing.length) console.error(`${BRAND.bin}: unresolved (names only): ${env.missing.join(", ")}${core.unresolvedReason(vaultError)}`);
 

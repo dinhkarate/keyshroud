@@ -139,6 +139,10 @@ removed item then fail as unresolved.</p>
 <p><code>run</code> masks output whenever stdout is not a terminal (agents, CI, pipes) and
 passes the TTY through untouched for interactive use. Force either way with
 <code>--mask</code> / <code>--no-mask</code>. <code>exec</code> is an alias of <code>run</code>.</p>
+<p>A wired name that does not resolve is left out and named on stderr (<code>unresolved (names only): …</code>), and
+the command still runs. A name you ask for with <code>--only</code> is one the command needs: when it does not
+resolve, the command is not run, and <code>run</code> exits <code>3</code> (the vault could not be unlocked) or <code>4</code>.
+<code>secrets_run</code> with <code>only</code> does the same.</p>
 <p><code>add</code> and <code>rotate</code> read the value from a masked prompt that shows <code>*</code> per
 character. Without a terminal (an agent&#39;s shell), they open a native hidden-input
 dialog instead (<code>osascript</code> on macOS, <code>zenity</code> or <code>kdialog</code> on Linux, PowerShell on Windows), so the agent
@@ -158,7 +162,7 @@ keyshroud import --yes           # store them and write .env.refs
 keyshroud run --env-file .env.refs -- npm test</code></pre>
 <p><strong>Exit codes:</strong> <code>0</code> ok · <code>2</code> usage · <code>3</code> vault locked or unavailable, or a source that did not accept
 the sign-in · <code>4</code> secret missing or item name ambiguous · <code>5</code> refusing to overwrite existing state.
-<code>run</code> exits with the child&#39;s code.</p>
+<code>run</code> exits with the child&#39;s code (or <code>3</code>/<code>4</code> before it starts, when a name given with <code>--only</code> does not resolve).</p>
 <h2 id="references"><a class="anchor" href="#references">References</a></h2>
 <div class="table"><table>
 <thead>

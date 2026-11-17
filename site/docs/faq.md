@@ -14,6 +14,11 @@ environment of the command you run.
 default and writes that down in `~/.config/keyshroud/backend`. Only a machine where none of these exist
 looks new and gets the local vault; set `KEYSHROUD_BACKEND=bw` there if it should not.
 
+**Can I install it with Homebrew?** Yes, on macOS and Linux: `brew install dinhkarate/tap/keyshroud`. It is the same
+package as `npm install -g keyshroud`, run by Homebrew's Node, and `brew upgrade keyshroud` updates it
+(the formula follows a release within a few hours). Install it one way, not both: two `keyshroud`
+commands on the `PATH` make it unclear which one your agents call.
+
 **How do I leave Vaultwarden?** `keyshroud migrate --to local`: see
 [moving back to the local vault](vaultwarden.md#moving-back-to-the-local-vault).
 

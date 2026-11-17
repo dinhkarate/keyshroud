@@ -61,7 +61,8 @@ whatever the command prints is masked before the model reads it.**
 
 ## Quickstart
 
-**Requirements:** Node.js ≥ 18.19. Nothing else.
+**Requirements:** Node.js ≥ 18.19. Nothing else. With Homebrew (macOS, Linux), `brew install dinhkarate/tap/keyshroud`
+replaces the `npm` line and brings its own Node.
 
 ```bash
 npm install -g keyshroud
@@ -325,7 +326,8 @@ Claude Desktop, chat-only clients, or an agent you do not allow to run commands:
 By default `keyshroud run` gives a command every wired secret. Three ways to narrow that:
 
 - **Per command:** `keyshroud run --only GH_TOKEN -- gh pr list` injects that name alone, and removes
-  the other wired names from what the command inherits.
+  the other wired names from what the command inherits. If that name cannot be resolved (a locked
+  vault, a missing item), the command is not run.
 - **Per project:** a scope file, below.
 - **Per vault:** with Vaultwarden, `keyshroud setup` gives the agents an account of their own.
 

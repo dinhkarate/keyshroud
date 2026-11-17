@@ -48,6 +48,11 @@ removed item then fail as unresolved.
 passes the TTY through untouched for interactive use. Force either way with
 `--mask` / `--no-mask`. `exec` is an alias of `run`.
 
+A wired name that does not resolve is left out and named on stderr (`unresolved (names only): …`), and
+the command still runs. A name you ask for with `--only` is one the command needs: when it does not
+resolve, the command is not run, and `run` exits `3` (the vault could not be unlocked) or `4`.
+`secrets_run` with `only` does the same.
+
 `add` and `rotate` read the value from a masked prompt that shows `*` per
 character. Without a terminal (an agent's shell), they open a native hidden-input
 dialog instead (`osascript` on macOS, `zenity` or `kdialog` on Linux, PowerShell on Windows), so the agent
@@ -72,7 +77,7 @@ keyshroud run --env-file .env.refs -- npm test
 
 **Exit codes:** `0` ok · `2` usage · `3` vault locked or unavailable, or a source that did not accept
 the sign-in · `4` secret missing or item name ambiguous · `5` refusing to overwrite existing state.
-`run` exits with the child's code.
+`run` exits with the child's code (or `3`/`4` before it starts, when a name given with `--only` does not resolve).
 
 ## References
 

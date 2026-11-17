@@ -5,7 +5,25 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.12.2] - 2026-11-17
+
+### Changed
+- **`run --only NAME` does not run the command when `NAME` cannot be resolved.** Until now a locked
+  vault or a missing item left the variable out, printed `unresolved (names only): NAME` and ran
+  the command anyway, which then failed somewhere else or ran without its credential. A name asked
+  for with `--only` is one the command needs: `run` now prints `Secret unresolved: NAME (reason)`
+  and exits `3` (the vault could not be unlocked) or `4`, before the command starts. The
+  `secrets_run` MCP tool does the same with `only`. Without `--only` nothing changes: names that do
+  not resolve are left out and named, and the command runs.
+- The site's Claude Code, MCP and terminal recordings and the README's demo are new takes with
+  keyshroud 0.12.1. The demo setup (`assets/demo/agent-shell.sh`) takes `DEMO_ANTHROPIC_BASE_URL`
+  for a key from a gateway that speaks the Anthropic API, and its tool gate also lets the smoke
+  test run by its full path.
+
 ### Added
+- **Homebrew**: `brew install dinhkarate/tap/keyshroud` (macOS and Linux) installs the same package
+  with Homebrew's Node. The tap follows the npm releases by itself and installs each one on a
+  macOS and a Linux runner.
 - **Four guides** in `docs/`: move a project off `.env`, CI and Docker (a passphrase vault in a
   GitHub Actions job, a Docker build with a BuildKit secret, a container), rotate a key that
   leaked, and troubleshooting. The commands in them were run against made-up values first.
@@ -13,12 +31,6 @@ All notable changes are documented here. This project follows
   `npm run site` (`scripts/build-site-docs.mjs`). Each page also has a Markdown copy at
   `/docs/<page>.md`, which `llms.txt` links to. The build stops on a link to a page or heading
   that does not exist, and the tests fail when `site/docs/` is stale.
-
-### Changed
-- The site's Claude Code, MCP and terminal recordings and the README's demo are new takes with
-  keyshroud 0.12.1. The demo setup (`assets/demo/agent-shell.sh`) takes `DEMO_ANTHROPIC_BASE_URL`
-  for a key from a gateway that speaks the Anthropic API, and its tool gate also lets the smoke
-  test run by its full path.
 
 ## [0.12.1] - 2026-11-15
 
