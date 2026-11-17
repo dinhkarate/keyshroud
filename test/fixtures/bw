@@ -9,7 +9,8 @@ const vaultPath = appdata ? `${appdata}/fake-vault.json` : process.env.FAKE_BW_V
 const args = process.argv.slice(2);
 if (process.env.FAKE_BW_LOG) fs.appendFileSync(process.env.FAKE_BW_LOG, `${appdata ? "[own] " : ""}${args.join(" ")}\n`);
 const state = fs.existsSync(vaultPath) ? JSON.parse(fs.readFileSync(vaultPath, "utf8")) : { status: "unauthenticated", items: [] };
-const save = () => fs.writeFileSync(vaultPath, JSON.stringify(state));
+// Written aside and renamed, so a test reading the file while a background bw saves it never sees half of it.
+const save = () => { fs.writeFileSync(`${vaultPath}.${process.pid}`, JSON.stringify(state)); fs.renameSync(`${vaultPath}.${process.pid}`, vaultPath); };
 const out = (value) => process.stdout.write(typeof value === "string" ? value : JSON.stringify(value));
 const die = (message) => { process.stderr.write(message); process.exit(1); };
 const session = state.session ?? "fake-session";
