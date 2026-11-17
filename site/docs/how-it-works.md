@@ -5,7 +5,7 @@
               │  vault.json ◄── key: keychain · Secret Service · DPAPI · passphrase   │
               │      │                                                                │
               │      ▼                                                                │
- Vaultwarden ◄┼─bw─ keyshroud ── resolves keyshroud:// and bw:// refs ──► command's env   │
+ Vaultwarden ◄┼─bw─ keyshroud ─ resolves keyshroud:// and bw:// refs ─► command's env │
  (optional)   │      ▲                                                   │            │
               │      └──── redactor ◄──── stdout / stderr ◄──────────────┘            │
               │                │ <redacted:NAME>                                      │

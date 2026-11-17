@@ -393,7 +393,7 @@ Mọi lệnh, flag, dạng tham chiếu và biến môi trường: [docs/cli.md]
               │  vault.json ◄── key: keychain · Secret Service · DPAPI · passphrase   │
               │      │                                                                │
               │      ▼                                                                │
- Vaultwarden ◄┼─bw─ keyshroud ── resolves keyshroud:// and bw:// refs ──► command's env   │
+ Vaultwarden ◄┼─bw─ keyshroud ─ resolves keyshroud:// and bw:// refs ─► command's env │
  team vault  ◄┼──── (read-only)                                          │            │
               │      └──── redactor ◄──── stdout / stderr ◄──────────────┘            │
               │                │ <redacted:NAME>                                      │

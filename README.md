@@ -393,7 +393,7 @@ Every command, flag, reference form and environment variable: [docs/cli.md](docs
               │  vault.json ◄── key: keychain · Secret Service · DPAPI · passphrase   │
               │      │                                                                │
               │      ▼                                                                │
- Vaultwarden ◄┼─bw─ keyshroud ── resolves keyshroud:// and bw:// refs ──► command's env   │
+ Vaultwarden ◄┼─bw─ keyshroud ─ resolves keyshroud:// and bw:// refs ─► command's env │
  team vault  ◄┼──── (read-only)                                          │            │
               │      └──── redactor ◄──── stdout / stderr ◄──────────────┘            │
               │                │ <redacted:NAME>                                      │
