@@ -61,8 +61,7 @@ bất cứ thứ gì lệnh in ra đều được che trước khi model đọc.
 
 ## Bắt đầu nhanh
 
-**Cần:** Node.js ≥ 18.19. Không gì khác. Với Homebrew (macOS, Linux), `brew install dinhkarate/tap/keyshroud`
-thay cho dòng `npm` và tự mang theo Node.
+**Cần:** Node.js ≥ 18.19. Không gì khác.
 
 ```bash
 npm install -g keyshroud

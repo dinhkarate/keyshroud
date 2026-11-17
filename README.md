@@ -61,8 +61,7 @@ whatever the command prints is masked before the model reads it.**
 
 ## Quickstart
 
-**Requirements:** Node.js ≥ 18.19. Nothing else. With Homebrew (macOS, Linux), `brew install dinhkarate/tap/keyshroud`
-replaces the `npm` line and brings its own Node.
+**Requirements:** Node.js ≥ 18.19. Nothing else.
 
 ```bash
 npm install -g keyshroud

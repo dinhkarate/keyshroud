@@ -62,8 +62,7 @@ keyshroud は別の方法をとります：**エージェントは名前で作�
 
 ## クイックスタート
 
-**必要なもの：** Node.js ≥ 18.19。それ以外は何もいりません。Homebrew（macOS、Linux）では、`npm` の行の代わりに
-`brew install dinhkarate/tap/keyshroud` を使えます（Node も一緒に入ります）。
+**必要なもの：** Node.js ≥ 18.19。それ以外は何もいりません。
 
 ```bash
 npm install -g keyshroud

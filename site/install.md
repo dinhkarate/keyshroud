@@ -65,9 +65,6 @@ keyshroud --version
 keyshroud status
 ```
 
-On a machine with Homebrew (macOS or Linux) and no Node.js, `brew install dinhkarate/tap/keyshroud` installs
-the same CLI with Homebrew's Node. Use one of the two, not both.
-
 If `npm install -g` fails with `EACCES` (Linux, Node.js from the distro), install
 it for this user instead of using sudo:
 

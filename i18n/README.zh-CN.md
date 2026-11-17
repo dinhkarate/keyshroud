@@ -61,8 +61,7 @@ keyshroud 采用另一种方式：**智能体使用名称，命令取得值，�
 
 ## 快速开始
 
-**环境要求：** Node.js ≥ 18.19。别的什么都不需要。使用 Homebrew（macOS、Linux）时，可用 `brew install dinhkarate/tap/keyshroud`
-代替 `npm` 那一行，它会自带 Node。
+**环境要求：** Node.js ≥ 18.19。别的什么都不需要。
 
 ```bash
 npm install -g keyshroud

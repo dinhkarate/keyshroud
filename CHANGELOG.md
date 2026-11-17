@@ -5,6 +5,12 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+### Removed
+- The Homebrew install that 0.12.2 announced is no longer in the README, the site or the agent
+  setup guide: `npm install -g keyshroud` is the supported way to install for now. The setup guide's
+  step for Codex and OpenCode does not work with a Homebrew install yet, and that path has not been
+  used with a real agent.
+
 ## [0.12.2] - 2026-11-17
 
 ### Changed
@@ -21,9 +27,6 @@ All notable changes are documented here. This project follows
   test run by its full path.
 
 ### Added
-- **Homebrew**: `brew install dinhkarate/tap/keyshroud` (macOS and Linux) installs the same package
-  with Homebrew's Node. The tap follows the npm releases by itself and installs each one on a
-  macOS and a Linux runner.
 - **Four guides** in `docs/`: move a project off `.env`, CI and Docker (a passphrase vault in a
   GitHub Actions job, a Docker build with a BuildKit secret, a container), rotate a key that
   leaked, and troubleshooting. The commands in them were run against made-up values first.
