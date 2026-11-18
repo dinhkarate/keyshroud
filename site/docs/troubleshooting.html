@@ -174,8 +174,10 @@ refuses. Use the desktop or RDP session, or a passphrase vault.</li>
 <h2 id="a-value-was-printed-unmasked"><a class="anchor" href="#a-value-was-printed-unmasked">A value was printed unmasked</a></h2>
 <p>Check these in order:</p>
 <ol>
-<li><strong>You ran it in your own terminal.</strong> <code>keyshroud run</code> passes a terminal through untouched and masks
-when the output goes to an agent, a pipe or CI. <code>--mask</code> forces it.</li>
+<li><strong>The command was run with <code>--no-mask</code>, or with keyshroud before 0.13 on a terminal.</strong> <code>--no-mask</code>
+hands the terminal to the command and masks nothing. Before 0.13, <code>keyshroud run</code> masked only when
+its output was not a terminal, and Gemini CLI, Cline and other agents that run commands on a
+pseudo-terminal got the values as they were: update with <code>npm i -g keyshroud@latest</code>.</li>
 <li><strong>The command failed, in Claude Code, and the guard is off.</strong> Claude Code&#39;s hook cannot rewrite the
 output of a failed command. Run secret-using commands through <code>keyshroud run</code>, or turn on
 <a href="/docs/claude-code#the-guard-failed-commands-masked-too">the guard</a>: <code>keyshroud claude-guard</code>.</li>
@@ -189,6 +191,13 @@ another encoding of it is not recognised. Values shorter than 6 characters are n
 <a href="/docs/rotate-a-key">rotate a key</a>.</li>
 </ol>
 <p>If none of these fit, that is a bug worth reporting: see <a href="https://github.com/dinhkarate/keyshroud/blob/main/SECURITY.md">SECURITY.md</a>.</p>
+<h2 id="an-interactive-program-gets-no-terminal"><a class="anchor" href="#an-interactive-program-gets-no-terminal">An interactive program gets no terminal</a></h2>
+<p><code>keyshroud run</code> masks what a command prints, so the command writes into a pipe. A program that wants
+the terminal itself (<code>psql</code>, <code>ssh</code>, an editor, an agent&#39;s interface such as <code>claude</code>) then shows no
+prompt, loses its colours, or says its output is not a terminal. Start it with <code>--no-mask</code>:</p>
+<pre data-lang="bash"><code>keyshroud run --no-mask -- psql</code></pre>
+<p>It gets the terminal, and nothing it prints is masked: this is for you, in your own terminal, never
+for a command an agent runs.</p>
 <h2 id="claude-code"><a class="anchor" href="#claude-code">Claude Code</a></h2>
 <ul>
 <li><strong>Nothing happens after installing or updating the plugin.</strong> Hooks load when a session starts:
@@ -230,6 +239,7 @@ is set up and which CLIs it found; sign in the way you normally do (<code>op sig
 <li><a href="#a-secret-does-not-resolve">A secret does not resolve</a></li>
 <li><a href="#the-vault-is-locked">The vault is locked</a></li>
 <li><a href="#a-value-was-printed-unmasked">A value was printed unmasked</a></li>
+<li><a href="#an-interactive-program-gets-no-terminal">An interactive program gets no terminal</a></li>
 <li><a href="#claude-code">Claude Code</a></li>
 <li><a href="#vaultwarden-and-bitwarden">Vaultwarden and Bitwarden</a></li>
 <li><a href="#team-secret-managers">Team secret managers</a></li>

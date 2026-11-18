@@ -130,6 +130,31 @@ test("redact stream never leaks a secret split across chunks", async () => {
   assert.equal(await streamThrough(values, ["no secrets here"]), "no secrets here");
 });
 
+test("redact stream is byte for byte: what is no text passes unchanged, a value among it is masked", async () => {
+  const values = { A: "sk-abcdef123456", "khoá API": "ünïcødé-tøken" };
+  const noise = Buffer.alloc(3000);
+  for (let i = 0; i < noise.length; i++) noise[i] = (i * 7 + (i >> 8)) & 255;
+  const input = Buffer.concat([noise, Buffer.from(values.A), noise.subarray(0, 300), Buffer.from(values["khoá API"]), noise]);
+  const expected = Buffer.concat([noise, Buffer.from("<redacted:A>"), noise.subarray(0, 300), Buffer.from("<redacted:khoá API>"), noise]);
+  for (const size of [1, 7, 1024, input.length]) {
+    const stream = createRedactStream(createRedactor(values));
+    const out: Buffer[] = [];
+    stream.on("data", (data: Buffer) => { out.push(data); });
+    const done = new Promise((resolve) => stream.on("end", resolve));
+    for (let at = 0; at < input.length; at += size) stream.write(input.subarray(at, at + size));
+    stream.end();
+    await done;
+    assert.ok(Buffer.concat(out).equals(expected), `chunks of ${size}`);
+  }
+  // No values at all: nothing is touched.
+  const plain = createRedactStream(createRedactor({}));
+  const out: Buffer[] = [];
+  plain.on("data", (data: Buffer) => { out.push(data); });
+  plain.end(noise);
+  await new Promise((resolve) => plain.on("end", resolve));
+  assert.ok(Buffer.concat(out).equals(noise));
+});
+
 test("overlapping secrets: plain, streaming, and index redaction agree and never leak", async () => {
   let state = 7;
   const rand = (n: number) => { state = (state * 1103515245 + 12345) % 2147483648; return state % n; };

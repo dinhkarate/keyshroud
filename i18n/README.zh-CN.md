@@ -27,14 +27,14 @@ keyshroud 让 Claude Code、Codex、Cursor、Cline、OpenCode、Gemini CLI、pi 
 <p align="center"><img src="../assets/demo.gif" alt="演示：在一台新机器上，keyshroud add 通过脱敏提示符把 GitHub 令牌存入本地密钥库，keyshroud run 对命令输出中的令牌脱敏，scan 找出泄露到文件的副本" width="860"></p>
 
 ```console
-$ keyshroud run --mask -- sh -c 'echo "deploying with $GH_TOKEN"; gh api user -q .login'
+$ keyshroud run -- sh -c 'echo "deploying with $GH_TOKEN"; gh api user -q .login'
 deploying with <redacted:GH_TOKEN>
 dinhkarate
 ```
 
 命令会拿到真实的令牌。对话记录以及读取它的模型看到的只有
-`<redacted:GH_TOKEN>`。（智能体执行命令时会自动脱敏；
-在人工操作的终端中可用 `--mask` 强制开启。）
+`<redacted:GH_TOKEN>`。（`keyshroud run` 始终脱敏，在你自己的终端里也一样；
+`--no-mask` 把终端交给交互式程序。）
 
 ## 为什么需要 keyshroud？
 
@@ -72,7 +72,7 @@ keyshroud add --env GH_TOKEN --item "GitHub token"
 
 # 2. 使用
 keyshroud run -- gh auth status
-keyshroud run -- claude          # 启动智能体，所有已绑定的密钥都可用
+keyshroud run --no-mask -- claude   # 启动智能体，所有已绑定的密钥都可用
 
 # 3. 全面检查
 keyshroud doctor
@@ -127,7 +127,7 @@ created item=GitHub token env=GH_TOKEN targets=~/.config/keyshroud/env.json veri
 
 **“Claude Code 总是读取我的 `.env`。”** 运行 `keyshroud import` 把值移入密钥库，
 并写出一个 `.env.refs`，其中的行像 `GH_TOKEN=keyshroud://myapp GH_TOKEN`，然后用
-`keyshroud run --refs .env.refs -- claude` 启动智能体。插件的钩子会对任何仍然
+`keyshroud run --no-mask --refs .env.refs -- claude` 启动智能体。插件的钩子会对任何仍然
 出现在工具结果中的内容脱敏。
 
 **“一条失败的命令把我的令牌打印进了对话记录。”** 启用
@@ -262,7 +262,8 @@ npm install -g keyshroud
 - **技能：** 教 Claude 使用名称和引用，并通过 `keyshroud run` 运行
   使用密钥的命令。
 
-通过 keyshroud 启动 Claude，让它的 Bash 命令获得密钥：`keyshroud run -- claude`。
+通过 keyshroud 启动 Claude，让它的 Bash 命令获得密钥：`keyshroud run --no-mask -- claude`
+（`--no-mask` 把终端交给 Claude 的界面；它的工具结果仍由插件脱敏）。
 密钥库中的条目也可以是 Claude Code 自己的 API key（`keyshroud claude-setup --item "Anthropic API key"`）。
 其余内容在 [docs/claude-code.md](../docs/claude-code.md)。
 

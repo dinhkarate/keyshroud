@@ -15,8 +15,10 @@ the **user** must run it. Report each result in one line.
 - Never handle a vault master password or passphrase. Never read one, or the
   local vault's key, from the keychain, and never put one in a command
   argument, file, or environment variable.
-- Never run `keyshroud get`, `bw get`, `bw unlock`, or `bw list` yourself. They
-  print values or unlock a vault outside keyshroud's masking.
+- Never run `keyshroud get`, `keyshroud env --shell`, `keyshroud inject` without `-o`,
+  `bw get`, `bw unlock`, or `bw list` yourself. They print values or unlock a vault
+  outside keyshroud's masking. Never add `--no-mask` to `keyshroud run`: it is for the
+  user's own terminal.
 - Never print, echo, or log a secret value. Use names (`GH_TOKEN`) and
   references (`keyshroud://GitHub token`) only.
 
@@ -85,7 +87,7 @@ Pick the line for the agent you are running in:
 
 | Agent | Do this |
 |---|---|
-| Claude Code | Ask the user to type `/plugin marketplace add dinhkarate/keyshroud`, then `/plugin install keyshroud@keyshroud`, then restart Claude Code. You cannot run slash commands yourself. |
+| Claude Code | Run `claude plugin marketplace add dinhkarate/keyshroud`, then `claude plugin install keyshroud@keyshroud`, and ask the user to restart Claude Code (hooks load when a session starts). If the `claude` command is not on your `PATH`, ask the user to type `/plugin marketplace add dinhkarate/keyshroud` and `/plugin install keyshroud@keyshroud` instead. |
 | Codex, OpenCode, Cline | Copy the skill that comes with the CLI (below) |
 | Gemini CLI | `npx skills add dinhkarate/keyshroud -g -a gemini-cli -y` |
 | Cursor (agent) | `npx skills add dinhkarate/keyshroud -g -a cursor -y` |
@@ -206,9 +208,15 @@ yourself.
 - **Move an existing `.env` into the vault:** `keyshroud import` shows a dry
   run with names only; `keyshroud import --yes` stores the values and writes a
   commit-safe `.env.refs` file of `keyshroud://` (or `bw://`) references.
-- **Run a command that needs secrets:** `keyshroud run -- <command>` (or the
-  `secrets_run` MCP tool). Values are injected into the command's environment
-  and masked as `<redacted:NAME>` in its output, even when it fails.
+- **Run a command that needs secrets:** `keyshroud run --only NAME -- <command>` (or the
+  `secrets_run` MCP tool with `only`), naming just the secrets that command needs. Values are
+  injected into the command's environment and masked as `<redacted:NAME>` in its output, even
+  when it fails, and in a terminal too. If `NAME` cannot be resolved the command is not run
+  (exit 3: the vault is locked; exit 4: the name is not there). Without `--only`, every wired
+  name in scope is injected.
+- **Check the masking once:** after the first secret is stored, run
+  `keyshroud run --only NAME -- sh -c 'echo "$NAME"'` with its name. You must see
+  `<redacted:NAME>`. If you see anything else, stop and tell the user.
 - **List what is available:** `keyshroud env` (names only) or `secrets_list`.
 - **A project's scope:** a repository may have a `.keyshroud.json` that lists the only names
   available there (`keyshroud scope` shows it). A name `outside this project's scope` is refused:
@@ -223,5 +231,19 @@ where the secrets live (`keyshroud status`), what `doctor` reported, and that fr
 now on secret-using commands go through `keyshroud run`. If they keep secrets in the local
 vault, mention `keyshroud backup` (one file under its own passphrase) once.
 
-Docs: https://github.com/dinhkarate/keyshroud#readme · Security model:
+## Updating later
+
+```bash
+npm install -g keyshroud@latest
+keyshroud --version
+```
+
+Then the agent's own copy: Claude Code `claude plugin marketplace update keyshroud` and
+`claude plugin update keyshroud@keyshroud` (restart it afterwards); pi `pi update npm:keyshroud`;
+Codex, OpenCode and Cline: copy the skill again as in step 3. The vault and the wired names stay
+as they are.
+
+Docs: https://keyshroud.dev/docs/ (each page also as Markdown, for example
+https://keyshroud.dev/docs/cli.md) · Troubleshooting: https://keyshroud.dev/docs/troubleshooting.md ·
+CI and Docker: https://keyshroud.dev/docs/ci-and-docker.md · Security model:
 https://keyshroud.dev/docs/security.md

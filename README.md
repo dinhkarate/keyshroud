@@ -27,14 +27,14 @@ that need API keys, while every secret value reaches the model only as `<redacte
 <p align="center"><img src="assets/demo.gif" alt="Demo: on a new machine, keyshroud add stores a GitHub token in the local vault through a masked prompt, keyshroud run masks it in the command's output, and scan finds a copy leaked into a file" width="860"></p>
 
 ```console
-$ keyshroud run --mask -- sh -c 'echo "deploying with $GH_TOKEN"; gh api user -q .login'
+$ keyshroud run -- sh -c 'echo "deploying with $GH_TOKEN"; gh api user -q .login'
 deploying with <redacted:GH_TOKEN>
 dinhkarate
 ```
 
 The command got the real token. The transcript, and the model reading it, got
-`<redacted:GH_TOKEN>`. (Masking is automatic when an agent runs the command;
-`--mask` forces it in a human terminal.)
+`<redacted:GH_TOKEN>`. (`keyshroud run` always masks, in your own terminal too;
+`--no-mask` hands the terminal to an interactive program.)
 
 ## Why keyshroud?
 
@@ -72,7 +72,7 @@ keyshroud add --env GH_TOKEN --item "GitHub token"
 
 # 2. Use it
 keyshroud run -- gh auth status
-keyshroud run -- claude          # start an agent with every wired secret available
+keyshroud run --no-mask -- claude   # start an agent with every wired secret available
 
 # 3. Check everything
 keyshroud doctor
@@ -127,7 +127,7 @@ created item=GitHub token env=GH_TOKEN targets=~/.config/keyshroud/env.json veri
 
 **"Claude Code keeps reading my `.env`."** Run `keyshroud import` to move the values into the vault
 and write a `.env.refs` with lines like `GH_TOKEN=keyshroud://myapp GH_TOKEN`, then start the agent
-with `keyshroud run --refs .env.refs -- claude`. The plugin's hooks mask anything that still
+with `keyshroud run --no-mask --refs .env.refs -- claude`. The plugin's hooks mask anything that still
 slips into a tool result.
 
 **"A failed command printed my token into the transcript."** Turn on
@@ -265,7 +265,8 @@ npm install -g keyshroud
 - **Skill:** teaches Claude to use names and references, and to run secret-using commands through
   `keyshroud run`.
 
-Start Claude through keyshroud to give its Bash commands the secrets: `keyshroud run -- claude`.
+Start Claude through keyshroud to give its Bash commands the secrets: `keyshroud run --no-mask -- claude`
+(`--no-mask` gives Claude's interface the terminal; its tool results are masked by the plugin).
 A vault item can also be Claude Code's own API key (`keyshroud claude-setup --item "Anthropic API key"`).
 [docs/claude-code.md](docs/claude-code.md) has the rest.
 

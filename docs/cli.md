@@ -2,7 +2,7 @@
 
 ```text
 keyshroud get <ENV_NAME | keyshroud://ref | bw://ref | source ref>   print one value (for scripts; not for agents)
-keyshroud run [--refs F]... [--only A,B] [--no-auth] [--mask|--no-mask] -- <cmd>
+keyshroud run [--refs F]... [--only A,B] [--no-auth] [--no-mask] -- <cmd>
 keyshroud inject [-i template] [-o out] [--force]
 keyshroud redact < log.txt
 keyshroud scan [paths...]
@@ -44,9 +44,13 @@ a Touch ID approval on a Mac when an agent runs it. It works on bw only with key
 account, and refuses the item Claude Code's apiKeyHelper uses. `.env.refs` files that point at a
 removed item then fail as unresolved.
 
-`run` masks output whenever stdout is not a terminal (agents, CI, pipes) and
-passes the TTY through untouched for interactive use. Force either way with
-`--mask` / `--no-mask`. `exec` is an alias of `run`.
+`run` masks what the command prints, in a terminal too: several agents run their commands on a
+pseudo-terminal, and what is shown there is what the agent reads. Before 0.13 a terminal was passed
+through unmasked. Masking means the command writes into a pipe, so a program that needs the terminal
+itself (`psql`, an editor, an agent's own interface) is started with `--no-mask`: it gets the
+terminal, and nothing it prints is masked. The output is masked byte for byte: what is not text (an
+archive, a database dump) comes out as it went in, so `keyshroud run -- pg_dump -Fc db > db.dump` is
+safe. `--mask` is still accepted and changes nothing. `exec` is an alias of `run`.
 
 A wired name that does not resolve is left out and named on stderr (`unresolved (names only): …`), and
 the command still runs. A name you ask for with `--only` is one the command needs: when it does not
@@ -63,6 +67,9 @@ character. Without a terminal (an agent's shell), they open a native hidden-inpu
 dialog instead (`osascript` on macOS, `zenity` or `kdialog` on Linux, PowerShell on Windows), so the agent
 can start the command and you only paste. Over SSH or without a display, pipe the
 value with `--stdin`.
+
+`add` refuses a name that is already wired to another item (exit `5`), before it asks for the value:
+`rotate --item` gives that item a new value, and `unwire --env NAME` frees the name for a new item.
 
 `import` reads a `.env` (default `./.env`), decides which lines are secrets (by name, such as
 `*_TOKEN` or `*_KEY`, or by value, such as `sk-…` or a URL with a password), and prints a plan of
@@ -82,7 +89,8 @@ keyshroud run --refs .env.refs -- npm test
 
 **Exit codes:** `0` ok · `2` usage · `3` vault locked or unavailable, or a source that did not accept
 the sign-in · `4` secret missing or item name ambiguous · `5` refusing to overwrite existing state.
-`run` exits with the child's code (or `3`/`4` before it starts, when a name given with `--only` does not resolve).
+`run` exits with the child's code (or `3`/`4` before it starts, when a name given with `--only` does not
+resolve; `126` when the command is there and cannot be run, `127` when it is not found).
 
 ## References
 

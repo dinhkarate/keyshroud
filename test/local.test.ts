@@ -102,6 +102,11 @@ test("a blank machine: add creates the local vault, run masks, and bw is never c
   assert.equal((await runCli(box, ["unlock"])).stdout, "the local vault opens with its key from the keychain; nothing to unlock\n");
   const duplicate = await add(box, "OTHER", "github TOKEN", "other-value-1234");
   assert.equal(duplicate.code, 5);
+  // A name that is wired already is refused before a value is asked for: no item is left unused.
+  const rewire = await add(box, "GH_TOKEN", "Another item", "another-value-1234");
+  assert.equal(rewire.code, 5);
+  assert.match(rewire.stderr, /^GH_TOKEN is already wired to keyshroud:\/\/GitHub%20token: /);
+  assert.doesNotMatch((await runCli(box, ["list"])).stdout, /Another item/);
   assert.deepEqual(await box.bwCalls(), []);
 });
 

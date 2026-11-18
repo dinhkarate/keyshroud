@@ -21,8 +21,9 @@ const usage = `Usage: ${BRAND.bin} <command> [options]
 Secrets
   get <ENV_NAME | ${BRAND.refScheme}://ref | bw://ref | source ref>
                                    Print one resolved value to stdout
-  run [--refs F]... [--only A,B] [--no-auth] [--mask|--no-mask] -- <cmd> [args]
-                                   Run a command with secrets injected (alias: exec)
+  run [--refs F]... [--only A,B] [--no-auth] [--no-mask] -- <cmd> [args]
+                                   Run a command with secrets injected and its output masked (alias: exec)
+                                   (--no-mask: the command gets the terminal, for an interactive program)
   inject [-i template] [-o out] [--force]
                                    Render {{ ${BRAND.refScheme}://ref }}, {{ bw://ref }} and {{ source ref }} placeholders
   redact                           Copy stdin to stdout with vault secrets masked
@@ -238,8 +239,9 @@ async function runCommand(args: string[]): Promise<void> {
   await core.audit("run", Object.keys(env.secrets), command);
   if (env.missing.length) console.error(`${BRAND.bin}: unresolved (names only): ${env.missing.join(", ")}${core.unresolvedReason(vaultError)}`);
 
-  // Mask by default whenever output is not a human terminal (agents, CI, pipes).
-  const mask = flags.includes("--mask") || (!flags.includes("--no-mask") && !process.stdout.isTTY);
+  // Masked unless --no-mask asks otherwise, on a terminal too: several agents run their commands on
+  // a pseudo-terminal (Gemini CLI, Cline, Antigravity), and what is shown there is what the agent reads.
+  const mask = flags.includes("--mask") || !flags.includes("--no-mask");
   const redactor = createRedactor(mask ? await core.redactionValues(env.secrets) : {});
   // Agents started through `run` (e.g. `keyshroud run -- claude`) rely on the
   // hook index, so it must cover env-file values too.
@@ -258,7 +260,8 @@ async function runCommand(args: string[]): Promise<void> {
   await new Promise<void>((done) => {
     let failed = false;
     child.on("close", (code, signal) => { if (!failed) process.exitCode = code ?? 128 + (signal ? constants.signals[signal] ?? 0 : 1); done(); });
-    child.on("error", (error) => { failed = true; console.error(`${BRAND.bin}: could not start ${command} (${(error as NodeJS.ErrnoException).code ?? "error"})`); process.exitCode = 127; done(); });
+    // As a shell answers: 126 for a file that is there and cannot be run, 127 for one that is not found.
+    child.on("error", (error) => { failed = true; const code = (error as NodeJS.ErrnoException).code; console.error(`${BRAND.bin}: could not start ${command} (${code ?? "error"})`); process.exitCode = code === "EACCES" ? 126 : 127; done(); });
   });
 }
 
@@ -1059,6 +1062,14 @@ async function main(): Promise<void> {
       // A passphrase for a new local vault is asked before the value; nothing is written until both are in hand.
       if (backend === "local") await core.prepareLocalVault({ prompt: true });
       if ((await core.findItems(itemName, backend)).some((item) => item.name.toLowerCase() === itemName.toLowerCase())) fail(`Vault item already exists: ${itemName}`, 5);
+      // Before the value is asked for: a name that is wired elsewhere would leave the new item unused.
+      for (const path of targets) {
+        const entries = await core.readAuthEntries(path);
+        const now = Object.hasOwn(entries, envName) ? core.authEntryRaw(entries[envName]) : undefined;
+        if (now === undefined || now === reference) continue;
+        let to = now; try { const ref = parseRef(now); if (ref) to = formatRef(ref); } catch {}
+        fail(`${envName} is already wired to ${shown(to)}: \`${BRAND.bin} rotate --item\` gives that item a new value; to point ${envName} at a new item, \`${BRAND.bin} unwire --env ${envName}\` first`, 5);
+      }
       const secret = await readSecret(args, `Paste secret for ${envName}: `, itemName, envName);
       const { created } = await core.createSecretItem({ itemName, secret, envName, notes, backend });
       if (created) console.error(created);

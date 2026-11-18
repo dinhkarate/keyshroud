@@ -27,14 +27,14 @@ cần API key, trong khi mọi giá trị secret đến với model chỉ dướ
 <p align="center"><img src="../assets/demo.gif" alt="Demo: trên một máy mới, keyshroud add lưu một GitHub token vào vault cục bộ qua prompt có che, keyshroud run che nó trong output của lệnh, và scan tìm ra một bản sao bị lộ trong một file" width="860"></p>
 
 ```console
-$ keyshroud run --mask -- sh -c 'echo "deploying with $GH_TOKEN"; gh api user -q .login'
+$ keyshroud run -- sh -c 'echo "deploying with $GH_TOKEN"; gh api user -q .login'
 deploying with <redacted:GH_TOKEN>
 dinhkarate
 ```
 
 Lệnh nhận token thật. Transcript, và model đọc nó, chỉ thấy
-`<redacted:GH_TOKEN>`. (Việc che là tự động khi agent chạy lệnh;
-`--mask` ép bật trong terminal của người dùng.)
+`<redacted:GH_TOKEN>`. (`keyshroud run` luôn che, kể cả trong terminal của bạn;
+`--no-mask` nhường terminal cho chương trình tương tác.)
 
 ## Vì sao cần keyshroud?
 
@@ -72,7 +72,7 @@ keyshroud add --env GH_TOKEN --item "GitHub token"
 
 # 2. Dùng nó
 keyshroud run -- gh auth status
-keyshroud run -- claude          # khởi động agent với mọi secret đã nối
+keyshroud run --no-mask -- claude   # khởi động agent với mọi secret đã nối
 
 # 3. Kiểm tra mọi thứ
 keyshroud doctor
@@ -127,7 +127,7 @@ created item=GitHub token env=GH_TOKEN targets=~/.config/keyshroud/env.json veri
 
 **"Claude Code cứ đọc `.env` của tôi."** Chạy `keyshroud import` để chuyển các giá trị vào vault
 và ghi một `.env.refs` với các dòng như `GH_TOKEN=keyshroud://myapp GH_TOKEN`, rồi khởi động agent
-bằng `keyshroud run --refs .env.refs -- claude`. Hook của plugin che bất cứ thứ gì còn
+bằng `keyshroud run --no-mask --refs .env.refs -- claude`. Hook của plugin che bất cứ thứ gì còn
 lọt vào một tool result.
 
 **"Một lệnh thất bại đã in token của tôi vào transcript."** Bật
@@ -265,7 +265,8 @@ npm install -g keyshroud
 - **Skill:** dạy Claude dùng tên và tham chiếu, và chạy các lệnh dùng secret qua
   `keyshroud run`.
 
-Khởi động Claude qua keyshroud để các lệnh Bash của nó có secret: `keyshroud run -- claude`.
+Khởi động Claude qua keyshroud để các lệnh Bash của nó có secret: `keyshroud run --no-mask -- claude`
+(`--no-mask` nhường terminal cho giao diện của Claude; kết quả các tool của nó vẫn được plugin che).
 Một item trong vault cũng có thể là API key riêng của Claude Code (`keyshroud claude-setup --item "Anthropic API key"`).
 [docs/claude-code.md](../docs/claude-code.md) có phần còn lại.
 

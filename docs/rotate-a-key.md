@@ -52,7 +52,7 @@ hooks use the new value from the next command on. Check it:
 keyshroud run --only GH_TOKEN -- gh auth status
 ```
 
-A process that was already running (a dev server, an agent started with `keyshroud run -- claude`)
+A process that was already running (a dev server, an agent started with `keyshroud run --no-mask -- claude`)
 keeps the old value in its environment until you restart it.
 
 ## If it is in git history

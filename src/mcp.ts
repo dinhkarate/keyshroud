@@ -164,7 +164,8 @@ async function runTool(args: Json): Promise<Json> {
   const stdout = out("stdout");
   const stderr = out("stderr");
   const lines = [
-    `exit: ${code}`,
+    // Said, so that a command stopped by its time limit is not taken for one that was killed by something else.
+    timedOut && code !== "timed out" ? `exit: ${code} (timed out after ${timeout} ms)` : `exit: ${code}`,
     unresolved,
     `--- stdout ---\n${stdout}`,
     `--- stderr ---\n${stderr}`,

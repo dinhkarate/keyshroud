@@ -152,6 +152,10 @@ pi reports the lock until the next keyshroud command clears it);</li>
 other wired names are removed from what the command inherits, so <code>--only</code> really limits
 what a command can read (inside pi/omp the agent process keeps the session for
 legacy <code>!bw</code> auth entries; its value is redacted from tool output);</li>
+<li><code>run</code> masks what a command prints whether or not its output is a terminal (since 0.13): Gemini CLI,
+Cline and other agents run commands on a pseudo-terminal, and a terminal is no sign that a person
+is reading. Only <code>--no-mask</code> turns it off. The output is masked as bytes, so what is not text
+comes out unchanged;</li>
 <li>two values that would get one label (<code>&lt;redacted:NAME&gt;</code>, <code>&lt;redacted:NAME (2)&gt;</code>) are both masked;</li>
 <li>env files may contain only references and literals: a <code>!command</code> value is
 rejected, and so are variables that change what programs load or run (<code>PATH</code>,
@@ -254,6 +258,8 @@ you opened yourself.</li>
 <ul>
 <li>Redaction is exact-match, so a <em>partial</em> or transformed value (<code>${TOKEN:0:10}</code>, base64, a line
 wrapped by a tool) is not masked.</li>
+<li><code>keyshroud run --no-mask</code> masks nothing: it hands the terminal to an interactive program for the
+person in front of it. An agent that adds the flag reads the values, as it would with <code>get</code>.</li>
 <li>Two reshaped forms are: a value is also masked without its leading and trailing spaces or line
 breaks, and a value of several lines or a JSON document (a PEM key, a service account file) is also
 masked run by run (20 or more letters, digits and <code>+/=_-</code>), so a key shown with line numbers or as a

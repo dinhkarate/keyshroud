@@ -57,7 +57,8 @@ keyshroud run --only GH_TOKEN -- gh pr list       # least privilege; not run if 
 keyshroud run --refs .env.refs -- npm test    # project references
 ```
 Inside the command, refer to `$GH_TOKEN`; keyshroud resolves it. Output is
-masked automatically when not attached to a terminal. MCP: `secrets_run`.
+always masked. Never add `--no-mask`: it is for a person starting an interactive
+program in their own terminal. MCP: `secrets_run`.
 
 ## References (safe to commit)
 

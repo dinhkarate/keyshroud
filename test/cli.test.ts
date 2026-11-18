@@ -166,6 +166,35 @@ test("run --no-mask passes values through and --only limits injection", async ()
   assert.equal(unknown.code, 4);
 });
 
+test("run masks on a terminal too (agents that run commands on a pseudo-terminal); --no-mask gives the command the terminal", async () => {
+  const box = await wired();
+  const command = ["--only", "GH_TOKEN", "--", "/bin/sh", "-c", 'if test -t 1; then echo "tty $GH_TOKEN"; else echo "pipe $GH_TOKEN"; fi'];
+  const masked = await runCliTty(box, ["run", ...command], "never typed", "");
+  assert.equal(masked.code, 0, masked.stdout);
+  assert.match(masked.stdout, /pipe <redacted:GH_TOKEN>/);
+  assert.ok(!masked.stdout.includes(GH));
+  const raw = await runCliTty(box, ["run", "--no-mask", ...command], "never typed", "");
+  assert.match(raw.stdout, new RegExp(`tty ${GH}`));
+});
+
+test("run passes bytes that are no text through unchanged, and masks a value among them", async () => {
+  const box = await wired();
+  // Through a file: what a test reads from a pipe as text would hide a changed byte.
+  const script = `"$T_NODE" "$T_CLI" run --only GH_TOKEN -- /bin/sh -c 'printf "\\377\\000\\376\\200 %s \\303" "$GH_TOKEN"' > out.bin`;
+  const code = await new Promise((resolve) => spawn("/bin/sh", ["-c", script], { env: { ...box.env, T_NODE: NODE, T_CLI: CLI }, cwd: box.dir, stdio: "ignore" }).on("close", resolve));
+  assert.equal(code, 0);
+  assert.deepEqual(await readFile(join(box.dir, "out.bin")), Buffer.concat([Buffer.from([0xff, 0x00, 0xfe, 0x80, 0x20]), Buffer.from("<redacted:GH_TOKEN> "), Buffer.from([0xc3])]));
+});
+
+test("run: a command that cannot be started gives 126 (not executable) or 127 (not found)", async () => {
+  const box = await wired();
+  await writeFile(join(box.dir, "plain.sh"), "#!/bin/sh\necho hi\n", { mode: 0o644 });
+  const denied = await runCli(box, ["run", "--", "./plain.sh"]);
+  assert.equal(denied.code, 126, denied.stderr);
+  assert.match(denied.stderr, /could not start \.\/plain\.sh \(EACCES\)/);
+  assert.equal((await runCli(box, ["run", "--", "no-such-command-anywhere"])).code, 127);
+});
+
 test("run without -- (Windows PowerShell drops it): the command starts after run's own options", async () => {
   const box = await wired();
   await writeFile(join(box.dir, ".env.refs"), "MODE=debug\n");

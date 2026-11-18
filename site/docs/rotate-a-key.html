@@ -123,7 +123,7 @@ on your desktop instead, so the value still never goes through the chat. Over SS
 <p>The name stays wired to the same item, so <code>keyshroud run</code>, <code>.env.refs</code> files, the MCP server and the
 hooks use the new value from the next command on. Check it:</p>
 <pre data-lang="bash"><code>keyshroud run --only GH_TOKEN -- gh auth status</code></pre>
-<p>A process that was already running (a dev server, an agent started with <code>keyshroud run -- claude</code>)
+<p>A process that was already running (a dev server, an agent started with <code>keyshroud run --no-mask -- claude</code>)
 keeps the old value in its environment until you restart it.</p>
 <h2 id="if-it-is-in-git-history"><a class="anchor" href="#if-it-is-in-git-history">If it is in git history</a></h2>
 <p><code>scan</code> reads the working tree, not old commits. A value that was committed is public the moment the

@@ -135,6 +135,10 @@ server you reach over SSH can instead run <code>keyshroud unlock --unattended</c
 The whole walk-through, with a GitHub Actions job and a Dockerfile, is in <a href="/docs/ci-and-docker">CI and Docker</a>.</p>
 <p><strong>Can the agent still use the key?</strong> Yes. The command gets the real value; only the text
 the model reads is masked.</p>
+<p><strong>My program shows no prompt (or no colours) under <code>keyshroud run</code>.</strong> Since 0.13, <code>run</code> masks in a
+terminal too, because some agents run commands on one, and masked output goes through a pipe. Give an
+interactive program the terminal with <code>--no-mask</code>: <code>keyshroud run --no-mask -- psql</code>. Nothing it
+prints is masked then, so that flag is for you, not for an agent&#39;s commands.</p>
 <p><strong>Is this a sandbox?</strong> No. It stops <em>accidental</em> disclosure. A hostile or prompt-injected
 agent can still exfiltrate a value it can use — see the <a href="/docs/security">security model</a>.</p>
 <p><strong>Doesn&#39;t Claude Code do this itself?</strong> Partly, and differently. Claude Code can deny reads of

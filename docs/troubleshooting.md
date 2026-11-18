@@ -50,8 +50,10 @@ Vaultwarden, have sessions of 30 minutes:
 
 Check these in order:
 
-1. **You ran it in your own terminal.** `keyshroud run` passes a terminal through untouched and masks
-   when the output goes to an agent, a pipe or CI. `--mask` forces it.
+1. **The command was run with `--no-mask`, or with keyshroud before 0.13 on a terminal.** `--no-mask`
+   hands the terminal to the command and masks nothing. Before 0.13, `keyshroud run` masked only when
+   its output was not a terminal, and Gemini CLI, Cline and other agents that run commands on a
+   pseudo-terminal got the values as they were: update with `npm i -g keyshroud@latest`.
 2. **The command failed, in Claude Code, and the guard is off.** Claude Code's hook cannot rewrite the
    output of a failed command. Run secret-using commands through `keyshroud run`, or turn on
    [the guard](claude-code.md#the-guard-failed-commands-masked-too): `keyshroud claude-guard`.
@@ -65,6 +67,19 @@ Check these in order:
    [rotate a key](rotate-a-key.md).
 
 If none of these fit, that is a bug worth reporting: see [SECURITY.md](../SECURITY.md).
+
+## An interactive program gets no terminal
+
+`keyshroud run` masks what a command prints, so the command writes into a pipe. A program that wants
+the terminal itself (`psql`, `ssh`, an editor, an agent's interface such as `claude`) then shows no
+prompt, loses its colours, or says its output is not a terminal. Start it with `--no-mask`:
+
+```bash
+keyshroud run --no-mask -- psql
+```
+
+It gets the terminal, and nothing it prints is masked: this is for you, in your own terminal, never
+for a command an agent runs.
 
 ## Claude Code
 

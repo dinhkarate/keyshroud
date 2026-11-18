@@ -6,7 +6,7 @@ To install it for a user, follow https://keyshroud.dev/install.md step by step. 
 
 Key facts for agents:
 
-- Run secret-using commands as `keyshroud run -- <command>`. Output is masked even when the command fails. Agents with a shell use the CLI; the `secrets_run` MCP tool is for clients without one.
+- Run secret-using commands as `keyshroud run --only NAME -- <command>`. Output is masked even when the command fails, and in a terminal too (never add `--no-mask`: it is for a person's interactive program). Agents with a shell use the CLI; the `secrets_run` MCP tool is for clients without one.
 - Never ask the user to paste a secret into chat. To store one, run `keyshroud add --env NAME --item "Item"` or call `secrets_request`; the user types the value into a hidden-input dialog or terminal prompt.
 - Never run `keyshroud get`, `bw get`, or `bw unlock`, and never read a vault password, passphrase or key from the keychain.
 - Projects commit `.env.refs` files with references like `GH_TOKEN=keyshroud://GitHub token` (or `bw://…` for Vaultwarden); `keyshroud import` converts an existing `.env` (names-only dry run by default).

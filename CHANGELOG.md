@@ -5,6 +5,43 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-11-18
+
+### Security
+- **`keyshroud run` masks in a terminal too.** Until now it masked only when its output was not a
+  terminal, on the idea that a terminal means a person. Gemini CLI (its interactive shell is on by
+  default), Cline (it runs commands in a VS Code terminal) and other agents run their commands on a
+  pseudo-terminal, so for them `keyshroud run` printed the values as they were, into the agent's
+  context. Seen with a real agent: Antigravity CLI 1.5.11 read a (made-up) value through 0.12.3 and
+  reads `<redacted:NAME>` through this version. Claude Code, Codex with its default pipes, OpenCode,
+  pi/omp and the MCP tools were not affected. If you use keyshroud with an agent that runs commands
+  in a terminal, update, and consider the values it handled as seen by that agent's provider.
+- `--no-mask` is now the one way to get output unmasked: it hands the terminal to the command. The
+  skill and the setup guide tell agents never to add it.
+
+### Changed
+- **An interactive program started through `keyshroud run` needs `--no-mask`**: `keyshroud run
+  --no-mask -- claude`, `keyshroud run --no-mask -- psql`. Masked output goes through a pipe, so
+  without the flag such a program finds no terminal. `--mask` is still accepted and changes nothing.
+- `keyshroud add --env NAME` refuses a name that is already wired to another item before it asks for
+  the value (exit 5), and says what to do instead (`rotate --item`, or `unwire` first). Before, it
+  stored the new value in an item that nothing used, and then reported the conflict.
+- `run` exits 126 for a command that is there and cannot be run, as a shell does (it was 127).
+- `secrets_run` says when a command was stopped by its time limit (`exit: … (timed out after N ms)`);
+  on Windows the answer was a bare `exit: 1`.
+- The setup guide for agents installs the Claude Code plugin from the shell (`claude plugin
+  marketplace add`, `claude plugin install`), uses `run --only`, checks the masking once after the
+  first secret, and has a section on updating. Its rules name `env --shell` and `inject` beside `get`.
+- keyshroud.dev sends `X-Content-Type-Options`, `X-Frame-Options` and `Referrer-Policy` headers.
+
+### Fixed
+- **Output that is not text came out of `keyshroud run` damaged.** The stream was decoded as UTF-8
+  on its way through the redactor, so every byte that is not valid UTF-8 became three others:
+  `keyshroud run -- pg_dump -Fc db > db.dump`, an archive or an image written to a pipe or a file
+  was silently corrupted, even with no secret wired. The output is now masked as bytes and comes
+  out byte for byte; a value is still found wherever its bytes are, also when a chunk ends inside
+  one of its characters. `keyshroud redact` likewise.
+
 ## [0.12.3] - 2026-11-17
 
 ### Security

@@ -122,7 +122,9 @@ that are not run that way.</li>
 that doesn&#39;t see your npm/nvm bin directory, run <code>keyshroud link-cli</code> (links it
 into <code>~/.local/bin</code>) and make sure that directory is on the GUI&#39;s <code>PATH</code>.</p>
 <p>To give Bash commands the secrets as env vars, start Claude through keyshroud:</p>
-<pre data-lang="bash"><code>keyshroud run -- claude</code></pre>
+<pre data-lang="bash"><code>keyshroud run --no-mask -- claude</code></pre>
+<p><code>--no-mask</code> hands the terminal to Claude Code&#39;s interface; what its tools return is masked by the
+plugin&#39;s hook, and by the guard below.</p>
 <p>Use a vault item as Claude Code&#39;s own API key (<code>apiKeyHelper</code>):</p>
 <pre data-lang="bash"><code>keyshroud claude-setup --item &quot;Anthropic API key&quot; --ttl-ms 600000</code></pre>
 <p>It backs up <code>settings.json</code> first and refuses to replace an existing helper

@@ -28,14 +28,14 @@ API キーを必要とするコマンドを実行でき、シークレットの�
 <p align="center"><img src="../assets/demo.gif" alt="デモ：新しいマシンで keyshroud add がマスクされたプロンプト経由で GitHub トークンをローカル vault に保存し、keyshroud run がコマンド出力でそれをマスクし、scan がファイルに漏れたコピーを見つける" width="860"></p>
 
 ```console
-$ keyshroud run --mask -- sh -c 'echo "deploying with $GH_TOKEN"; gh api user -q .login'
+$ keyshroud run -- sh -c 'echo "deploying with $GH_TOKEN"; gh api user -q .login'
 deploying with <redacted:GH_TOKEN>
 dinhkarate
 ```
 
 コマンドは本物のトークンを受け取ります。対話ログと、それを読むモデルに届くのは
-`<redacted:GH_TOKEN>` だけです。（エージェントがコマンドを実行する場合は自動でマスクされます。
-人が操作するターミナルでは `--mask` で強制できます。）
+`<redacted:GH_TOKEN>` だけです。（`keyshroud run` は常にマスクします。自分のターミナルでも同じです。
+`--no-mask` は対話型プログラムにターミナルを渡します。）
 
 ## なぜ keyshroud？
 
@@ -73,7 +73,7 @@ keyshroud add --env GH_TOKEN --item "GitHub token"
 
 # 2. 使う
 keyshroud run -- gh auth status
-keyshroud run -- claude          # 紐付けたすべてのシークレットを使える状態でエージェントを起動
+keyshroud run --no-mask -- claude   # 紐付けたすべてのシークレットを使える状態でエージェントを起動
 
 # 3. すべてを確認する
 keyshroud doctor
@@ -128,7 +128,7 @@ created item=GitHub token env=GH_TOKEN targets=~/.config/keyshroud/env.json veri
 
 **「Claude Code が `.env` を読み続ける。」** `keyshroud import` を実行して値を vault に移し、
 `GH_TOKEN=keyshroud://myapp GH_TOKEN` のような行を含む `.env.refs` を書き出してから、
-`keyshroud run --refs .env.refs -- claude` でエージェントを起動します。プラグインのフックが、
+`keyshroud run --no-mask --refs .env.refs -- claude` でエージェントを起動します。プラグインのフックが、
 それでもツール結果に漏れたものをマスクします。
 
 **「失敗したコマンドがトークンを対話ログに出力した。」**
@@ -266,7 +266,8 @@ npm install -g keyshroud
 - **スキル：** 名前と参照を使い、シークレットを使うコマンドを `keyshroud run` 経由で
   実行するよう Claude に教えます。
 
-Claude を keyshroud 経由で起動すると、その Bash コマンドでシークレットを利用できます：`keyshroud run -- claude`。
+Claude を keyshroud 経由で起動すると、その Bash コマンドでシークレットを利用できます：`keyshroud run --no-mask -- claude`
+（`--no-mask` は Claude の画面にターミナルを渡します。ツールの結果は引き続きプラグインがマスクします）。
 vault の項目を Claude Code 自身の API キーにすることもできます（`keyshroud claude-setup --item "Anthropic API key"`）。
 残りは [docs/claude-code.md](../docs/claude-code.md) にあります。
 

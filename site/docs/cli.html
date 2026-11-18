@@ -98,7 +98,7 @@
 <article>
 <h1>CLI reference</h1>
 <pre data-lang="text"><code>keyshroud get &lt;ENV_NAME | keyshroud://ref | bw://ref | source ref&gt;   print one value (for scripts; not for agents)
-keyshroud run [--refs F]... [--only A,B] [--no-auth] [--mask|--no-mask] -- &lt;cmd&gt;
+keyshroud run [--refs F]... [--only A,B] [--no-auth] [--no-mask] -- &lt;cmd&gt;
 keyshroud inject [-i template] [-o out] [--force]
 keyshroud redact &lt; log.txt
 keyshroud scan [paths...]
@@ -136,9 +136,13 @@ which variables it unwires) until you add <code>--yes</code>. With <code>--yes</
 a Touch ID approval on a Mac when an agent runs it. It works on bw only with keyshroud&#39;s own agent
 account, and refuses the item Claude Code&#39;s apiKeyHelper uses. <code>.env.refs</code> files that point at a
 removed item then fail as unresolved.</p>
-<p><code>run</code> masks output whenever stdout is not a terminal (agents, CI, pipes) and
-passes the TTY through untouched for interactive use. Force either way with
-<code>--mask</code> / <code>--no-mask</code>. <code>exec</code> is an alias of <code>run</code>.</p>
+<p><code>run</code> masks what the command prints, in a terminal too: several agents run their commands on a
+pseudo-terminal, and what is shown there is what the agent reads. Before 0.13 a terminal was passed
+through unmasked. Masking means the command writes into a pipe, so a program that needs the terminal
+itself (<code>psql</code>, an editor, an agent&#39;s own interface) is started with <code>--no-mask</code>: it gets the
+terminal, and nothing it prints is masked. The output is masked byte for byte: what is not text (an
+archive, a database dump) comes out as it went in, so <code>keyshroud run -- pg_dump -Fc db &gt; db.dump</code> is
+safe. <code>--mask</code> is still accepted and changes nothing. <code>exec</code> is an alias of <code>run</code>.</p>
 <p>A wired name that does not resolve is left out and named on stderr (<code>unresolved (names only): …</code>), and
 the command still runs. A name you ask for with <code>--only</code> is one the command needs: when it does not
 resolve, the command is not run, and <code>run</code> exits <code>3</code> (the vault could not be unlocked) or <code>4</code>.
@@ -152,6 +156,8 @@ character. Without a terminal (an agent&#39;s shell), they open a native hidden-
 dialog instead (<code>osascript</code> on macOS, <code>zenity</code> or <code>kdialog</code> on Linux, PowerShell on Windows), so the agent
 can start the command and you only paste. Over SSH or without a display, pipe the
 value with <code>--stdin</code>.</p>
+<p><code>add</code> refuses a name that is already wired to another item (exit <code>5</code>), before it asks for the value:
+<code>rotate --item</code> gives that item a new value, and <code>unwire --env NAME</code> frees the name for a new item.</p>
 <p><code>import</code> reads a <code>.env</code> (default <code>./.env</code>), decides which lines are secrets (by name, such as
 <code>*_TOKEN</code> or <code>*_KEY</code>, or by value, such as <code>sk-…</code> or a URL with a password), and prints a plan of
 names only. No vault item and no <code>.env.refs</code> is written until you add <code>--yes</code> (reading the plan opens
@@ -166,7 +172,8 @@ keyshroud import --yes           # store them and write .env.refs
 keyshroud run --refs .env.refs -- npm test</code></pre>
 <p><strong>Exit codes:</strong> <code>0</code> ok · <code>2</code> usage · <code>3</code> vault locked or unavailable, or a source that did not accept
 the sign-in · <code>4</code> secret missing or item name ambiguous · <code>5</code> refusing to overwrite existing state.
-<code>run</code> exits with the child&#39;s code (or <code>3</code>/<code>4</code> before it starts, when a name given with <code>--only</code> does not resolve).</p>
+<code>run</code> exits with the child&#39;s code (or <code>3</code>/<code>4</code> before it starts, when a name given with <code>--only</code> does not
+resolve; <code>126</code> when the command is there and cannot be run, <code>127</code> when it is not found).</p>
 <h2 id="references"><a class="anchor" href="#references">References</a></h2>
 <div class="table"><table>
 <thead>

@@ -35,8 +35,11 @@ into `~/.local/bin`) and make sure that directory is on the GUI's `PATH`.
 To give Bash commands the secrets as env vars, start Claude through keyshroud:
 
 ```bash
-keyshroud run -- claude
+keyshroud run --no-mask -- claude
 ```
+
+`--no-mask` hands the terminal to Claude Code's interface; what its tools return is masked by the
+plugin's hook, and by the guard below.
 
 Use a vault item as Claude Code's own API key (`apiKeyHelper`):
 

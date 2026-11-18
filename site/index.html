@@ -23,7 +23,7 @@
   "url": "https://keyshroud.dev/",
   "applicationCategory": "DeveloperApplication",
   "operatingSystem": "macOS, Linux, Windows",
-  "softwareVersion": "0.12.3",
+  "softwareVersion": "0.13.0",
   "license": "https://opensource.org/licenses/MIT",
   "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
   "downloadUrl": "https://www.npmjs.com/package/keyshroud",
@@ -527,9 +527,9 @@ curl: (22) error: 401</div>
         <p>Typed into a masked prompt, or a dialog when an agent starts it. The vault&#8217;s key goes to the macOS keychain, the Linux Secret Service or Windows DPAPI. Already have a <code>.env</code>? <code>keyshroud import</code> moves it.</p>
       </div>
       <div class="step">
-        <h3>Run your agent</h3>
-        <pre><code>keyshroud run -- claude</code></pre>
-        <p>Or install the Claude Code plugin: <code>/plugin marketplace add dinhkarate/keyshroud</code></p>
+        <h3>Use it</h3>
+        <pre><code>keyshroud run -- gh auth status</code></pre>
+        <p>The command gets the token; what it prints shows <code>&lt;redacted:GH_TOKEN&gt;</code>. In Claude Code, install the plugin: <code>/plugin marketplace add dinhkarate/keyshroud</code></p>
       </div>
     </div>
     <div class="agent-setup">
@@ -595,7 +595,7 @@ curl: (22) error: 401</div>
     <h2>Built for agents, not just shells</h2>
     <p class="sub">Every feature works with names and references, never with values.</p>
     <div class="grid c3">
-      <div class="card"><h3>Masked output</h3><p><code>keyshroud run</code> streams stdout and stderr through a redactor. A secret that arrives split across two chunks is still masked, and masking is on by default when output isn't going to a terminal.</p></div>
+      <div class="card"><h3>Masked output</h3><p><code>keyshroud run</code> streams stdout and stderr through a redactor. A secret that arrives split across two chunks is still masked. Masking is always on, in a terminal too, because some agents run commands on one; <code>--no-mask</code> hands the terminal to an interactive program. Output that is not text passes through byte for byte.</p></div>
       <div class="card"><h3>Hooks on tool output</h3><p>pi <code>tool_result</code> and Claude Code <code>PostToolUse</code> hooks scrub tool results, including commands the agent ran without keyshroud.</p></div>
       <div class="card"><h3>The guard</h3><p>Claude Code can't rewrite a failed call, so <code>keyshroud claude-guard</code> masks what every Bash command prints as it is written, failed ones included.</p></div>
       <div class="card"><h3>MCP server</h3><p>For clients without a shell, <code>keyshroud mcp</code> gives them <code>secrets_run</code>, <code>secrets_list</code> and <code>secrets_request</code>. None of them return values.</p></div>

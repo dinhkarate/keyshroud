@@ -51,6 +51,11 @@ The whole walk-through, with a GitHub Actions job and a Dockerfile, is in [CI an
 **Can the agent still use the key?** Yes. The command gets the real value; only the text
 the model reads is masked.
 
+**My program shows no prompt (or no colours) under `keyshroud run`.** Since 0.13, `run` masks in a
+terminal too, because some agents run commands on one, and masked output goes through a pipe. Give an
+interactive program the terminal with `--no-mask`: `keyshroud run --no-mask -- psql`. Nothing it
+prints is masked then, so that flag is for you, not for an agent's commands.
+
 **Is this a sandbox?** No. It stops *accidental* disclosure. A hostile or prompt-injected
 agent can still exfiltrate a value it can use — see the [security model](security.md).
 

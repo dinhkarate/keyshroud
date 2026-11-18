@@ -61,6 +61,10 @@ the file off the machines agents work on.
   other wired names are removed from what the command inherits, so `--only` really limits
   what a command can read (inside pi/omp the agent process keeps the session for
   legacy `!bw` auth entries; its value is redacted from tool output);
+- `run` masks what a command prints whether or not its output is a terminal (since 0.13): Gemini CLI,
+  Cline and other agents run commands on a pseudo-terminal, and a terminal is no sign that a person
+  is reading. Only `--no-mask` turns it off. The output is masked as bytes, so what is not text
+  comes out unchanged;
 - two values that would get one label (`<redacted:NAME>`, `<redacted:NAME (2)>`) are both masked;
 - env files may contain only references and literals: a `!command` value is
   rejected, and so are variables that change what programs load or run (`PATH`,
@@ -164,6 +168,8 @@ the file off the machines agents work on.
 
 - Redaction is exact-match, so a *partial* or transformed value (`${TOKEN:0:10}`, base64, a line
   wrapped by a tool) is not masked.
+- `keyshroud run --no-mask` masks nothing: it hands the terminal to an interactive program for the
+  person in front of it. An agent that adds the flag reads the values, as it would with `get`.
 - Two reshaped forms are: a value is also masked without its leading and trailing spaces or line
   breaks, and a value of several lines or a JSON document (a PEM key, a service account file) is also
   masked run by run (20 or more letters, digits and `+/=_-`), so a key shown with line numbers or as a

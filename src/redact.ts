@@ -22,6 +22,9 @@ export interface Redactor {
   // is still unfinished at the end of `text`. Finished secrets may straddle the cut (only when
   // there are more of them than a stream may hold back): pass the rest to `redact` as `after`.
   safeCut(text: string): number;
+  // The same masking for bytes read as latin1, one character per byte: what a stream that must
+  // come out byte for byte is masked with (see createRedactStream).
+  bytes?(): Redactor;
 }
 
 export function placeholder(name: string): string { return `<redacted:${name}>`; }
@@ -70,12 +73,23 @@ function applyHits(text: string, hits: Hit[], from = 0, to = text.length): strin
   return out + text.slice(cursor, to);
 }
 
+// The UTF-8 bytes of a text, one character per byte.
+const latin1 = (text: string) => Buffer.from(text, "utf8").toString("latin1");
+
 // `maxHold`: see MAX_HOLD (tests lower it).
 export function createRedactor(values: Record<string, string>, maxHold = MAX_HOLD): Redactor {
   const byValue = new Map<string, string>();
   for (const [name, value] of Object.entries(values)) {
     for (const form of redactForms(value)) if (!byValue.has(form)) byValue.set(form, name);
   }
+  let bytes: Redactor | null = null;
+  return {
+    ...redactorOf(byValue, maxHold),
+    bytes() { return bytes ??= redactorOf(new Map([...byValue].map(([form, name]) => [latin1(form), latin1(name)])), maxHold); },
+  };
+}
+
+function redactorOf(byValue: Map<string, string>, maxHold: number): Redactor {
   // Longest first so a secret containing another secret is replaced whole.
   const secrets = [...byValue.entries()].sort((a, b) => b[0].length - a[0].length);
   const maxLength = secrets.reduce((max, [value]) => Math.max(max, value.length), 0);
@@ -136,8 +150,18 @@ export function createRedactFeed(redactor: Redactor): { push(text: string): stri
   };
 }
 
-// Streams child output through the redactor (see createRedactFeed).
+// Streams child output through the redactor (see createRedactFeed), byte for byte: the output is
+// read as latin1 and so are the values, so what is not text (an archive, a database dump, an
+// image) comes out as it went in, and a value is found wherever its bytes are.
 export function createRedactStream(redactor: Redactor): Transform {
+  const bytes = redactor.bytes?.();
+  if (bytes) {
+    const feed = createRedactFeed(bytes);
+    return new Transform({
+      transform(chunk: Buffer, _encoding, callback) { callback(null, Buffer.from(feed.push(chunk.toString("latin1")), "latin1")); },
+      flush(callback) { callback(null, Buffer.from(feed.end(), "latin1")); },
+    });
+  }
   const decoder = new StringDecoder("utf8");
   const feed = createRedactFeed(redactor);
   return new Transform({
