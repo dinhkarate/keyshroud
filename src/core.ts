@@ -766,8 +766,8 @@ async function ensureSessionInner(existing: string | undefined, opts: SessionOpt
   if (!master) {
     if (!opts.prompt && !opts.unattended) throw await lockedError();
     for (;;) {
-      try { master = await askMasterPassword({ unattended: opts.unattended }); break; } catch (error) {
-        if (!(error instanceof Error && error.message === DIALOG_BUSY)) throw error;
+      try { master = await askMasterPassword({ unattended: opts.unattended, terminal: true }); break; } catch (error) {
+        if (!(error instanceof Error && (error.message === DIALOG_BUSY || error.message === ASKED_IN_TERMINAL))) throw error;
         const token = await waitForSession();
         if (token) return token;
       }
@@ -796,9 +796,18 @@ async function ensureSessionInner(existing: string | undefined, opts: SessionOpt
 const DEAD_LOGIN_RE = /invalid_grant|refresh token|not logged in|logged out|unauthori[sz]ed|\b401\b|invalid_token/i;
 const DEAD_LOGIN = `bw's login on this machine expired or was revoked by the server: run \`${BRAND.bin} setup --email EMAIL --server URL --registered\` (agent account) or \`bw login\` in a terminal`;
 
+// `dialog terminal`: `unlock` in a terminal window opens the session; the caller then reads it as
+// it reads one that another process opened. Returns when no terminal window is in use here.
+async function unlockInTerminal(): Promise<void> {
+  const window = await runInTerminal(["unlock"]);
+  if (!window) return;
+  if (window.code === 0) throw new Error(ASKED_IN_TERMINAL);
+  throw new Error(window.output.trim().split("\n").pop() || "Cancelled");
+}
+
 // Ask the person at the keyboard: a masked prompt on a terminal, else a native
 // dialog. null when nobody can be asked (SSH without a terminal, no display).
-export async function askMasterPassword(opts: { email?: string; unattended?: boolean } = {}): Promise<string | null> {
+export async function askMasterPassword(opts: { email?: string; unattended?: boolean; terminal?: boolean } = {}): Promise<string | null> {
   const account = opts.email ?? (await rawStatus()).email ?? "the vault account";
   const span = opts.unattended ? "with no time limit (unattended)" : `for ${Math.round(SESSION_TTL_MS / 60000)} minutes`;
   const tty = process.stdin.isTTY && process.stderr.isTTY;
@@ -810,6 +819,7 @@ export async function askMasterPassword(opts: { email?: string; unattended?: boo
     if (!value) throw new Error("Cancelled");
     return value;
   }
+  if (opts.terminal) await unlockInTerminal();
   const value = await nativePasswordDialog([
     "A program on this computer, usually an AI agent, needs a secret and the vault is locked.",
     "",
@@ -1659,14 +1669,16 @@ const DIALOG_BUSY = "Another keyshroud dialog is already open";
 export const DIALOG_FILE = join(CONFIG_DIR, "dialog");
 const DIALOG_ICON = fileURLToPath(new URL(`../src/${BRAND.bin}.${process.platform === "win32" ? "ico" : "icns"}`, import.meta.url));
 
-export async function dialogsOff(): Promise<boolean> {
-  const forced = setting("DIALOG");
-  if (forced) return forced === "off";
-  return (await readFile(DIALOG_FILE, "utf8").catch(() => "")).trim() === "off";
+// on: a window on the desktop. terminal: a terminal window that runs the command itself. off: neither.
+export type DialogMode = "on" | "off" | "terminal";
+export async function dialogMode(): Promise<DialogMode> {
+  const value = setting("DIALOG") ?? (await readFile(DIALOG_FILE, "utf8").catch(() => "")).trim();
+  return value === "off" || value === "terminal" ? value : "on";
 }
-export async function setDialogs(on: boolean): Promise<void> {
-  if (on) await rm(DIALOG_FILE, { force: true });
-  else await writePrivateFile(DIALOG_FILE, "off\n");
+export async function dialogsOff(): Promise<boolean> { return (await dialogMode()) === "off"; }
+export async function setDialogs(mode: DialogMode): Promise<void> {
+  if (mode === "on") await rm(DIALOG_FILE, { force: true });
+  else await writePrivateFile(DIALOG_FILE, `${mode}\n`);
 }
 
 // What an agent sets for the commands it runs: the name a dialog gives for who asked.
@@ -1700,6 +1712,74 @@ async function askedFrom(): Promise<string> {
   const where = cwd === home ? "~" : cwd.startsWith(home + sep) ? `~${cwd.slice(home.length)}` : cwd;
   return oneLine(`${who ?? "a program"}, in ${where}`);
 }
+// `dialog terminal`: what would be asked in a window is asked in a terminal window instead, by the
+// command itself. That window runs `argv` (add, rotate, unlock, source add) as the person would
+// have typed it; the value is entered there and never passes through this process, which only
+// waits for how it ended and what it printed (names, no values). null: no terminal window can
+// be opened here, or the mode is another. A window that is closed counts as a cancel.
+const SELF_CLI = fileURLToPath(new URL(import.meta.url.endsWith(".ts") ? (process.features.typescript ? "./cli.ts" : "../dist/cli.js") : "./cli.js", import.meta.url));
+const ASKED_IN_TERMINAL = "The session was opened in a terminal window";
+export const TERMINAL_COMMANDS = ["add", "rotate", "unlock", "source"];
+
+function terminalOpeners(script: string): Array<[string, string[]]> {
+  if (process.platform === "darwin") return [["open", [script]]];
+  if (process.platform === "win32") return /["%^&]/.test(script) ? [] : [[join(SYSTEM32, "cmd.exe"), ["/d", "/s", "/c", `"start "${BRAND.name}" "${script}""`]]];
+  if (!process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) return [];
+  const run = ["sh", script];
+  return [
+    ...(process.env.TERMINAL ? [[process.env.TERMINAL, ["-e", ...run]] as [string, string[]]] : []),
+    ["x-terminal-emulator", ["-e", ...run]], ["gnome-terminal", ["--", ...run]], ["konsole", ["-e", ...run]],
+    ["xfce4-terminal", ["-x", ...run]], ["kitty", run], ["alacritty", ["-e", ...run]], ["xterm", ["-e", ...run]],
+  ];
+}
+
+export async function runInTerminal(argv: string[]): Promise<{ code: number; output: string } | null> {
+  if (process.env.SSH_CONNECTION || process.env.SSH_TTY || (await dialogMode()) !== "terminal") return null;
+  const base = join(CONFIG_DIR, `terminal-${randomBytes(8).toString("hex")}`);
+  const script = `${base}.${process.platform === "win32" ? "cmd" : "command"}`;
+  const openers = terminalOpeners(script);
+  if (!openers.length || !existsSync(SELF_CLI)) return null;
+  const quote = (text: string) => process.platform === "win32" ? `"${text}"` : `'${text.replaceAll("'", "'\\''")}'`;
+  const words = [process.execPath, ...process.execArgv, SELF_CLI, "_terminal", `${base}.json`];
+  // cmd.exe has no quoting that holds for these.
+  if (process.platform === "win32" && words.some((word) => /["%^&\r\n]/.test(word))) return null;
+  const line = words.map(quote).join(" ");
+  const clean = () => Promise.all(["json", "command", "cmd", "pid", "out", "code"].map((ext) => rm(`${base}.${ext}`, { force: true })));
+  return withDialogLock(async () => {
+    try {
+      // Settings of this process that a window started by the desktop would not have.
+      const env = Object.fromEntries(["CONFIG_DIR", "BACKEND", "VAULT_KEY"].flatMap((name) => { const value = setting(name); return value ? [[`${P}_${name}`, value]] : []; }));
+      await writePrivateFile(`${base}.json`, JSON.stringify({ argv, from: await askedFrom(), cwd: process.cwd(), env }));
+      await writePrivateFile(script, process.platform === "win32" ? `@echo off\r\n${line}\r\npause\r\n` : `#!/bin/sh\nexec ${line}\n`);
+      if (process.platform !== "win32") await chmod(script, 0o700);
+      let opened = false;
+      for (const [command, args] of openers) {
+        const started = await new Promise<boolean>((resolve) => {
+          const child = spawn(command, args, { detached: true, stdio: "ignore", env: childEnv(), windowsVerbatimArguments: true });
+          child.once("error", () => resolve(false));
+          child.once("spawn", () => { child.unref(); resolve(true); });
+        });
+        if (started) { opened = true; break; }
+      }
+      if (!opened) return null;
+      const deadline = Date.now() + DIALOG_TIMEOUT_MS;
+      const began = Date.now();
+      let goneAt = 0;
+      for (;;) {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        const code = await readFile(`${base}.code`, "utf8").then((text) => Number(text.trim()), () => null);
+        if (code !== null && Number.isInteger(code)) return { code, output: await readFile(`${base}.out`, "utf8").catch(() => "") };
+        const pid = await readFile(`${base}.pid`, "utf8").then((text) => Number(text.trim()), () => 0);
+        // No window came up at all: as where none can be opened.
+        if (!pid && Date.now() - began > 20_000) return null;
+        let alive = !pid; if (pid) try { process.kill(pid, 0); alive = true; } catch {}
+        if (alive) goneAt = 0; else if (!goneAt) goneAt = Date.now();
+        if ((goneAt && Date.now() - goneAt > 1500) || Date.now() > deadline) throw new Error("Cancelled");
+      }
+    } finally { await clean(); }
+  });
+}
+
 // The way that needs no trust in a window: the same thing, started by the person in a terminal.
 function ownTerminal(command: string): string[] {
   return ["", "Not sure about this window? Press Cancel and run this in a terminal yourself:", command];
@@ -2042,7 +2122,7 @@ async function localKey(file: VaultFile, opts: SessionOptions = {}): Promise<Buf
       await writeLocalSession(file.id, key, Boolean(opts.unattended));
       return key;
     } catch (error) {
-      if (opts.unattended || !(error instanceof Error && error.message === DIALOG_BUSY)) throw error;
+      if (opts.unattended || !(error instanceof Error && (error.message === DIALOG_BUSY || error.message === ASKED_IN_TERMINAL))) throw error;
       const waited = await waitForLocalSession(file.id);
       if (waited) return waited;
     }
@@ -2429,6 +2509,7 @@ async function askPassphrase(opts: SessionOptions): Promise<string> {
     if (!value) throw new Error("Cancelled");
     return value;
   }
+  await unlockInTerminal();
   const value = await nativePasswordDialog([
     "A program on this computer, usually an AI agent, needs a secret and the local vault is locked.",
     "",

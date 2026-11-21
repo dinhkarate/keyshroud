@@ -42,6 +42,7 @@ Vaultwarden, have sessions of 30 minutes:
   run it in a terminal, or pipe the value with `--stdin`.
 - **You do not trust a window that asks for a secret**: you do not have to. Press Cancel and run the
   command the window shows in your own terminal, or turn the windows off with `keyshroud dialog off`.
+  `keyshroud dialog terminal` is the middle way: the question comes in a terminal window that runs the command itself.
 - **`keyshroud status` exits `3`** while the vault is locked, which is handy in a script.
 - **`The Linux keyring is locked`**: you are logged in over SSH without a desktop session. Unlock the
   keyring, or give that machine a passphrase vault: `keyshroud rekey --to passphrase`.

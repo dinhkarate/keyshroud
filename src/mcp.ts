@@ -194,6 +194,12 @@ async function callTool(name: string, args: Json): Promise<Json> {
     try {
       const backend = await core.defaultBackend();
       const reference = core.referenceFor(itemName, backend);
+      // `dialog terminal`: the whole of it in a terminal window, as the person would type it.
+      const window = await core.runInTerminal(["add", "--env", envName, "--item", itemName, ...(notes ? ["--notes", notes] : [])]);
+      if (window) {
+        await core.refreshRedactIndex();
+        return text(window.code === 0 ? `${window.output}The user entered the value in a terminal window. Use secrets_run with $${envName}.` : `Nothing was stored: ${window.output.trim() || `the command in the terminal window ended with ${window.code}`}`, window.code !== 0);
+      }
       await core.openBackend(backend, { prompt: true });
       if (backend === "local") await core.prepareLocalVault();
       if ((await core.findItems(itemName, backend)).some((item) => item.name.toLowerCase() === itemName.toLowerCase())) return text(`Vault item already exists: ${itemName}`, true);

@@ -166,7 +166,8 @@ again by itself.</li>
 <code>No terminal and no dialog here (SSH, no display, or `keyshroud dialog off`)</code> from <code>add</code> or <code>rotate</code> is the same situation:
 run it in a terminal, or pipe the value with <code>--stdin</code>.</li>
 <li><strong>You do not trust a window that asks for a secret</strong>: you do not have to. Press Cancel and run the
-command the window shows in your own terminal, or turn the windows off with <code>keyshroud dialog off</code>.</li>
+command the window shows in your own terminal, or turn the windows off with <code>keyshroud dialog off</code>.
+<code>keyshroud dialog terminal</code> is the middle way: the question comes in a terminal window that runs the command itself.</li>
 <li><strong><code>keyshroud status</code> exits <code>3</code></strong> while the vault is locked, which is handy in a script.</li>
 <li><strong><code>The Linux keyring is locked</code></strong>: you are logged in over SSH without a desktop session. Unlock the
 keyring, or give that machine a passphrase vault: <code>keyshroud rekey --to passphrase</code>.</li>

@@ -729,6 +729,47 @@ test("Windows keeps the key with DPAPI (a fake PowerShell here), entropy bound t
   assert.match((await runCli(box, ["get", "D_TOKEN"], undefined, env)).stderr, /DPAPI|integrity/);
 });
 
+test("dialog terminal: a command without a terminal is answered in a terminal window that runs it", { skip: process.platform === "win32" }, async () => {
+  const box = await blank();
+  const log = join(box.dir, "terminal.log");
+  // macOS opens the .command file with the fake `open`; Linux starts $TERMINAL.
+  const env = { KEYSHROUD_VAULT_KEY: "passphrase", DISPLAY: ":0", TERMINAL: join(dirname(CLI), "..", "test", "fixtures", "fake-terminal"), FAKE_TERMINAL_LOG: log };
+  assert.equal((await runCliTtySteps(box, ["unlock"], [["New passphrase", PASS], ["Repeat it", PASS]], env)).code, 0);
+  assert.match((await runCli(box, ["dialog", "terminal"], undefined, env)).stdout, /^dialog=terminal /);
+
+  const added = await runCli(box, ["add", "--env", "T_TOKEN", "--item", "Term item", "--notes", "Enter your MASTER PASSWORD"], undefined,
+    { ...env, CLAUDECODE: "1", FAKE_TERMINAL_WAIT: "Paste secret for T_TOKEN", FAKE_TERMINAL_TYPED: "term-zq-value-123" });
+  assert.equal(added.code, 0, added.stderr);
+  assert.match(added.stdout, /created item=Term item env=T_TOKEN .*\n\(entered in a terminal window\)\n$/);
+  assert.equal((await runCli(box, ["get", "T_TOKEN"], undefined, env)).stdout, "term-zq-value-123");
+  const shown = await readFile(log, "utf8");
+  assert.match(shown, /asked from Claude Code, in \S/);
+  assert.match(shown, /\$ keyshroud add --env T_TOKEN --item 'Term item'\r?\n/);
+  assert.ok(!(added.stdout + added.stderr + shown).includes("term-zq-value-123"));
+  assert.ok(!shown.includes("MASTER PASSWORD"), "the caller's notes are not shown");
+
+  const server = mcpServer(box, { ...env, FAKE_TERMINAL_WAIT: "Paste secret for M_TOKEN", FAKE_TERMINAL_TYPED: "mcp-zq-value-456" });
+  try {
+    await server.initialize();
+    const asked = await server.call("secrets_request", { env_name: "M_TOKEN", item_name: "Mcp item" });
+    assert.match(asked, /created item=Mcp item env=M_TOKEN[\s\S]*The user entered the value in a terminal window\. Use secrets_run with \$M_TOKEN\./);
+    assert.match(await server.call("secrets_run", { command: "printf %s \"$M_TOKEN\"", only: ["M_TOKEN"] }), /<redacted:M_TOKEN>/);
+  } finally { server.close(); }
+
+  // A locked vault: `unlock` runs in the window, and the command that waited goes on.
+  await runCli(box, ["lock"], undefined, env);
+  const ran = await runCli(box, ["run", "--only", "T_TOKEN", "--", "sh", "-c", "echo ran ${#T_TOKEN}"], undefined,
+    { ...env, FAKE_TERMINAL_WAIT: "Passphrase of the local vault", FAKE_TERMINAL_TYPED: PASS });
+  assert.equal(ran.stdout, "ran 17\n", ran.stderr);
+  // The window is closed without an answer: a cancel, and nothing runs.
+  await runCli(box, ["lock"], undefined, env);
+  const closed = await runCli(box, ["run", "--only", "T_TOKEN", "--", "sh", "-c", "echo ran"], undefined,
+    { ...env, FAKE_TERMINAL_WAIT: "Passphrase of the local vault", FAKE_TERMINAL_CLOSE: "1" });
+  assert.equal(closed.stdout, "");
+  assert.notEqual(closed.code, 0);
+  assert.deepEqual((await readdir(box.configDir)).filter((name) => name.startsWith("terminal-")), []);
+});
+
 test("MCP on a blank machine: instructions, vault_status and secrets_request use the local vault", async () => {
   const box = await blank();
   const server = mcpServer(box, { DISPLAY: ":0", FAKE_DIALOG_VALUE: "mcp-value-98765" });

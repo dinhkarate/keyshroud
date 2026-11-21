@@ -26,7 +26,7 @@ keyshroud unlock [--unattended | --stdin]
 keyshroud rekey [--to keychain|secure-enclave|passphrase|dpapi]                                 (in a terminal)
 keyshroud backup [--out FILE]                                                                   (in a terminal)
 keyshroud restore FILE [--replace] [--yes]                                                      (in a terminal)
-keyshroud dialog [on|off]
+keyshroud dialog [on|off|terminal]
 keyshroud status | lock | doctor
 keyshroud mcp
 keyshroud hook claude <session-start|post-tool-use>
@@ -76,6 +76,15 @@ way that needs no trust in a window, since any program can draw one that looks t
 `keyshroud dialog off` turns the windows off for good (`dialog on` brings them back, `dialog` says
 which): a command an agent starts then fails with the line that says to run it in a terminal, and a
 locked vault says to run `keyshroud unlock`. Touch ID sheets are not dialogs and stay.
+
+`keyshroud dialog terminal` asks in a terminal window instead of a dialog. When an agent starts `add`,
+`rotate` or `source add`, or a command needs a locked vault, keyshroud opens a terminal window
+(Terminal on macOS, a console on Windows, `$TERMINAL` or the desktop's terminal on Linux) that shows
+who asked and runs the command itself, `keyshroud add --env NAME --item ITEM` or `keyshroud unlock`,
+as you would have typed it. You answer its masked prompt there; the value never passes through the
+process the agent started, which only waits and then reports how the command ended. Closing the
+window is a cancel. Where no terminal window can be opened, the dialog is used. It is off unless you
+turn it on, and a terminal window is no proof either: it is a familiar place to type, not a verified one.
 
 `add` refuses a name that is already wired to another item (exit `5`), before it asks for the value:
 `rotate --item` gives that item a new value, and `unwire --env NAME` frees the name for a new item.
@@ -135,7 +144,7 @@ closed (exit `4`) instead of guessing; the local vault refuses to create one.
 | Variable | Default | |
 |---|---|---|
 | `KEYSHROUD_BACKEND` | the `backend` file | `local` or `bw`: where new items go and which vault opens by default |
-| `KEYSHROUD_DIALOG` | the `dialog` file | `off`: ask in no window, only in a terminal (what `keyshroud dialog off` sets for good) |
+| `KEYSHROUD_DIALOG` | the `dialog` file | `off`: ask in no window, only in a terminal; `terminal`: ask in a terminal window (what `keyshroud dialog off` or `dialog terminal` sets for good) |
 | `KEYSHROUD_VAULT_KEY` | per OS | key mode when the local vault is created: `keychain`, `dpapi`, `passphrase` or `secure-enclave` (Touch ID); anything else is an error |
 | `KEYSHROUD_CACHE_TTL_MS` | `3600000` | in-memory Vaultwarden snapshot + session check lifetime, and how long a long-running process keeps a value read from a source; `0` disables |
 | `KEYSHROUD_SESSION_TTL_MS` | `1800000` | how long an unlocked session lasts (Vaultwarden, or a passphrase or Touch ID vault) |

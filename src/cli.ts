@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { constants as fsConstants, existsSync } from "node:fs";
+import { appendFileSync, constants as fsConstants, existsSync } from "node:fs";
 import { access, chmod, mkdir, lstat, readdir, readFile, readlink, rename, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import { constants, homedir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -80,8 +80,9 @@ Vault (the local vault by default; bw/Vaultwarden once set up)
   restore FILE [--replace] [--yes] Bring back what a backup holds and the local vault lacks, and wire
                                    the names again (dry run unless --yes; --replace: also the items
                                    that have another value here)
-  dialog [on|off]                  off: never ask in a window on the desktop; a command an agent starts
+  dialog [on|off|terminal]         off: never ask in a window on the desktop; a command an agent starts
                                    then says what to run in a terminal instead
+                                   terminal: ask in a terminal window that runs the command itself
   status | lock | doctor
 
 Agents
@@ -121,12 +122,46 @@ function unwireList(value: string | undefined): string[] {
   if (value === "omp" || value === "pi") return [targetPaths[value]];
   fail("--target must be omp, pi, or both", 2);
 }
+// `dialog terminal`: a command that has no terminal is handed, whole, to a terminal window, and this
+// process ends as that one did. Returns when no terminal window is in use here.
+async function inTerminalWindow(argv: string[]): Promise<void> {
+  if (process.stdin.isTTY || argv.includes("--stdin") || argv.includes("--dialog")) return;
+  const window = await core.runInTerminal(argv);
+  if (!window) return;
+  (window.code === 0 ? process.stdout : process.stderr).write(window.output);
+  if (window.code === 0) console.log("(entered in a terminal window)");
+  process.exit(window.code);
+}
+// The other end: what the terminal window runs. It shows who asked and the command, runs it for the
+// person to answer, and leaves how it ended, and what it printed, for the process that waits.
+async function terminalWindow(file: string | undefined): Promise<void> {
+  if (!file || !/^terminal-[0-9a-f]{16}\.json$/.test(basename(file))) fail(usage, 2);
+  const base = file.slice(0, -5);
+  const request = JSON.parse(await readFile(file, "utf8")) as { argv: string[]; from: string; cwd: string; env: Record<string, string> };
+  await rm(file, { force: true });
+  if (!core.TERMINAL_COMMANDS.includes(request.argv[0])) fail(`Not a command for a terminal window: ${shown(String(request.argv[0]))}`, 2);
+  await writeFile(`${base}.pid`, `${process.pid}\n`, { mode: 0o600 });
+  const words = request.argv.filter((arg, index, all) => arg !== "--notes" && all[index - 1] !== "--notes").map((arg) => /^[\w@%+=:,./-]+$/.test(arg) ? arg : shellQuote(arg));
+  console.log(`${BRAND.name}: asked from ${shown(request.from)}\nThis window runs the command below; what you type here goes to ${BRAND.name} only.\n\n$ ${shown([BRAND.bin, ...words].join(" "))}\n`);
+  const code = await new Promise<number>((done) => {
+    const child = spawn(process.execPath, [...process.execArgv, fileURLToPath(import.meta.url), ...request.argv], {
+      stdio: "inherit", cwd: existsSync(request.cwd) ? request.cwd : undefined,
+      env: { ...process.env, ...request.env, [`${BRAND.envPrefix}_DIALOG`]: "on", [`${BRAND.envPrefix}_TERMINAL_OUTPUT`]: `${base}.out` },
+    });
+    child.on("error", () => done(1));
+    child.on("close", (status) => done(status ?? 1));
+  });
+  await writeFile(`${base}.code`, `${code}\n`, { mode: 0o600 });
+  console.log(code === 0 ? "\nDone. You can close this window." : `\nNot done (exit ${code}). You can close this window.`);
+  process.exitCode = code;
+}
 const NO_DIALOG = `No terminal and no dialog here (SSH, no display, or \`${BRAND.bin} dialog off\`).`;
 // --stdin: piped value. Terminal: masked prompt. Otherwise (an agent's shell):
 // a native dialog, so the agent can start the command and the user only pastes.
 async function readSecret(args: string[], prompt: string, itemName: string, envName?: string): Promise<string> {
   if (args.includes("--stdin")) return core.readSecretFromInput({ prompt, stdin: true });
   if (process.stdin.isTTY && !args.includes("--dialog")) return core.readSecretFromInput({ prompt, stdin: false });
+  await inTerminalWindow(process.argv.slice(2));
   // The command as it was given, for the person to run in a terminal instead.
   // Without --notes: its text is the caller's own words, and would be shown in the window.
   const given = process.argv.slice(2).filter((arg, index, all) => arg !== "--dialog" && arg !== "--notes" && all[index - 1] !== "--notes");
@@ -958,6 +993,14 @@ async function main(): Promise<void> {
   // `keyshroud doctor | head -1`: a closed pipe ends the output, not with a stack trace.
   process.stdout.on("error", (error: NodeJS.ErrnoException) => { if (error.code === "EPIPE") process.exit(); throw error; });
   const args = process.argv.slice(2); const command = args.shift();
+  // Run by a terminal window for a process that waits (see terminalWindow): what this command
+  // prints (names, never values) is kept for it as well.
+  const kept = process.env[`${BRAND.envPrefix}_TERMINAL_OUTPUT`];
+  if (kept && /terminal-[0-9a-f]{16}\.out$/.test(kept)) for (const name of ["log", "error"] as const) {
+    const write = console[name];
+    console[name] = (...parts: unknown[]) => { try { appendFileSync(kept, `${parts.join(" ")}\n`, { mode: 0o600 }); } catch {} write(...parts); };
+  }
+  if (command === "_terminal") { await terminalWindow(args[0]); return; }
   if (!command || command === "--help" || command === "-h" || command === "help") { console.log(usage); if (!command) process.exitCode = 2; return; }
   if (command === "--version" || command === "-v") {
     const pkg = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")) as { version: string };
@@ -1008,10 +1051,14 @@ async function main(): Promise<void> {
       return;
     }
     if (command === "dialog") {
-      if (args.length > 1 || (args[0] !== undefined && args[0] !== "on" && args[0] !== "off")) fail(usage, 2);
-      if (args[0]) await core.setDialogs(args[0] === "on");
-      const off = await core.dialogsOff();
-      console.log(off ? "dialog=off (a value or a passphrase is asked in a terminal only)" : "dialog=on (a command without a terminal asks in a window on the desktop)");
+      const mode = args[0];
+      if (args.length > 1 || (mode !== undefined && mode !== "on" && mode !== "off" && mode !== "terminal")) fail(usage, 2);
+      if (mode) await core.setDialogs(mode);
+      console.log({
+        on: "dialog=on (a command without a terminal asks in a window on the desktop)",
+        off: "dialog=off (a value or a passphrase is asked in a terminal only)",
+        terminal: "dialog=terminal (a command without a terminal opens a terminal window that runs it, and you answer there)",
+      }[await core.dialogMode()]);
       return;
     }
     if (command === "scan") { await scan(args); return; }
@@ -1070,6 +1117,7 @@ async function main(): Promise<void> {
       if (!envName || !itemArg || !ENV_NAME_RE.test(envName)) fail(usage, 2);
       const { backend, name: itemName } = await parseItem(itemArg);
       checkNames(envName, itemName);
+      await inTerminalWindow([command, ...args]);
       const reference = core.referenceFor(itemName, backend);
       const targets = targetList(valueAfter(args, "--target"));
       await core.openBackend(backend, { prompt: true });
@@ -1110,6 +1158,7 @@ async function main(): Promise<void> {
       requireKnownFlags(args, ["--item"], ["--stdin", "--dialog"]);
       const itemArg = valueAfter(args, "--item"); if (!itemArg) fail(usage, 2);
       const { backend, name: itemName } = await parseItem(itemArg);
+      await inTerminalWindow([command, ...args]);
       await core.openBackend(backend, { prompt: true }); const secret = await readSecret(args, "Paste replacement secret: ", itemName);
       await core.rotateSecretItem({ itemName, secret, backend }); await core.audit("rotate", [itemName], "cli"); await core.refreshRedactIndex();
       console.log(`rotated item=${itemName}`); return;

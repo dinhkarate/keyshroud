@@ -5,6 +5,17 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-11-21
+
+### Added
+- **`keyshroud dialog terminal`**: ask in a terminal window instead of a dialog. When an agent starts
+  `add`, `rotate` or `source add`, when `secrets_request` is called, or when a command needs a locked
+  vault, a terminal window opens (Terminal on macOS, a console on Windows, `$TERMINAL` or the desktop's
+  terminal on Linux), shows who asked, and runs the command itself (`keyshroud add …`, `keyshroud
+  unlock`). You answer its masked prompt there; the value never passes through the process the agent
+  started, which waits and reports how the command ended. Closing the window is a cancel; where no
+  terminal window can be opened the dialog is used. Off unless you turn it on.
+
 ## [0.14.0] - 2026-11-21
 
 ### Added

@@ -122,7 +122,7 @@ keyshroud unlock [--unattended | --stdin]
 keyshroud rekey [--to keychain|secure-enclave|passphrase|dpapi]                                 (in a terminal)
 keyshroud backup [--out FILE]                                                                   (in a terminal)
 keyshroud restore FILE [--replace] [--yes]                                                      (in a terminal)
-keyshroud dialog [on|off]
+keyshroud dialog [on|off|terminal]
 keyshroud status | lock | doctor
 keyshroud mcp
 keyshroud hook claude &lt;session-start|post-tool-use&gt;
@@ -164,6 +164,14 @@ way that needs no trust in a window, since any program can draw one that looks t
 <code>keyshroud dialog off</code> turns the windows off for good (<code>dialog on</code> brings them back, <code>dialog</code> says
 which): a command an agent starts then fails with the line that says to run it in a terminal, and a
 locked vault says to run <code>keyshroud unlock</code>. Touch ID sheets are not dialogs and stay.</p>
+<p><code>keyshroud dialog terminal</code> asks in a terminal window instead of a dialog. When an agent starts <code>add</code>,
+<code>rotate</code> or <code>source add</code>, or a command needs a locked vault, keyshroud opens a terminal window
+(Terminal on macOS, a console on Windows, <code>$TERMINAL</code> or the desktop&#39;s terminal on Linux) that shows
+who asked and runs the command itself, <code>keyshroud add --env NAME --item ITEM</code> or <code>keyshroud unlock</code>,
+as you would have typed it. You answer its masked prompt there; the value never passes through the
+process the agent started, which only waits and then reports how the command ended. Closing the
+window is a cancel. Where no terminal window can be opened, the dialog is used. It is off unless you
+turn it on, and a terminal window is no proof either: it is a familiar place to type, not a verified one.</p>
 <p><code>add</code> refuses a name that is already wired to another item (exit <code>5</code>), before it asks for the value:
 <code>rotate --item</code> gives that item a new value, and <code>unwire --env NAME</code> frees the name for a new item.</p>
 <p><code>import</code> reads a <code>.env</code> (default <code>./.env</code>), decides which lines are secrets (by name, such as
@@ -285,7 +293,7 @@ closed (exit <code>4</code>) instead of guessing; the local vault refuses to cre
 <tr>
 <td><code>KEYSHROUD_DIALOG</code></td>
 <td>the <code>dialog</code> file</td>
-<td><code>off</code>: ask in no window, only in a terminal (what <code>keyshroud dialog off</code> sets for good)</td>
+<td><code>off</code>: ask in no window, only in a terminal; <code>terminal</code>: ask in a terminal window (what <code>keyshroud dialog off</code> or <code>dialog terminal</code> sets for good)</td>
 </tr>
 <tr>
 <td><code>KEYSHROUD_VAULT_KEY</code></td>

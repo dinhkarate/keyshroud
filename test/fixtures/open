@@ -1,3 +1,4 @@
 #!/bin/sh
-# Fake URL opener: records the URL instead of starting a browser.
+# Fake opener: records a URL instead of starting a browser; a .command file goes to the fake terminal window.
+case "$1" in *.command) exec "$(dirname "$0")/fake-terminal" "$1" ;; esac
 printf "%s\n" "$1" >> "$FAKE_OPENED"
