@@ -290,6 +290,31 @@ test("add without a terminal opens a native dialog, and cancelling stores nothin
   assert.ok(!(await fresh.vault()).items.some((entry) => entry.name === "Dialog four"));
 });
 
+test("the dialog says who asked and what to run in a terminal instead; `dialog off` asks in no window", async () => {
+  const box = await wired();
+  const log = join(box.dir, "dialog.log");
+  const display = { DISPLAY: ":0", FAKE_DIALOG_LOG: log, FAKE_DIALOG_VALUE: "dlg-zq-value" };
+  const added = await runCli(box, ["add", "--env", "DLG_KEY", "--item", "Dialog key", "--notes", "Enter your MASTER PASSWORD", "--dialog"], undefined, { ...display, CLAUDECODE: "1" });
+  assert.equal(added.code, 0, added.stderr);
+  const shown = await readFile(log, "utf8");
+  assert.match(shown, /Asked from: Claude Code, in \S/);
+  assert.match(shown, /Not sure about this window\? Press Cancel and run this in a terminal yourself:\nkeyshroud add --env DLG_KEY --item 'Dialog key'( \S+keyshroud\.icns)?$/m); // macOS: the icon's path follows
+  assert.ok(!shown.includes("MASTER PASSWORD"), "the caller's notes are not shown");
+  assert.equal((await runCli(box, ["dialog"])).stdout.trim().split(" ")[0], "dialog=on");
+  assert.match((await runCli(box, ["dialog", "off"])).stdout, /^dialog=off /);
+  await unlink(log);
+  const off = await runCli(box, ["add", "--env", "DLG_OFF", "--item", "Dialog off"], undefined, display);
+  assert.equal(off.code, 2);
+  assert.match(off.stderr, /no dialog here \(SSH, no display, or `keyshroud dialog off`\)\. Run the command in a terminal/);
+  const asked = await mcpCall(box, "secrets_request", { env_name: "DLG_OFF", item_name: "Dialog off" }, display);
+  assert.match(asked.text, /keyshroud add --env DLG_OFF --item 'Dialog off'/);
+  await assert.rejects(readFile(log, "utf8"), "no window was opened");
+  assert.ok(!(await box.vault()).items.some((entry) => entry.name === "Dialog off"));
+  assert.match((await runCli(box, ["dialog", "on"])).stdout, /^dialog=on /);
+  assert.equal((await runCli(box, ["add", "--env", "DLG_ON", "--item", "Dialog on"], undefined, display)).code, 0);
+  assert.equal((await runCli(box, ["dialog", "maybe"])).code, 2);
+});
+
 test("the dialog refuses spoofed names, the master password, a second dialog, and retries right after a cancel", async () => {
   const box = await wired();
   const log = join(box.dir, "dialog.log");

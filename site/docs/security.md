@@ -40,7 +40,8 @@ the file off the machines agents work on.
 - secret values never appear in argv, logs, keyshroud's own diagnostics, MCP results, hook
   output, or `audit.jsonl`; an error from `bw` is shown without anything keyshroud gave it;
 - new secrets are read from a masked prompt, `--stdin`, or a native dialog, never flags;
-- the dialog an agent can open says it was requested by a program, warns against the
+- the dialog an agent can open says it was requested by a program and from where, shows the
+  command to run in a terminal instead, warns against the
   master password, refuses names that are not one printable line, refuses the master
   password itself, and opens one at a time (30 s pause after a cancel);
 - the session file, local vault, redact index, rendered templates and auth files are `0600`;
@@ -159,8 +160,10 @@ the file off the machines agents work on.
   `setup` that reaches only the agent account; a stored master password (keychain entry or
   `~/.config/keyshroud/master-password`) it can read at any time, which is why keyshroud asks instead
   by default; otherwise run agents in a sandbox or container if that matters.
-- The same agent could also draw a window that looks like the unlock dialog; when in doubt, cancel it
-  and run `keyshroud unlock` in a terminal.
+- The same agent could also draw a window that looks like the unlock dialog, icon and all: nothing
+  on macOS, Windows or Linux tells the two apart for you, and the `Asked from` line is what the caller
+  says about itself. When in doubt, cancel it and run `keyshroud unlock` in a terminal;
+  `keyshroud dialog off` makes that the only way.
 - Without `setup`, keyshroud shares bw's default login, so the 30-minute lock also ends a `bw` session
   you opened yourself.
 

@@ -197,7 +197,7 @@ async function callTool(name: string, args: Json): Promise<Json> {
       await core.openBackend(backend, { prompt: true });
       if (backend === "local") await core.prepareLocalVault();
       if ((await core.findItems(itemName, backend)).some((item) => item.name.toLowerCase() === itemName.toLowerCase())) return text(`Vault item already exists: ${itemName}`, true);
-      const secret = await core.readSecretFromDialog({ itemName, envName });
+      const secret = await core.readSecretFromDialog({ itemName, envName, command: `${BRAND.bin} add --env ${envName} --item ${shellQuote(itemName)}` });
       if (secret === "") return text("The user saved an empty value; nothing was stored.", true);
       if (secret !== null) {
         const { created } = await core.createSecretItem({ itemName, secret, envName, notes, backend });

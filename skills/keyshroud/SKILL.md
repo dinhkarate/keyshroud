@@ -21,8 +21,8 @@ in output with `<redacted:NAME>`.
    ```
    Tell the user a dialog is waiting for them, and ask for one secret at a time;
    if they cancel, do not ask again unprompted. Never ask for the vault master
-   password or passphrase. With the MCP server, call `secrets_request` instead. Over SSH or without a display there is no dialog:
-   then give the user the command to run in their own terminal.
+   password or passphrase. With the MCP server, call `secrets_request` instead. Over SSH, without a display, or when the user turned dialogs off (`keyshroud dialog off`) there is no dialog:
+   then give the user the command to run in their own terminal. Never run `keyshroud dialog on` yourself.
 2. Never print, echo, `cat`, base64, or otherwise transform a secret value.
    `<redacted:NAME>` in output means the secret was used correctly. Do not try
    to recover it.

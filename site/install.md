@@ -204,7 +204,9 @@ yourself.
 
 - **Store a new secret:** run `keyshroud add --env NAME --item "Item name"`
   (or call the `secrets_request` MCP tool). Without a terminal it opens a
-  hidden-input dialog on the user's desktop; the user pastes the value there.
+  hidden-input dialog on the user's desktop; the user pastes the value there. If it answers
+  `No terminal and no dialog here`, give the user that command to run in their own terminal
+  (a user who wants no windows at all runs `keyshroud dialog off`; never turn them back on yourself).
 - **Move an existing `.env` into the vault:** `keyshroud import` shows a dry
   run with names only; `keyshroud import --yes` stores the values and writes a
   commit-safe `.env.refs` file of `keyshroud://` (or `bw://`) references.

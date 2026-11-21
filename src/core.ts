@@ -5,7 +5,7 @@ import { createHash, randomBytes, randomUUID, scrypt, timingSafeEqual, type Scry
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { appendFile, chmod, lstat, mkdir, mkdtemp, open, readdir, readFile, realpath, rename, rm, stat, symlink, unlink, utimes, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, delimiter, join, dirname, resolve as absolutePath } from "node:path";
+import { basename, delimiter, join, dirname, resolve as absolutePath, sep } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -816,6 +816,8 @@ export async function askMasterPassword(opts: { email?: string; unattended?: boo
     `Unlock ${account} ${span}?`,
     "",
     `Enter the master password of ${account}.`,
+    `Asked from: ${await askedFrom()}`,
+    ...ownTerminal(`${BRAND.bin} unlock`),
   ].join("\n"), "Unlock");
   if (value === "") throw new Error("Cancelled");
   return value;
@@ -1653,6 +1655,55 @@ const DIALOG_LOCK = join(CONFIG_DIR, "dialog.lock");
 const DIALOG_COOLDOWN_MS = 30_000;
 const DIALOG_TIMEOUT_MS = 300_000;
 const DIALOG_BUSY = "Another keyshroud dialog is already open";
+// `dialog off` writes "off" here: nothing is asked in a window then, only in a terminal.
+export const DIALOG_FILE = join(CONFIG_DIR, "dialog");
+const DIALOG_ICON = fileURLToPath(new URL(`../src/${BRAND.bin}.${process.platform === "win32" ? "ico" : "icns"}`, import.meta.url));
+
+export async function dialogsOff(): Promise<boolean> {
+  const forced = setting("DIALOG");
+  if (forced) return forced === "off";
+  return (await readFile(DIALOG_FILE, "utf8").catch(() => "")).trim() === "off";
+}
+export async function setDialogs(on: boolean): Promise<void> {
+  if (on) await rm(DIALOG_FILE, { force: true });
+  else await writePrivateFile(DIALOG_FILE, "off\n");
+}
+
+// What an agent sets for the commands it runs: the name a dialog gives for who asked.
+const AGENT_MARKERS: Array<[string, string]> = [
+  ["CLAUDECODE", "Claude Code"], ["GEMINI_CLI", "Gemini CLI"], ["CLINE_ACTIVE", "Cline"], ["OPENCODE", "OpenCode"],
+  ["ANTIGRAVITY_AGENT", "Antigravity"], ["DSH_SESSION_ID", "DeepSeek Harness"],
+];
+const SHELLS = new Set(["sh", "bash", "zsh", "fish", "dash", "ksh", "env", "sudo", "login"]);
+// One line of a dialog: no control characters (a folder's name could draw lines of its own), and not long.
+function oneLine(text: string, max = 100): string {
+  const plain = text.replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, "?");
+  return plain.length > max ? `…${plain.slice(1 - max)}` : plain;
+}
+// "Claude Code, in ~/project": the agent by its marker, else the first program above the shells
+// that started this one (macOS, Linux), and the folder it was started in.
+async function askedFrom(): Promise<string> {
+  let who = AGENT_MARKERS.find(([name]) => process.env[name])?.[1];
+  if (!who && process.platform !== "win32") {
+    let pid = process.ppid;
+    for (let i = 0; i < 6 && pid > 1 && !who; i++) {
+      const row = await runFile("ps", ["-o", "ppid=,comm=", "-p", String(pid)], { timeout: 2000, maxBuffer: 64 * 1024 }).then((r) => r.stdout.trim(), () => "");
+      const match = /^(\d+)\s+(.+)$/.exec(row);
+      if (!match) break;
+      const name = basename(match[2]).replace(/^-/, "");
+      if (!SHELLS.has(name)) who = name;
+      pid = Number(match[1]);
+    }
+  }
+  const home = homedir();
+  const cwd = process.cwd();
+  const where = cwd === home ? "~" : cwd.startsWith(home + sep) ? `~${cwd.slice(home.length)}` : cwd;
+  return oneLine(`${who ?? "a program"}, in ${where}`);
+}
+// The way that needs no trust in a window: the same thing, started by the person in a terminal.
+function ownTerminal(command: string): string[] {
+  return ["", "Not sure about this window? Press Cancel and run this in a terminal yourself:", command];
+}
 
 // macOS asks the person at the Mac with Touch ID (or the Mac's password). The
 // reason reaches the script as data (argv). One prompt at a time, as dialogs.
@@ -1675,8 +1726,9 @@ export async function approveWithTouchId(reason: string): Promise<void> {
   });
 }
 
-export async function readSecretFromDialog(opts: { itemName: string; envName?: string }): Promise<string | null> {
-  if (process.env.SSH_CONNECTION || process.env.SSH_TTY) return null;
+// command: what the person can run in a terminal instead (shown in the dialog).
+export async function readSecretFromDialog(opts: { itemName: string; envName?: string; command?: string }): Promise<string | null> {
+  if (process.env.SSH_CONNECTION || process.env.SSH_TTY || await dialogsOff()) return null;
   const problem = itemNameProblem(opts.itemName);
   if (problem) throw new Error(`Vault item name ${problem}`);
   if (opts.envName !== undefined && !ENV_NAME_RE.test(opts.envName)) throw new Error("Variable names must be UPPER_SNAKE_CASE");
@@ -1685,18 +1737,21 @@ export async function readSecretFromDialog(opts: { itemName: string; envName?: s
     "",
     ...(opts.envName ? [`Variable: ${opts.envName}`] : []),
     `Vault item: ${opts.itemName}`,
+    `Asked from: ${await askedFrom()}`,
     "",
     "This is not a login prompt. Never enter your vault master password or your Mac password here.",
+    ...(opts.command && opts.command === oneLine(opts.command, 300) ? ownTerminal(opts.command) : []),
   ].join("\n");
   return nativePasswordDialog(text, "Save");
 }
 
 async function nativePasswordDialog(text: string, button: "Save" | "Unlock"): Promise<string | null> {
-  if (process.env.SSH_CONNECTION || process.env.SSH_TTY) return null;
+  if (process.env.SSH_CONNECTION || process.env.SSH_TTY || await dialogsOff()) return null;
+  const icon = existsSync(DIALOG_ICON) ? DIALOG_ICON : "";
   const candidates: Array<[string, string[]]> = process.platform === "darwin"
     ? [["osascript", ["-e", "on run argv", "-e", 'activate', "-e",
-        `text returned of (display dialog (item 1 of argv) default answer "" with hidden answer with title "keyshroud" buttons {"Cancel", "${button}"} default button "${button}" cancel button "Cancel" with icon caution)`,
-        "-e", "end run", "--", text]]]
+        `text returned of (display dialog (item 1 of argv) default answer "" with hidden answer with title "keyshroud" buttons {"Cancel", "${button}"} default button "${button}" cancel button "Cancel" with icon ${icon ? "(POSIX file (item 2 of argv))" : "note"})`,
+        "-e", "end run", "--", text, icon]]]
     : process.platform === "win32"
     ? [[POWERSHELL, ["-NoProfile", "-NonInteractive", "-STA", "-EncodedCommand", Buffer.from(windowsDialogScript(button), "utf16le").toString("base64")]]]
     : process.env.DISPLAY || process.env.WAYLAND_DISPLAY
@@ -1707,7 +1762,7 @@ async function nativePasswordDialog(text: string, button: "Save" | "Unlock"): Pr
     for (const [command, args] of candidates) {
       const result = await new Promise<{ code: number | string | null; stdout: string; stderr: string }>((resolve) => {
         // Windows: the text reaches the dialog script as data, through the environment.
-        execFile(command, args, { timeout: DIALOG_TIMEOUT_MS, env: childEnv({ [`${P}_DIALOG_TEXT`]: text }) }, (error, stdout, stderr) => resolve({ code: error ? ((error as NodeJS.ErrnoException).code ?? 1) : 0, stdout: String(stdout), stderr: String(stderr) }));
+        execFile(command, args, { timeout: DIALOG_TIMEOUT_MS, env: childEnv({ [`${P}_DIALOG_TEXT`]: text, [`${P}_DIALOG_ICON`]: icon }) }, (error, stdout, stderr) => resolve({ code: error ? ((error as NodeJS.ErrnoException).code ?? 1) : 0, stdout: String(stdout), stderr: String(stderr) }));
       });
       if (result.code === "ENOENT") continue;
       if (result.code === 0) return result.stdout.replace(/\r?\n$/, "");
@@ -1727,6 +1782,7 @@ function windowsDialogScript(button: "Save" | "Unlock"): string {
     "[Windows.Forms.Application]::EnableVisualStyles()",
     "$f = New-Object Windows.Forms.Form",
     "$f.Text = 'keyshroud'; $f.TopMost = $true; $f.FormBorderStyle = 'FixedDialog'; $f.MaximizeBox = $false; $f.MinimizeBox = $false",
+    `if ($env:${P}_DIALOG_ICON) { try { $f.Icon = New-Object Drawing.Icon $env:${P}_DIALOG_ICON } catch {} }`,
     "$f.StartPosition = 'CenterScreen'; $f.AutoSize = $true; $f.AutoSizeMode = 'GrowAndShrink'; $f.Padding = New-Object Windows.Forms.Padding 12",
     "$p = New-Object Windows.Forms.FlowLayoutPanel; $p.FlowDirection = 'TopDown'; $p.AutoSize = $true",
     `$l = New-Object Windows.Forms.Label; $l.Text = $env:${P}_DIALOG_TEXT; $l.AutoSize = $true; $l.MaximumSize = New-Object Drawing.Size 440, 0`,
@@ -2379,6 +2435,8 @@ async function askPassphrase(opts: SessionOptions): Promise<string> {
     `Unlock it ${span}?`,
     "",
     "Enter the passphrase of the local vault.",
+    `Asked from: ${await askedFrom()}`,
+    ...ownTerminal(`${BRAND.bin} unlock`),
   ].join("\n"), "Unlock");
   if (value === null) throw new LocalLockedError(LOCAL_LOCKED);
   if (value === "") throw new Error("Cancelled");

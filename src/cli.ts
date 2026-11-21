@@ -80,6 +80,8 @@ Vault (the local vault by default; bw/Vaultwarden once set up)
   restore FILE [--replace] [--yes] Bring back what a backup holds and the local vault lacks, and wire
                                    the names again (dry run unless --yes; --replace: also the items
                                    that have another value here)
+  dialog [on|off]                  off: never ask in a window on the desktop; a command an agent starts
+                                   then says what to run in a terminal instead
   status | lock | doctor
 
 Agents
@@ -119,15 +121,20 @@ function unwireList(value: string | undefined): string[] {
   if (value === "omp" || value === "pi") return [targetPaths[value]];
   fail("--target must be omp, pi, or both", 2);
 }
+const NO_DIALOG = `No terminal and no dialog here (SSH, no display, or \`${BRAND.bin} dialog off\`).`;
 // --stdin: piped value. Terminal: masked prompt. Otherwise (an agent's shell):
 // a native dialog, so the agent can start the command and the user only pastes.
 async function readSecret(args: string[], prompt: string, itemName: string, envName?: string): Promise<string> {
   if (args.includes("--stdin")) return core.readSecretFromInput({ prompt, stdin: true });
   if (process.stdin.isTTY && !args.includes("--dialog")) return core.readSecretFromInput({ prompt, stdin: false });
-  const value = await core.readSecretFromDialog({ itemName, envName });
+  // The command as it was given, for the person to run in a terminal instead.
+  // Without --notes: its text is the caller's own words, and would be shown in the window.
+  const given = process.argv.slice(2).filter((arg, index, all) => arg !== "--dialog" && arg !== "--notes" && all[index - 1] !== "--notes");
+  const command = [BRAND.bin, ...given.map((arg) => /^[\w@%+=:,./-]+$/.test(arg) ? arg : shellQuote(arg))].join(" ");
+  const value = await core.readSecretFromDialog({ itemName, envName, command });
   if (value) return value;
   if (value === "") throw new Error("Empty secret");
-  fail("No terminal and no dialog here (SSH or no display). Run the command in a terminal, or pipe the value with --stdin.", 2);
+  fail(`${NO_DIALOG} Run the command in a terminal, or pipe the value with --stdin.`, 2);
 }
 function checkNames(envName: string, itemName: string): void {
   if (isLoaderEnvName(envName)) fail(`${envName} changes what programs load or run; it cannot be wired to a secret`, 2);
@@ -397,7 +404,7 @@ async function setupCommand(args: string[]): Promise<void> {
   if (loggedOut && !master) {
     if (process.stdin.isTTY) console.log(`2. Log in to the agent account. ${BRAND.name} does not store its master password; it asks again when a session ends.`);
     master = await core.askMasterPassword({ email, unattended });
-    if (!master) fail("No terminal and no dialog here (SSH or no display). Run the command in a terminal.", 2);
+    if (!master) fail(`${NO_DIALOG} Run the command in a terminal.`, 2);
   }
   if (loggedOut) {
     await mkdir(core.OWN_BW_DIR, { recursive: true, mode: 0o700 });
@@ -998,6 +1005,13 @@ async function main(): Promise<void> {
       const result = await core.lock();
       const local = result.bw || result.local ? null : await core.localStatus();
       console.log(local?.key === "keychain" || local?.key === "dpapi" ? `nothing to lock: the local vault opens with its key from ${keySource(local.key)}` : local?.status === "none" ? "nothing to lock: no local vault yet" : "locked");
+      return;
+    }
+    if (command === "dialog") {
+      if (args.length > 1 || (args[0] !== undefined && args[0] !== "on" && args[0] !== "off")) fail(usage, 2);
+      if (args[0]) await core.setDialogs(args[0] === "on");
+      const off = await core.dialogsOff();
+      console.log(off ? "dialog=off (a value or a passphrase is asked in a terminal only)" : "dialog=on (a command without a terminal asks in a window on the desktop)");
       return;
     }
     if (command === "scan") { await scan(args); return; }

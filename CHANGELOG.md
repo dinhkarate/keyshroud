@@ -5,6 +5,18 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-11-21
+
+### Added
+- **The dialog says who asked, and how to do without it.** The window an agent's `add`, `rotate` or a
+  locked vault opens now has a line `Asked from: Claude Code, in ~/project` (the agent as it names itself
+  to the commands it runs, else the program that started the command, and the folder), and ends with
+  the command to run in a terminal yourself when you are not sure about the window. It carries the
+  keyshroud icon on macOS and Windows in place of the yellow warning sign.
+- **`keyshroud dialog off`** (or `KEYSHROUD_DIALOG=off`): no window is ever opened. A command without a
+  terminal then fails with the line that says to run it in a terminal, and `secrets_request` answers
+  with the command to give the user. `dialog on` brings the windows back, `dialog` says which.
+
 ## [0.13.0] - 2026-11-18
 
 ### Security

@@ -122,6 +122,7 @@ keyshroud unlock [--unattended | --stdin]
 keyshroud rekey [--to keychain|secure-enclave|passphrase|dpapi]                                 (in a terminal)
 keyshroud backup [--out FILE]                                                                   (in a terminal)
 keyshroud restore FILE [--replace] [--yes]                                                      (in a terminal)
+keyshroud dialog [on|off]
 keyshroud status | lock | doctor
 keyshroud mcp
 keyshroud hook claude &lt;session-start|post-tool-use&gt;
@@ -156,6 +157,13 @@ character. Without a terminal (an agent&#39;s shell), they open a native hidden-
 dialog instead (<code>osascript</code> on macOS, <code>zenity</code> or <code>kdialog</code> on Linux, PowerShell on Windows), so the agent
 can start the command and you only paste. Over SSH or without a display, pipe the
 value with <code>--stdin</code>.</p>
+<p>The dialog carries the keyshroud icon and says who asked (<code>Asked from: Claude Code, in ~/project</code>: the
+agent as it names itself to the commands it runs, or the program that started the command) and what
+to do when in doubt: press Cancel and run the command it shows in a terminal yourself. That is the one
+way that needs no trust in a window, since any program can draw one that looks the same.
+<code>keyshroud dialog off</code> turns the windows off for good (<code>dialog on</code> brings them back, <code>dialog</code> says
+which): a command an agent starts then fails with the line that says to run it in a terminal, and a
+locked vault says to run <code>keyshroud unlock</code>. Touch ID sheets are not dialogs and stay.</p>
 <p><code>add</code> refuses a name that is already wired to another item (exit <code>5</code>), before it asks for the value:
 <code>rotate --item</code> gives that item a new value, and <code>unwire --env NAME</code> frees the name for a new item.</p>
 <p><code>import</code> reads a <code>.env</code> (default <code>./.env</code>), decides which lines are secrets (by name, such as
@@ -273,6 +281,11 @@ closed (exit <code>4</code>) instead of guessing; the local vault refuses to cre
 <td><code>KEYSHROUD_BACKEND</code></td>
 <td>the <code>backend</code> file</td>
 <td><code>local</code> or <code>bw</code>: where new items go and which vault opens by default</td>
+</tr>
+<tr>
+<td><code>KEYSHROUD_DIALOG</code></td>
+<td>the <code>dialog</code> file</td>
+<td><code>off</code>: ask in no window, only in a terminal (what <code>keyshroud dialog off</code> sets for good)</td>
 </tr>
 <tr>
 <td><code>KEYSHROUD_VAULT_KEY</code></td>

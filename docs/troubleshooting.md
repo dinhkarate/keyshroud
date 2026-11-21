@@ -38,8 +38,10 @@ Vaultwarden, have sessions of 30 minutes:
   again by itself.
 - **Over SSH or without a display**, no dialog can open: the same line says
   ``The local vault is locked: run `keyshroud unlock` in a terminal``. Do that, then run the command again.
-  `No terminal and no dialog here (SSH or no display)` from `add` or `rotate` is the same situation:
+  ``No terminal and no dialog here (SSH, no display, or `keyshroud dialog off`)`` from `add` or `rotate` is the same situation:
   run it in a terminal, or pipe the value with `--stdin`.
+- **You do not trust a window that asks for a secret**: you do not have to. Press Cancel and run the
+  command the window shows in your own terminal, or turn the windows off with `keyshroud dialog off`.
 - **`keyshroud status` exits `3`** while the vault is locked, which is handy in a script.
 - **`The Linux keyring is locked`**: you are logged in over SSH without a desktop session. Unlock the
   keyring, or give that machine a passphrase vault: `keyshroud rekey --to passphrase`.
